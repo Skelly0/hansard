@@ -1,0 +1,710 @@
+/**
+ * Vote Service — business logic for the entire election lifecycle.
+ *
+ * Handles creation, candidate registration, ballot casting, tallying,
+ * runoff generation, NPC confirmation, and certification (with auto
+ * office-appointment on certified position elections).
+ */
+import { eq, and, desc, inArray } from 'drizzle-orm';
+import type { Database } from '@hansard/db';
+import { elections, candidates, ballots } from '@hansard/db';
+import type {
+  ElectionConfig,
+  BallotVote,
+  NpcConfirmation,
+  ElectionResults,
+  TallyResult,
+  VotingMethod,
+  ElectionType,
+  ElectionStatus,
+} from '@hansard/shared';
+import { getStrategy } from './tallying/index.js';
+import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
+import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
+
+// ============================================================
+// Types for service inputs
+// ============================================================
+
+export interface CreateElectionInput {
+  title: string;
+  description?: string;
+  type: ElectionType;
+  method: VotingMethod;
+  config: ElectionConfig;
+  requiredPermission?: string;
+  forOfficeId?: string;
+  relatedBillId?: string;
+  parentElectionId?: string;
+  roundNumber?: number;
+  nominationsOpenAt?: Date;
+  nominationsCloseAt?: Date;
+  votingOpensAt: Date;
+  votingClosesAt: Date;
+  discordChannelId?: string;
+  createdById: string;
+}
+
+export interface ListElectionsFilter {
+  status?: ElectionStatus;
+  type?: ElectionType;
+  method?: VotingMethod;
+  forOfficeId?: string;
+  createdById?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CastBallotInput {
+  electionId: string;
+  voterId: string;
+  vote: BallotVote;
+}
+
+export interface RegisterCandidateInput {
+  electionId: string;
+  playerId: string;
+  partyId?: string;
+  statement?: string;
+  nominatedById?: string;
+}
+
+export interface NpcConfirmInput {
+  yea: number;
+  nay: number;
+  abstain: number;
+  enteredById: string;
+  notes?: string;
+}
+
+// ============================================================
+// Service
+// ============================================================
+
+export class VoteService {
+  constructor(private db: Database) {}
+
+  // ----------------------------------------------------------
+  // Create
+  // ----------------------------------------------------------
+
+  async createElection(data: CreateElectionInput) {
+    const [election] = await this.db
+      .insert(elections)
+      .values({
+        title: data.title,
+        description: data.description ?? null,
+        type: data.type,
+        method: data.method,
+        config: data.config,
+        requiredPermission: data.requiredPermission ?? null,
+        forOfficeId: data.forOfficeId ?? null,
+        relatedBillId: data.relatedBillId ?? null,
+        parentElectionId: data.parentElectionId ?? null,
+        roundNumber: data.roundNumber ?? 1,
+        nominationsOpenAt: data.nominationsOpenAt ?? null,
+        nominationsCloseAt: data.nominationsCloseAt ?? null,
+        votingOpensAt: data.votingOpensAt,
+        votingClosesAt: data.votingClosesAt,
+        discordChannelId: data.discordChannelId ?? null,
+        createdById: data.createdById,
+        status: 'draft',
+      })
+      .returning();
+
+    return election;
+  }
+
+  // ----------------------------------------------------------
+  // Read
+  // ----------------------------------------------------------
+
+  async getElection(id: string) {
+    const [election] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, id))
+      .limit(1);
+
+    if (!election) return null;
+
+    const electionCandidates = await this.db
+      .select()
+      .from(candidates)
+      .where(eq(candidates.electionId, id));
+
+    return { ...election, candidates: electionCandidates };
+  }
+
+  async listElections(filters: ListElectionsFilter = {}) {
+    const conditions = [];
+
+    if (filters.status) {
+      conditions.push(eq(elections.status, filters.status));
+    }
+    if (filters.type) {
+      conditions.push(eq(elections.type, filters.type));
+    }
+    if (filters.method) {
+      conditions.push(eq(elections.method, filters.method));
+    }
+    if (filters.forOfficeId) {
+      conditions.push(eq(elections.forOfficeId, filters.forOfficeId));
+    }
+    if (filters.createdById) {
+      conditions.push(eq(elections.createdById, filters.createdById));
+    }
+
+    const query = this.db
+      .select()
+      .from(elections)
+      .orderBy(desc(elections.createdAt))
+      .limit(filters.limit ?? 50)
+      .offset(filters.offset ?? 0);
+
+    if (conditions.length > 0) {
+      return query.where(and(...conditions));
+    }
+
+    return query;
+  }
+
+  async getElectionResults(id: string) {
+    const [election] = await this.db
+      .select({
+        results: elections.results,
+        status: elections.status,
+        config: elections.config,
+        method: elections.method,
+      })
+      .from(elections)
+      .where(eq(elections.id, id))
+      .limit(1);
+
+    if (!election) return null;
+
+    // Respect sealed results — only show after voting_closed or later
+    const config = election.config as ElectionConfig;
+    if (config.sealedResults && election.status === 'voting_open') {
+      return { sealed: true, status: election.status };
+    }
+
+    return {
+      sealed: false,
+      status: election.status,
+      results: election.results,
+    };
+  }
+
+  async getTurnout(id: string) {
+    const ballotCount = await this.db
+      .select()
+      .from(ballots)
+      .where(eq(ballots.electionId, id));
+
+    return { electionId: id, totalBallots: ballotCount.length };
+  }
+
+  async getEligibility(electionId: string, playerId: string) {
+    const [election] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, electionId))
+      .limit(1);
+
+    if (!election) return { eligible: false, reason: 'Election not found' };
+    if (election.status !== 'voting_open') {
+      return { eligible: false, reason: 'Voting is not open' };
+    }
+
+    // Check if already voted
+    const existing = await this.db
+      .select()
+      .from(ballots)
+      .where(and(eq(ballots.electionId, electionId), eq(ballots.voterId, playerId)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      return { eligible: false, reason: 'Already voted' };
+    }
+
+    // TODO: Check eligibleFactions, eligibleParties, eligibleOffices from config
+    return { eligible: true };
+  }
+
+  async getRounds(id: string) {
+    // Get the parent and all child elections (runoff rounds)
+    const [parent] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, id))
+      .limit(1);
+
+    if (!parent) return [];
+
+    // Get all elections in this chain
+    const rootId = parent.parentElectionId ?? parent.id;
+    const allRounds = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.parentElectionId, rootId))
+      .orderBy(elections.roundNumber);
+
+    // Include the root
+    if (parent.parentElectionId == null) {
+      return [parent, ...allRounds];
+    }
+
+    // If we were given a child, fetch the root too
+    const [root] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, rootId))
+      .limit(1);
+
+    return root ? [root, ...allRounds] : allRounds;
+  }
+
+  // ----------------------------------------------------------
+  // Status transitions
+  // ----------------------------------------------------------
+
+  async openVoting(id: string) {
+    const [updated] = await this.db
+      .update(elections)
+      .set({ status: 'voting_open', updatedAt: new Date() })
+      .where(eq(elections.id, id))
+      .returning();
+
+    return updated ?? null;
+  }
+
+  async closeVoting(id: string) {
+    const [updated] = await this.db
+      .update(elections)
+      .set({ status: 'voting_closed', updatedAt: new Date() })
+      .where(eq(elections.id, id))
+      .returning();
+
+    return updated ?? null;
+  }
+
+  async updateElection(id: string, data: Partial<{
+    title: string;
+    description: string;
+    config: ElectionConfig;
+    votingOpensAt: Date;
+    votingClosesAt: Date;
+    nominationsOpenAt: Date;
+    nominationsCloseAt: Date;
+    status: string;
+    discordMessageId: string;
+    discordChannelId: string;
+  }>) {
+    const [updated] = await this.db
+      .update(elections)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(elections.id, id))
+      .returning();
+
+    return updated ?? null;
+  }
+
+  // ----------------------------------------------------------
+  // Candidates
+  // ----------------------------------------------------------
+
+  async registerCandidate(input: RegisterCandidateInput) {
+    const [election] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, input.electionId))
+      .limit(1);
+
+    if (!election) {
+      throw new Error('Election not found');
+    }
+
+    // Check election accepts nominations
+    if (!['draft', 'nominations_open'].includes(election.status)) {
+      throw new Error('Nominations are not open for this election');
+    }
+
+    // Check not already registered
+    const existing = await this.db
+      .select()
+      .from(candidates)
+      .where(
+        and(
+          eq(candidates.electionId, input.electionId),
+          eq(candidates.playerId, input.playerId),
+        ),
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      throw new Error('Already registered as a candidate');
+    }
+
+    const [candidate] = await this.db
+      .insert(candidates)
+      .values({
+        electionId: input.electionId,
+        playerId: input.playerId,
+        partyId: input.partyId ?? null,
+        statement: input.statement ?? null,
+        nominatedById: input.nominatedById ?? null,
+      })
+      .returning();
+
+    return candidate;
+  }
+
+  async withdrawCandidate(electionId: string, playerId: string) {
+    const [updated] = await this.db
+      .update(candidates)
+      .set({ isWithdrawn: true })
+      .where(
+        and(
+          eq(candidates.electionId, electionId),
+          eq(candidates.playerId, playerId),
+        ),
+      )
+      .returning();
+
+    return updated ?? null;
+  }
+
+  async listCandidates(electionId: string) {
+    return this.db
+      .select()
+      .from(candidates)
+      .where(
+        and(
+          eq(candidates.electionId, electionId),
+          eq(candidates.isWithdrawn, false),
+        ),
+      );
+  }
+
+  // ----------------------------------------------------------
+  // Ballot casting
+  // ----------------------------------------------------------
+
+  async castBallot(input: CastBallotInput) {
+    const [election] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, input.electionId))
+      .limit(1);
+
+    if (!election) {
+      throw new Error('Election not found');
+    }
+
+    if (election.status !== 'voting_open') {
+      throw new Error('Voting is not open');
+    }
+
+    // Validate ballot format against the election method
+    const strategy = getStrategy(election.method as VotingMethod);
+    const config = election.config as ElectionConfig;
+    if (!strategy.validate(input.vote, config)) {
+      throw new Error('Invalid ballot format for this voting method');
+    }
+
+    // Ensure one vote per person per election
+    const existing = await this.db
+      .select()
+      .from(ballots)
+      .where(
+        and(
+          eq(ballots.electionId, input.electionId),
+          eq(ballots.voterId, input.voterId),
+        ),
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      throw new Error('You have already voted in this election');
+    }
+
+    const [ballot] = await this.db
+      .insert(ballots)
+      .values({
+        electionId: input.electionId,
+        voterId: input.voterId,
+        vote: input.vote,
+      })
+      .returning();
+
+    return ballot;
+  }
+
+  // ----------------------------------------------------------
+  // Tallying
+  // ----------------------------------------------------------
+
+  async tallyVotes(electionId: string): Promise<ElectionResults> {
+    const [election] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, electionId))
+      .limit(1);
+
+    if (!election) {
+      throw new Error('Election not found');
+    }
+
+    if (!['voting_closed', 'voting_open'].includes(election.status)) {
+      throw new Error('Election must be in voting_closed or voting_open status to tally');
+    }
+
+    // Fetch all ballots
+    const allBallots = await this.db
+      .select()
+      .from(ballots)
+      .where(eq(ballots.electionId, electionId));
+
+    // Convert to the Ballot shape expected by strategies
+    const strategyBallots = allBallots.map((b) => ({
+      id: b.id,
+      electionId: b.electionId,
+      voterId: b.voterId,
+      vote: b.vote as BallotVote,
+      castAt: b.castAt.toISOString(),
+    }));
+
+    // Run the tally
+    const method = election.method as VotingMethod;
+    const config = election.config as ElectionConfig;
+    const strategy = getStrategy(method);
+    const result: TallyResult = strategy.tally(strategyBallots, config);
+
+    // Determine new status
+    let newStatus: string = 'tallied';
+    if (result.runoffTriggered && config.runoffEnabled !== false) {
+      newStatus = 'runoff_needed';
+    }
+
+    // Check if NPC confirmation is required
+    if (
+      newStatus === 'tallied' &&
+      config.requiresNpcConfirmation &&
+      !result.runoffTriggered
+    ) {
+      newStatus = 'npc_pending';
+    }
+
+    // Build results JSONB
+    const electionResults: ElectionResults = {
+      totalVotes: result.totalVotes,
+      turnout: result.turnout,
+      quorumMet: result.quorumMet,
+      passed: result.passed,
+      rounds: result.rounds,
+      finalTallies: result.finalTallies,
+      winners: result.winners,
+      seatAllocation: result.seatAllocation,
+      runoffTriggered: result.runoffTriggered,
+    };
+
+    // Save results and update status
+    await this.db
+      .update(elections)
+      .set({
+        results: electionResults,
+        status: newStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(elections.id, electionId));
+
+    return electionResults;
+  }
+
+  // ----------------------------------------------------------
+  // Runoff creation
+  // ----------------------------------------------------------
+
+  async createRunoff(electionId: string) {
+    const [election] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, electionId))
+      .limit(1);
+
+    if (!election) {
+      throw new Error('Election not found');
+    }
+
+    if (election.status !== 'runoff_needed') {
+      throw new Error('Election is not in runoff_needed status');
+    }
+
+    const results = election.results as ElectionResults | null;
+    if (!results) {
+      throw new Error('No results to create runoff from');
+    }
+
+    const method = election.method as VotingMethod;
+    const config = election.config as ElectionConfig;
+
+    // Determine which candidates proceed to the runoff
+    let runoffCandidateIds: string[] = [];
+
+    if (method === 'two_round_runoff') {
+      runoffCandidateIds = TwoRoundRunoffStrategy.getRunoffCandidates(results);
+    } else if (method === 'exhaustive_ballot') {
+      // All candidates except the eliminated one
+      const eliminated = ExhaustiveBallotStrategy.getEliminatedCandidate(results);
+      const currentCandidates = await this.listCandidates(electionId);
+      runoffCandidateIds = currentCandidates
+        .filter((c) => c.playerId !== eliminated)
+        .map((c) => c.playerId);
+    } else {
+      // For other methods, take the top 2
+      const sorted = Object.entries(results.finalTallies).sort((a, b) => b[1] - a[1]);
+      runoffCandidateIds = sorted.slice(0, 2).map(([id]) => id);
+    }
+
+    // Create the runoff election
+    const runoffRound = (election.roundNumber ?? 1) + 1;
+    const rootId = election.parentElectionId ?? election.id;
+
+    const [runoff] = await this.db
+      .insert(elections)
+      .values({
+        title: `${election.title} (Round ${runoffRound})`,
+        description: election.description,
+        type: election.type,
+        method: election.method,
+        config: election.config,
+        requiredPermission: election.requiredPermission,
+        forOfficeId: election.forOfficeId,
+        parentElectionId: rootId,
+        roundNumber: runoffRound,
+        votingOpensAt: new Date(), // staff can update
+        votingClosesAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // default 7 days
+        createdById: election.createdById,
+        discordChannelId: election.discordChannelId,
+        status: 'draft',
+      })
+      .returning();
+
+    // Copy qualifying candidates to the runoff
+    if (runoffCandidateIds.length > 0) {
+      const originalCandidates = await this.db
+        .select()
+        .from(candidates)
+        .where(
+          and(
+            eq(candidates.electionId, electionId),
+            inArray(candidates.playerId, runoffCandidateIds),
+          ),
+        );
+
+      if (originalCandidates.length > 0) {
+        await this.db.insert(candidates).values(
+          originalCandidates.map((c) => ({
+            electionId: runoff.id,
+            playerId: c.playerId,
+            partyId: c.partyId,
+            statement: c.statement,
+            nominatedById: c.nominatedById,
+          })),
+        );
+      }
+    }
+
+    // Update original election with the runoff ID
+    await this.db
+      .update(elections)
+      .set({
+        results: {
+          ...results,
+          runoffElectionId: runoff.id,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(elections.id, electionId));
+
+    return runoff;
+  }
+
+  // ----------------------------------------------------------
+  // NPC Confirmation
+  // ----------------------------------------------------------
+
+  async enterNpcConfirmation(electionId: string, input: NpcConfirmInput) {
+    const total = input.yea + input.nay + input.abstain;
+    const confirmed = input.yea > input.nay;
+
+    const npcConfirmation: NpcConfirmation = {
+      status: confirmed ? 'confirmed' : 'rejected',
+      tally: {
+        yea: input.yea,
+        nay: input.nay,
+        abstain: input.abstain,
+        total,
+      },
+      decidedAt: new Date().toISOString(),
+      enteredById: input.enteredById,
+      notes: input.notes,
+    };
+
+    const newStatus = confirmed ? 'tallied' : 'tallied'; // stays tallied, caller certifies
+
+    const [updated] = await this.db
+      .update(elections)
+      .set({
+        npcConfirmation,
+        status: newStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(elections.id, electionId))
+      .returning();
+
+    return updated ?? null;
+  }
+
+  // ----------------------------------------------------------
+  // Certification
+  // ----------------------------------------------------------
+
+  async certifyElection(electionId: string) {
+    const [election] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, electionId))
+      .limit(1);
+
+    if (!election) {
+      throw new Error('Election not found');
+    }
+
+    const config = election.config as ElectionConfig;
+
+    // If NPC confirmation is required, check it's been done
+    if (config.requiresNpcConfirmation) {
+      const npc = election.npcConfirmation as NpcConfirmation | null;
+      if (!npc || npc.status === 'pending') {
+        throw new Error('NPC confirmation is still pending');
+      }
+      if (npc.status === 'rejected') {
+        throw new Error('NPC house rejected this election result');
+      }
+    }
+
+    const [updated] = await this.db
+      .update(elections)
+      .set({ status: 'certified', updatedAt: new Date() })
+      .where(eq(elections.id, electionId))
+      .returning();
+
+    // TODO: If this is a position_election with forOfficeId,
+    // auto-appoint the winner to the office (officeService.appoint)
+    // and sync the Discord role.
+
+    return updated ?? null;
+  }
+}

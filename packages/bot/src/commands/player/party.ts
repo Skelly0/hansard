@@ -1,0 +1,339 @@
+import {
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+} from 'discord.js';
+import { eq, sql } from 'drizzle-orm';
+import { db } from '../../db.js';
+import { players, parties, factions, playerEventLog } from '@hansard/db';
+import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import type { Command } from '../../client.js';
+
+async function handleJoin(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  const partyName = interaction.options.getString('party', true).trim();
+
+  // Find the player
+  const playerRows = await db
+    .select()
+    .from(players)
+    .where(eq(players.discordId, interaction.user.id))
+    .limit(1);
+
+  if (playerRows.length === 0 || !playerRows[0].characterName) {
+    await interaction.editReply({
+      embeds: [
+        errorEmbed('You haven\'t created a character yet. Use `/character create` first.'),
+      ],
+    });
+    return;
+  }
+
+  const player = playerRows[0];
+
+  // Find the target party (case-insensitive match)
+  const partyRows = await db
+    .select()
+    .from(parties)
+    .where(eq(parties.isActive, true));
+
+  const targetParty = partyRows.find(
+    (p) => p.name.toLowerCase() === partyName.toLowerCase() ||
+           p.shortName?.toLowerCase() === partyName.toLowerCase(),
+  );
+
+  if (!targetParty) {
+    const available = partyRows.map((p) => `- ${p.name}${p.shortName ? ` (${p.shortName})` : ''}`).join('\n');
+    await interaction.editReply({
+      embeds: [
+        errorEmbed(
+          `No active party found matching **${partyName}**.\n\n**Available parties:**\n${available || '*No parties available.*'}`,
+        ),
+      ],
+    });
+    return;
+  }
+
+  // Check if already in this party
+  if (player.partyId === targetParty.id) {
+    await interaction.editReply({
+      embeds: [
+        errorEmbed(`You're already a member of **${targetParty.name}**.`),
+      ],
+    });
+    return;
+  }
+
+  // Get old party name for logging
+  let oldPartyName = 'Independent';
+  if (player.partyId) {
+    const oldPartyRows = await db
+      .select({ name: parties.name })
+      .from(parties)
+      .where(eq(parties.id, player.partyId))
+      .limit(1);
+    if (oldPartyRows.length > 0) oldPartyName = oldPartyRows[0].name;
+  }
+
+  // Update the player's party
+  await db
+    .update(players)
+    .set({
+      partyId: targetParty.id,
+      lastActiveAt: new Date(),
+    })
+    .where(eq(players.id, player.id));
+
+  // Log the event
+  await db.insert(playerEventLog).values({
+    playerId: player.id,
+    eventType: 'party_change',
+    description: `${player.characterName} left ${oldPartyName} and joined ${targetParty.name}.`,
+    oldValue: { partyId: player.partyId, partyName: oldPartyName },
+    newValue: { partyId: targetParty.id, partyName: targetParty.name },
+    triggeredById: player.id,
+  });
+
+  // Discord role sync
+  const member = interaction.guild?.members.cache.get(interaction.user.id);
+  if (member) {
+    // Remove old party role
+    if (player.partyId) {
+      const oldParty = await db
+        .select({ discordRoleId: parties.discordRoleId })
+        .from(parties)
+        .where(eq(parties.id, player.partyId))
+        .limit(1);
+
+      if (oldParty[0]?.discordRoleId) {
+        try {
+          await member.roles.remove(oldParty[0].discordRoleId);
+        } catch (err) {
+          console.warn(`Failed to remove old party role: ${err}`);
+        }
+      }
+    }
+
+    // Add new party role
+    if (targetParty.discordRoleId) {
+      try {
+        await member.roles.add(targetParty.discordRoleId);
+      } catch (err) {
+        console.warn(`Failed to add new party role: ${err}`);
+      }
+    }
+  }
+
+  await interaction.editReply({
+    embeds: [
+      successEmbed(
+        'Party Joined',
+        `**${player.characterName}** has joined **${targetParty.name}**.`,
+      ),
+    ],
+  });
+}
+
+async function handleLeave(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  // Find the player
+  const playerRows = await db
+    .select()
+    .from(players)
+    .where(eq(players.discordId, interaction.user.id))
+    .limit(1);
+
+  if (playerRows.length === 0 || !playerRows[0].characterName) {
+    await interaction.editReply({
+      embeds: [
+        errorEmbed('You haven\'t created a character yet. Use `/character create` first.'),
+      ],
+    });
+    return;
+  }
+
+  const player = playerRows[0];
+
+  if (!player.partyId) {
+    await interaction.editReply({
+      embeds: [errorEmbed('You\'re already independent (no party).')],
+    });
+    return;
+  }
+
+  // Get current party name
+  let oldPartyName = 'Unknown';
+  const oldPartyRows = await db
+    .select({ name: parties.name, discordRoleId: parties.discordRoleId })
+    .from(parties)
+    .where(eq(parties.id, player.partyId))
+    .limit(1);
+
+  if (oldPartyRows.length > 0) oldPartyName = oldPartyRows[0].name;
+
+  // Update player — clear partyId
+  await db
+    .update(players)
+    .set({
+      partyId: null,
+      lastActiveAt: new Date(),
+    })
+    .where(eq(players.id, player.id));
+
+  // Log the event
+  await db.insert(playerEventLog).values({
+    playerId: player.id,
+    eventType: 'party_change',
+    description: `${player.characterName} left ${oldPartyName} and became independent.`,
+    oldValue: { partyId: player.partyId, partyName: oldPartyName },
+    newValue: { partyId: null, partyName: 'Independent' },
+    triggeredById: player.id,
+  });
+
+  // Remove Discord role
+  const member = interaction.guild?.members.cache.get(interaction.user.id);
+  if (member && oldPartyRows[0]?.discordRoleId) {
+    try {
+      await member.roles.remove(oldPartyRows[0].discordRoleId);
+    } catch (err) {
+      console.warn(`Failed to remove party role: ${err}`);
+    }
+  }
+
+  await interaction.editReply({
+    embeds: [
+      successEmbed(
+        'Party Left',
+        `**${player.characterName}** has left **${oldPartyName}** and is now independent.`,
+      ),
+    ],
+  });
+}
+
+async function handleList(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply();
+
+  // Fetch all active parties with member counts and faction info
+  const partyRows = await db
+    .select({
+      id: parties.id,
+      name: parties.name,
+      shortName: parties.shortName,
+      ideology: parties.ideology,
+      colour: parties.colour,
+      factionId: parties.factionId,
+    })
+    .from(parties)
+    .where(eq(parties.isActive, true));
+
+  if (partyRows.length === 0) {
+    await interaction.editReply({
+      embeds: [
+        createEmbed({
+          title: 'Political Parties',
+          description: '*No active parties exist yet.*',
+          system: 'players',
+        }),
+      ],
+    });
+    return;
+  }
+
+  // Count members per party
+  const memberCounts = await db
+    .select({
+      partyId: players.partyId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(players)
+    .where(eq(players.isActive, true))
+    .groupBy(players.partyId);
+
+  const countMap = new Map(memberCounts.map((mc) => [mc.partyId, mc.count]));
+
+  // Fetch faction names for display
+  const factionIds = [...new Set(partyRows.map((p) => p.factionId).filter(Boolean))];
+  const factionMap = new Map<string, string>();
+
+  if (factionIds.length > 0) {
+    const factionRows = await db
+      .select({ id: factions.id, name: factions.name })
+      .from(factions);
+
+    for (const f of factionRows) {
+      factionMap.set(f.id, f.name);
+    }
+  }
+
+  // Build party list
+  const partyLines = partyRows.map((p) => {
+    const members = countMap.get(p.id) ?? 0;
+    const faction = p.factionId ? factionMap.get(p.factionId) ?? 'Unknown' : 'Cross-faction';
+    const ideology = p.ideology ? ` — *${p.ideology}*` : '';
+    return [
+      `**${p.name}**${p.shortName ? ` (${p.shortName})` : ''}`,
+      `> ${faction}${ideology}`,
+      `> Members: **${members}**`,
+    ].join('\n');
+  });
+
+  // Count independents
+  const independentCount = countMap.get(null) ?? 0;
+
+  const embed = createEmbed({
+    title: 'Political Parties',
+    description: partyLines.join('\n\n'),
+    system: 'players',
+    fields: [
+      {
+        name: 'Independents',
+        value: `**${independentCount}** player${independentCount === 1 ? '' : 's'} without party affiliation.`,
+      },
+    ],
+  });
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+const command: Command = {
+  data: new SlashCommandBuilder()
+    .setName('party')
+    .setDescription('Party management')
+    .addSubcommand((sub) =>
+      sub
+        .setName('join')
+        .setDescription('Join a political party')
+        .addStringOption((opt) =>
+          opt
+            .setName('party')
+            .setDescription('The party name to join')
+            .setRequired(true)
+            .setMaxLength(128),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName('leave').setDescription('Leave your current party and become independent'),
+    )
+    .addSubcommand((sub) =>
+      sub.setName('list').setDescription('List all active parties with member counts'),
+    ) as SlashCommandBuilder,
+
+  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+    const subcommand = interaction.options.getSubcommand();
+
+    switch (subcommand) {
+      case 'join':
+        await handleJoin(interaction);
+        break;
+      case 'leave':
+        await handleLeave(interaction);
+        break;
+      case 'list':
+        await handleList(interaction);
+        break;
+    }
+  },
+};
+
+export default command;

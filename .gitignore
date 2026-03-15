@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.log
+.turbo/
+.vite/
+*.tsbuildinfo
+.DS_Store
+coverage/
+.claude/ralph-loop.local.md

@@ -37,6 +37,8 @@ export interface Bill {
   effectiveAt?: string;
   repealedAt?: string;
   collectionId?: string;
+  amendsBillId?: string | null;
+  amendsDocumentId?: string | null;
   tags: string[];
   policyAreas: string[];
   estimatedEffects?: {
@@ -189,5 +191,14 @@ export function useEnactBill() {
       qc.invalidateQueries({ queryKey: ['bills'] });
       qc.invalidateQueries({ queryKey: ['bills', slug] });
     },
+  });
+}
+
+/** Fetch bills that amend a given bill (child amendments) */
+export function useBillAmendments(billId?: string) {
+  return useQuery({
+    queryKey: ['bills', 'amendments', billId],
+    queryFn: () => api.get<{ data: Bill[]; total: number }>(`/bills?amendsBillId=${billId}`),
+    enabled: !!billId,
   });
 }

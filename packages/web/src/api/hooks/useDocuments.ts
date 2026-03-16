@@ -122,3 +122,37 @@ export function useUpdateDocument() {
     },
   });
 }
+
+export interface DocumentDiff {
+  from: { version: number; lineCount: number };
+  to: { version: number; lineCount: number };
+  fromContent: string;
+  toContent: string;
+}
+
+/** Fetch a diff between two versions of a document */
+export function useDocumentDiff(slug?: string, from?: number, to?: number) {
+  const params = new URLSearchParams();
+  if (from !== undefined) params.set('from', String(from));
+  if (to !== undefined) params.set('to', String(to));
+  const qs = params.toString();
+  return useQuery({
+    queryKey: ['documents', slug, 'diff', from, to],
+    queryFn: () => api.get<DocumentDiff>(`/documents/${slug}/diff${qs ? `?${qs}` : ''}`),
+    enabled: !!slug && from !== undefined && to !== undefined,
+  });
+}
+
+/** Rollback a document to a previous version (staff only) */
+export function useRollbackDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ slug, toVersion }: { slug: string; toVersion: number }) =>
+      api.post(`/documents/${slug}/rollback`, { toVersion }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['documents'] });
+      qc.invalidateQueries({ queryKey: ['documents', vars.slug] });
+      qc.invalidateQueries({ queryKey: ['documents', vars.slug, 'versions'] });
+    },
+  });
+}

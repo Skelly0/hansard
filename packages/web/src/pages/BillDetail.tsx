@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
-import { useBill, useBillVoters } from '../api/hooks/useBills';
+import { useBill, useBillVoters, useBillAmendments } from '../api/hooks/useBills';
+import { useDocumentDiff } from '../api/hooks/useDocuments';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { StatusTimeline } from '../components/shared/StatusTimeline';
 import { ResultsBars } from '../components/shared/ResultsBars';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { RedlineDiff, type DiffHunk } from '../components/shared/RedlineDiff';
 import type { BillVoter } from '../api/hooks/useBills';
 
 /** The canonical bill lifecycle stages */
@@ -39,8 +41,42 @@ export function BillDetail() {
   const { data: bill, isLoading } = useBill(slug);
   const { data: voters } = useBillVoters(slug);
   const [voteExpanded, setVoteExpanded] = useState(false);
+  const [redlineOpen, setRedlineOpen] = useState(false);
+
+  // Fetch child amendments (bills that amend this one)
+  const { data: amendmentsData } = useBillAmendments(bill?.id);
+  const amendments = amendmentsData?.data ?? [];
+
+  // Fetch diff when the redline viewer is opened and this bill amends a document
+  const { data: diffData } = useDocumentDiff(
+    redlineOpen && bill?.amendsDocumentId ? bill.amendsDocumentId : undefined,
+    redlineOpen ? 1 : undefined,
+    redlineOpen ? undefined : undefined,
+  );
 
   if (isLoading || !bill) return <PageSkeleton />;
+
+  // Build simple diff hunks from the raw content returned by the API
+  const redlineHunks: DiffHunk[] = [];
+  if (diffData) {
+    const fromLines = diffData.fromContent.split('\n');
+    const toLines = diffData.toContent.split('\n');
+    const maxLen = Math.max(fromLines.length, toLines.length);
+    for (let i = 0; i < maxLen; i++) {
+      const fromLine = fromLines[i];
+      const toLine = toLines[i];
+      if (fromLine === toLine) {
+        redlineHunks.push({ type: 'unchanged', value: (fromLine ?? '') + '\n' });
+      } else {
+        if (fromLine !== undefined) {
+          redlineHunks.push({ type: 'removed', value: fromLine + '\n' });
+        }
+        if (toLine !== undefined) {
+          redlineHunks.push({ type: 'added', value: toLine + '\n' });
+        }
+      }
+    }
+  }
 
   const stageIndex = getStageIndex(bill.status);
   const timelineStages = BILL_STAGES.map((stage) => {
@@ -151,6 +187,46 @@ export function BillDetail() {
             ))}
           </div>
         )}
+        {bill.amendsBillId && (
+          <div>
+            <span className="text-label-ui text-text-tertiary mr-1">Amends</span>
+            <Link
+              to="/bills/$slug"
+              params={{ slug: bill.amendsBillId }}
+              className="hover:text-accent-primary transition-colors font-mono text-xs"
+            >
+              Parent Bill
+            </Link>
+          </div>
+        )}
+        {bill.amendsDocumentId && (
+          <div>
+            <span className="text-label-ui text-text-tertiary mr-1">Amends Doc</span>
+            <Link
+              to="/documents"
+              className="hover:text-accent-primary transition-colors font-mono text-xs"
+            >
+              View Document
+            </Link>
+          </div>
+        )}
+        {amendments.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-label-ui text-text-tertiary mr-1">Amended by</span>
+            {amendments.map((a, i) => (
+              <span key={a.id}>
+                <Link
+                  to="/bills/$slug"
+                  params={{ slug: a.slug }}
+                  className="hover:text-accent-primary transition-colors font-mono text-xs"
+                >
+                  Bill #{String(a.billNumber).padStart(3, '0')}
+                </Link>
+                {i < amendments.length - 1 && ', '}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Status Timeline (horizontal) */}
@@ -161,6 +237,33 @@ export function BillDetail() {
           horizontal
         />
       </div>
+
+      {/* Redline diff viewer (for amendment bills) */}
+      {(bill.amendsBillId || bill.amendsDocumentId) && (
+        <div className="mb-8 pb-6 border-b border-border-subtle">
+          <button
+            onClick={() => setRedlineOpen(!redlineOpen)}
+            className="btn-secondary text-body-sm"
+          >
+            {redlineOpen ? 'Hide Redline' : 'View Redline'}
+          </button>
+          {redlineOpen && (
+            <div className="mt-4">
+              {redlineHunks.length > 0 ? (
+                <RedlineDiff
+                  hunks={redlineHunks}
+                  fromLabel="Original"
+                  toLabel="Amended"
+                />
+              ) : (
+                <p className="text-body-sm text-text-tertiary italic">
+                  Loading diff or no changes detected...
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Two-column layout: content + sidebar */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -301,6 +301,21 @@ export async function getVersionHistory(
 }
 
 /**
+ * Rollback a document to a previous version by re-applying that version's content.
+ */
+export async function rollbackDocument(
+  db: Database,
+  slug: string,
+  toVersion: number,
+  editedById: string,
+): Promise<Document | null> {
+  const versions = await getVersionHistory(db, slug);
+  const targetVersion = versions.find((v) => v.versionNumber === toVersion);
+  if (!targetVersion) return null;
+  return updateDocument(db, slug, targetVersion.content, editedById, `Rollback to v${toVersion}`);
+}
+
+/**
  * Full-text search across documents (title, content, cached content).
  */
 export async function searchDocuments(

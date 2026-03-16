@@ -81,6 +81,7 @@ export const bills = pgTable('bills', {
   collectionId: uuid('collection_id').references(() => documentCollections.id),
   parentDocumentId: uuid('parent_document_id').references((): AnyPgColumn => documents.id),
   amendsBillId: uuid('amends_bill_id').references((): AnyPgColumn => bills.id),
+  amendsDocumentId: uuid('amends_document_id'), // references documents.id — no FK to avoid circular imports
 
   // === CLASSIFICATION & SEARCH ===
   tags: jsonb('tags').$type<string[]>().default([]),

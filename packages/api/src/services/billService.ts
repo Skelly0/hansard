@@ -16,6 +16,7 @@ import type {
 } from '@hansard/shared';
 import { BillStatus } from '@hansard/shared';
 import { extractDocId, cacheDocContent } from './googleDocService.js';
+import { updateDocument } from './documentService.js';
 
 // ============================================================
 // Types
@@ -30,6 +31,8 @@ export interface SubmitBillData {
   shortTitle?: string;
   collectionId?: string;
   coSponsorIds?: string[];
+  amendsBillId?: string;
+  amendsDocumentId?: string;
 }
 
 export interface ListBillsFilters {
@@ -116,6 +119,7 @@ function toBill(row: typeof bills.$inferSelect): Bill {
     collectionId: row.collectionId,
     parentDocumentId: row.parentDocumentId,
     amendsBillId: row.amendsBillId,
+    amendsDocumentId: row.amendsDocumentId,
     tags: (row.tags ?? []) as string[],
     policyAreas: (row.policyAreas ?? []) as string[],
     crossReferences: (row.crossReferences ?? []) as string[],
@@ -185,6 +189,8 @@ export async function submitBillFor(
       tags: data.tags ?? [],
       policyAreas: data.policyAreas ?? [],
       collectionId: data.collectionId ?? null,
+      amendsBillId: data.amendsBillId ?? null,
+      amendsDocumentId: data.amendsDocumentId ?? null,
     })
     .returning();
 
@@ -519,6 +525,93 @@ export async function enterNpcVote(
 }
 
 /**
+ * Auto-apply an enacted amendment to its target document.
+ * Looks up the target document (via amendsDocumentId or amendsBillId's parentDocumentId),
+ * copies the amendment's cached content into the document, and marks the parent bill as amended.
+ */
+async function applyAmendment(db: Database, bill: Bill): Promise<void> {
+  // Find the target document
+  let targetDocSlug: string | null = null;
+
+  if (bill.amendsDocumentId) {
+    // Direct document amendment — look up the document by ID
+    const [doc] = await db
+      .select({ slug: documents.slug })
+      .from(documents)
+      .where(eq(documents.id, bill.amendsDocumentId))
+      .limit(1);
+    if (doc) targetDocSlug = doc.slug;
+  } else if (bill.amendsBillId) {
+    // Amends another bill — find that bill's parentDocumentId
+    const [parentBill] = await db
+      .select({ parentDocumentId: bills.parentDocumentId })
+      .from(bills)
+      .where(eq(bills.id, bill.amendsBillId))
+      .limit(1);
+    if (parentBill?.parentDocumentId) {
+      const [doc] = await db
+        .select({ slug: documents.slug })
+        .from(documents)
+        .where(eq(documents.id, parentBill.parentDocumentId))
+        .limit(1);
+      if (doc) targetDocSlug = doc.slug;
+    }
+  }
+
+  if (!targetDocSlug) return;
+
+  // Get amendment content — use cachedContent, re-cache if needed
+  let content = bill.cachedContent;
+  if (!content) {
+    try {
+      content = await cacheDocContent(db, bill.id);
+    } catch {
+      // If we can't fetch content, bail silently
+      return;
+    }
+  }
+  if (!content) return;
+
+  // Apply the amendment content to the target document
+  await updateDocument(
+    db,
+    targetDocSlug,
+    content,
+    bill.authorId,
+    `Amendment applied from Bill #${bill.billNumber}: ${bill.title}`,
+    bill.id,
+  );
+
+  // If amending a bill, update its status to 'amended'
+  if (bill.amendsBillId) {
+    const [parentBill] = await db
+      .select({ status: bills.status })
+      .from(bills)
+      .where(eq(bills.id, bill.amendsBillId))
+      .limit(1);
+
+    if (parentBill) {
+      const oldStatus = parentBill.status;
+      await db
+        .update(bills)
+        .set({
+          status: BillStatus.AMENDED,
+          updatedAt: new Date(),
+        })
+        .where(eq(bills.id, bill.amendsBillId));
+
+      await db.insert(billStatusLog).values({
+        billId: bill.amendsBillId,
+        fromStatus: oldStatus,
+        toStatus: BillStatus.AMENDED,
+        changedById: bill.authorId,
+        notes: `Amended by Bill #${bill.billNumber}: ${bill.title}`,
+      });
+    }
+  }
+}
+
+/**
  * Mark a bill as enacted.
  */
 export async function enactBill(
@@ -557,6 +650,12 @@ export async function enactBill(
     changedById: enactedById,
     notes: 'Bill enacted',
   });
+
+  // Auto-apply amendment to target document
+  const enacted = await getBill(db, slug);
+  if (enacted && (enacted.amendsBillId || enacted.amendsDocumentId)) {
+    await applyAmendment(db, enacted);
+  }
 
   return toBill(updated);
 }

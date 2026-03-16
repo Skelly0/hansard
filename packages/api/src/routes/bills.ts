@@ -2,7 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireStaff } from '../middleware/requireStaff.js';
 import { requireRole } from '../middleware/requireRole.js';
+import { eq } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
+import { bills, documents } from '@hansard/db';
 import type { BillStatus, EstimatedEffects } from '@hansard/shared';
 import {
   submitBill,
@@ -178,6 +180,8 @@ export default async function billRoutes(fastify: FastifyInstance) {
       collectionId?: string;
       coSponsorIds?: string[];
       authorId?: string; // for submit-on-behalf
+      amendsBillId?: string;
+      amendsDocumentId?: string;
     };
   }>(
     '/api/bills',
@@ -188,6 +192,20 @@ export default async function billRoutes(fastify: FastifyInstance) {
 
       if (!title || !googleDocUrl) {
         return reply.status(400).send({ error: 'title and googleDocUrl are required' });
+      }
+
+      // Validate amendment targets exist if provided
+      if (rest.amendsBillId) {
+        const [exists] = await db.select({ id: bills.id }).from(bills).where(eq(bills.id, rest.amendsBillId)).limit(1);
+        if (!exists) {
+          return reply.status(400).send({ error: 'amendsBillId references a bill that does not exist' });
+        }
+      }
+      if (rest.amendsDocumentId) {
+        const [exists] = await db.select({ id: documents.id }).from(documents).where(eq(documents.id, rest.amendsDocumentId)).limit(1);
+        if (!exists) {
+          return reply.status(400).send({ error: 'amendsDocumentId references a document that does not exist' });
+        }
       }
 
       let bill;

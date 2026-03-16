@@ -10,7 +10,9 @@ import {
   getVersionHistory,
   searchDocuments,
   getCollections,
+  rollbackDocument,
 } from '../services/documentService.js';
+import { computeDiff } from '../services/diffService.js';
 
 /**
  * Document routes plugin.
@@ -187,17 +189,21 @@ export default async function documentRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'One or both version numbers not found' });
       }
 
-      // Simple line-level diff — a proper diff library can be added later
-      const fromLines = fromVersion.content.split('\n');
-      const toLines = toVersion.content.split('\n');
+      return computeDiff(fromVersion.content, toVersion.content, String(fromNum), String(toNum));
+    },
+  );
 
-      return {
-        from: { version: fromNum, lineCount: fromLines.length },
-        to: { version: toNum, lineCount: toLines.length },
-        fromContent: fromVersion.content,
-        toContent: toVersion.content,
-        // TODO: Use a proper diff library for structured diff output
-      };
+  // ============================================================
+  // POST /api/documents/:slug/rollback — Rollback to a previous version (staff)
+  // ============================================================
+
+  fastify.post<{ Params: { slug: string }; Body: { toVersion: number } }>(
+    '/api/documents/:slug/rollback',
+    { preHandler: [requireAuth, requireStaff] },
+    async (request, reply) => {
+      const result = await rollbackDocument(db, request.params.slug, request.body.toVersion, request.session.user!.id);
+      if (!result) return reply.status(404).send({ error: 'Document or version not found' });
+      return result;
     },
   );
 

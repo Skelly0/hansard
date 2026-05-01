@@ -1,0 +1,213 @@
+import {
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+} from 'discord.js';
+import { eq, ilike } from 'drizzle-orm';
+import { db } from '../../db.js';
+import { bills, players } from '@hansard/db';
+import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
+import type { Command } from '../../client.js';
+
+/**
+ * Resolve a bill by either bill number (e.g. "B-001", "1") or title.
+ */
+async function resolveBill(input: string): Promise<
+  typeof bills.$inferSelect | null
+> {
+  const trimmed = input.trim();
+
+  const bMatch = trimmed.match(/^B-?0*(\d+)$/i);
+  if (bMatch) {
+    const num = Number(bMatch[1]);
+    if (Number.isInteger(num) && num > 0) {
+      const [bill] = await db
+        .select()
+        .from(bills)
+        .where(eq(bills.billNumber, num))
+        .limit(1);
+      if (bill) return bill;
+    }
+  }
+
+  const asNumber = Number(trimmed);
+  if (Number.isInteger(asNumber) && asNumber > 0) {
+    const [bill] = await db
+      .select()
+      .from(bills)
+      .where(eq(bills.billNumber, asNumber))
+      .limit(1);
+    if (bill) return bill;
+  }
+
+  const [byTitle] = await db
+    .select()
+    .from(bills)
+    .where(ilike(bills.title, trimmed))
+    .limit(1);
+  if (byTitle) return byTitle;
+
+  const [byPartial] = await db
+    .select()
+    .from(bills)
+    .where(ilike(bills.title, `%${trimmed}%`))
+    .limit(1);
+  return byPartial ?? null;
+}
+
+type EditableField = 'title' | 'summary' | 'policy_areas' | 'tags';
+
+/** Split a comma-separated value into a clean string array. */
+function splitCsv(value: string): string[] {
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+const command: Command = {
+  data: new SlashCommandBuilder()
+    .setName('bill-edit')
+    .setDescription('Edit bill metadata (author or staff). Content lives in the Google Doc.')
+    .addStringOption((opt) =>
+      opt
+        .setName('bill')
+        .setDescription('Bill number (e.g. B-001) or title')
+        .setRequired(true),
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName('field')
+        .setDescription('Which field to edit')
+        .setRequired(true)
+        .addChoices(
+          { name: 'title', value: 'title' },
+          { name: 'summary', value: 'summary' },
+          { name: 'policy_areas (comma-separated)', value: 'policy_areas' },
+          { name: 'tags (comma-separated)', value: 'tags' },
+        ),
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName('value')
+        .setDescription('New value (for list fields, comma-separated)')
+        .setRequired(true)
+        .setMaxLength(2000),
+    ) as SlashCommandBuilder,
+
+  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+    const member = interaction.guild?.members.cache.get(interaction.user.id);
+    if (!member) {
+      await interaction.reply({
+        embeds: [errorEmbed('Could not resolve your guild membership.')],
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const billArg = interaction.options.getString('bill', true);
+    const field = interaction.options.getString('field', true) as EditableField;
+    const value = interaction.options.getString('value', true);
+
+    const bill = await resolveBill(billArg);
+    if (!bill) {
+      await interaction.editReply({
+        embeds: [errorEmbed(`Could not find a bill matching \`${billArg}\`. Provide a bill number (e.g. \`B-001\`) or title.`)],
+      });
+      return;
+    }
+
+    // Permission: bill author or staff
+    const [actor] = await db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.discordId, interaction.user.id))
+      .limit(1);
+
+    const isAuthor = actor && actor.id === bill.authorId;
+    const staff = await isStaff(member);
+
+    if (!staff && !isAuthor) {
+      await interaction.editReply({
+        embeds: [errorEmbed("Only the bill's author or staff can edit bill metadata.")],
+      });
+      return;
+    }
+
+    // Build update payload
+    const setValues: Record<string, unknown> = { updatedAt: new Date() };
+    let displayValue: string;
+
+    switch (field) {
+      case 'title': {
+        const trimmed = value.trim();
+        if (trimmed.length === 0 || trimmed.length > 256) {
+          await interaction.editReply({
+            embeds: [errorEmbed('Title must be between 1 and 256 characters.')],
+          });
+          return;
+        }
+        setValues.title = trimmed;
+        displayValue = trimmed;
+        break;
+      }
+      case 'summary': {
+        const trimmed = value.trim();
+        setValues.summary = trimmed.length > 0 ? trimmed : null;
+        displayValue = trimmed.length > 0 ? trimmed : '_(cleared)_';
+        break;
+      }
+      case 'policy_areas': {
+        const list = splitCsv(value);
+        setValues.policyAreas = list;
+        displayValue = list.length > 0 ? list.map((p) => `\`${p}\``).join(', ') : '_(cleared)_';
+        break;
+      }
+      case 'tags': {
+        const list = splitCsv(value);
+        setValues.tags = list;
+        displayValue = list.length > 0 ? list.map((t) => `\`${t}\``).join(', ') : '_(cleared)_';
+        break;
+      }
+      default: {
+        await interaction.editReply({
+          embeds: [errorEmbed(`Unknown field: \`${field as string}\`.`)],
+        });
+        return;
+      }
+    }
+
+    try {
+      await db
+        .update(bills)
+        .set(setValues)
+        .where(eq(bills.id, bill.id));
+
+      const padded = String(bill.billNumber).padStart(3, '0');
+
+      const embed = createEmbed({
+        title: 'Bill Updated',
+        system: 'bills',
+        description: [
+          `**${bill.title}** (Bill #\`B-${padded}\`)`,
+          '',
+          `\u{1F4DD} Field \`${field}\` updated by <@${interaction.user.id}>.`,
+          '',
+          `**New value:**`,
+          displayValue.length > 1500 ? displayValue.slice(0, 1490) + '\n…' : displayValue,
+        ].join('\n'),
+      });
+
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Failed to edit bill metadata:', error);
+      await interaction.editReply({
+        embeds: [errorEmbed('Failed to update bill metadata due to a database error.')],
+      });
+    }
+  },
+};
+
+export default command;

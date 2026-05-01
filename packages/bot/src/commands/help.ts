@@ -10,8 +10,8 @@ const SYSTEM_BY_PREFIX: Array<{ match: (name: string) => boolean; system: System
   { match: (n) => n.startsWith('favour'), system: 'favours', label: 'Favours' },
   { match: (n) => n.startsWith('office') || n === 'appoint' || n === 'dismiss' || n === 'sync-roles', system: 'offices', label: 'Offices' },
   { match: (n) => n.startsWith('party'), system: 'offices', label: 'Parties' },
-  { match: (n) => n === 'character' || n === 'lookup' || n === 'history' || n === 'whois' || n === 'roster', system: 'players', label: 'Players' },
-  { match: (n) => n === 'ailment' || n === 'kill' || n.startsWith('time'), system: 'simulation', label: 'Simulation' },
+  { match: (n) => n === 'character' || n === 'lookup' || n === 'history' || n === 'whois' || n === 'roster' || n.startsWith('player'), system: 'players', label: 'Players' },
+  { match: (n) => n === 'ailment' || n === 'kill' || n === 'heal' || n.startsWith('time'), system: 'simulation', label: 'Simulation' },
   { match: (n) => n.startsWith('mod'), system: 'moderation', label: 'Moderation' },
   { match: (n) => n === 'ping' || n === 'help' || n === 'dashboard', system: 'simulation', label: 'Utility' },
 ];

@@ -147,13 +147,38 @@ const command: Command = {
       triggeredById: invokerPlayer.id,
     });
 
-    // Remove Discord role if configured
+    // Remove Discord role if configured — but only if the player doesn't still
+    // hold another active office that maps to the SAME role (best-effort).
+    let roleSyncWarning: string | null = null;
     if (officeMatch.discordRoleId && interaction.guild) {
-      try {
-        const guildMember = await interaction.guild.members.fetch(currentHolder.discordId);
-        await guildMember.roles.remove(officeMatch.discordRoleId);
-      } catch (roleError) {
-        console.error(`Failed to remove Discord role for office ${officeMatch.name}:`, roleError);
+      const stillHolding = await db
+        .select({ id: officeHolders.id })
+        .from(officeHolders)
+        .innerJoin(offices, eq(officeHolders.officeId, offices.id))
+        .where(
+          and(
+            eq(officeHolders.playerId, currentHolder.playerId),
+            isNull(officeHolders.endDate),
+            eq(offices.discordRoleId, officeMatch.discordRoleId),
+          ),
+        )
+        .limit(1);
+
+      if (stillHolding.length === 0) {
+        try {
+          const guildMember = await interaction.guild.members.fetch(currentHolder.discordId);
+          await guildMember.roles.remove(
+            officeMatch.discordRoleId,
+            `Hansard: dismissed from ${officeMatch.name}`,
+          );
+        } catch (roleError) {
+          console.warn(
+            `Failed to remove Discord role ${officeMatch.discordRoleId} for office ${officeMatch.name}:`,
+            roleError,
+          );
+          roleSyncWarning =
+            'Could not remove the linked Discord role. The bot likely needs a higher role in the server hierarchy than the role it manages.';
+        }
       }
     }
 
@@ -163,6 +188,7 @@ const command: Command = {
       [
         `**${holderName}** has been removed from **${officeMatch.name}**.`,
         reason ? `**Reason:** ${reason}` : '',
+        roleSyncWarning ? `\n⚠️ ${roleSyncWarning}` : '',
       ].filter(Boolean).join('\n'),
     );
 

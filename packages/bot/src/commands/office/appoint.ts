@@ -181,21 +181,32 @@ const command: Command = {
       triggeredById: invokerPlayer.id,
     });
 
-    // Sync Discord role if configured
+    // Sync Discord role if configured (best-effort — never fails the command)
+    let roleSyncWarning: string | null = null;
     if (officeMatch.discordRoleId && interaction.guild) {
       try {
         const guildMember = await interaction.guild.members.fetch(targetUser.id);
-        await guildMember.roles.add(officeMatch.discordRoleId);
+        await guildMember.roles.add(
+          officeMatch.discordRoleId,
+          `Hansard: appointed to ${officeMatch.name}`,
+        );
       } catch (roleError) {
-        console.error(`Failed to sync Discord role for office ${officeMatch.name}:`, roleError);
+        console.warn(
+          `Failed to grant Discord role ${officeMatch.discordRoleId} for office ${officeMatch.name}:`,
+          roleError,
+        );
+        roleSyncWarning =
+          'Could not assign the linked Discord role. The bot likely needs a higher role in the server hierarchy than the role it manages.';
       }
     }
 
     const playerName = targetPlayer.characterName ?? targetUser.username;
-    const embed = successEmbed(
-      'Appointment Confirmed',
+    const description = [
       `**${playerName}** has been appointed to **${officeMatch.name}**.`,
-    );
+      roleSyncWarning ? `\n⚠️ ${roleSyncWarning}` : '',
+    ].filter(Boolean).join('');
+
+    const embed = successEmbed('Appointment Confirmed', description);
 
     await interaction.editReply({ embeds: [embed] });
   },

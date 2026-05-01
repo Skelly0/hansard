@@ -206,24 +206,25 @@ git commit -m "chore(api): add vitest setup"
 
 Run: `cat packages/api/src/types.ts`
 
-- [ ] **Step 2: Replace `SessionUser` and add request augmentation**
-
-Replace the existing `SessionUser` interface and add:
+You should see an existing module augmentation that looks like:
 
 ```ts
-import type { Player } from '@hansard/db';
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    player?: Player;
-  }
-}
-
-declare module '@fastify/secure-session' {
-  interface SessionData {
+declare module '@fastify/session' {
+  interface FastifySessionObject {
     user?: SessionUser;
   }
 }
+```
+
+**You will REPLACE this augmentation, not add a parallel one.** Same module, same interface — only `SessionUser` changes shape.
+
+- [ ] **Step 2: Rewrite `packages/api/src/types.ts`**
+
+Replace the file contents with:
+
+```ts
+import '@fastify/session';
+import type { Player } from '@hansard/db';
 
 export interface SessionUser {
   id: string;            // players.id (UUID), NOT Discord snowflake
@@ -233,6 +234,18 @@ export interface SessionUser {
   isStaff: boolean;
   staffRole: string | null;
   permissions: string[];
+}
+
+declare module '@fastify/session' {
+  interface FastifySessionObject {
+    user?: SessionUser;
+  }
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    player?: Player;
+  }
 }
 ```
 
@@ -271,19 +284,36 @@ Create `packages/api/src/services/playerService.test.ts`:
 import { describe, it, expect, vi } from 'vitest';
 import { findOrCreatePlayerByDiscordId } from './playerService';
 
-// Mock drizzle db: chain .select().from().where() and .insert().values().onConflictDoUpdate().returning()
+// Mock drizzle db: handles
+//   - .select().from().where().limit() (returns existing or empty)
+//   - .insert(players).values().onConflictDoUpdate().returning() (returns inserted)
+//   - .insert(playerEventLog).values() (returns undefined, can throw)
+// `insert` is called twice in the create path; the mock dispatches by the table arg.
 function makeMockDb(existingPlayer: any | null, insertedPlayer: any) {
-  const onConflictDoUpdate = vi.fn().mockReturnValue({
-    returning: vi.fn().mockResolvedValue([insertedPlayer]),
-  });
-  const values = vi.fn().mockReturnValue({ onConflictDoUpdate });
-  const insert = vi.fn().mockReturnValue({ values });
   const limit = vi.fn().mockResolvedValue(existingPlayer ? [existingPlayer] : []);
   const where = vi.fn().mockReturnValue({ limit });
   const from = vi.fn().mockReturnValue({ where });
   const select = vi.fn().mockReturnValue({ from });
-  const eventInsert = vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
-  return { select, insert, _eventInsert: eventInsert };
+
+  const playersInsertChain = {
+    values: vi.fn().mockReturnValue({
+      onConflictDoUpdate: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([insertedPlayer]),
+      }),
+    }),
+  };
+  const eventLogInsertChain = {
+    values: vi.fn().mockResolvedValue(undefined),
+  };
+
+  // First insert call (players) returns the players chain;
+  // second insert call (playerEventLog) returns the eventLog chain.
+  // We dispatch by call index — simpler than introspecting the table arg.
+  const insert = vi.fn()
+    .mockReturnValueOnce(playersInsertChain)
+    .mockReturnValueOnce(eventLogInsertChain);
+
+  return { select, insert };
 }
 
 describe('findOrCreatePlayerByDiscordId', () => {
@@ -499,13 +529,12 @@ import { listPlayers } from './playerService';
 
 describe('listPlayers with search', () => {
   it('passes search to the where clause', async () => {
-    const where = vi.fn().mockReturnValue({
-      limit: vi.fn().mockReturnValue({
-        offset: vi.fn().mockResolvedValue([{ id: 'p1', characterName: 'Aldrick Vance' }]),
-      }),
-    });
-    const orderBy = vi.fn().mockReturnValue({ where });
-    const from = vi.fn().mockReturnValue({ orderBy });
+    // Real chain in playerService.ts: from → where → orderBy → limit → offset
+    const offset = vi.fn().mockResolvedValue([{ id: 'p1', characterName: 'Aldrick Vance' }]);
+    const limit = vi.fn().mockReturnValue({ offset });
+    const orderBy = vi.fn().mockReturnValue({ limit });
+    const where = vi.fn().mockReturnValue({ orderBy });
+    const from = vi.fn().mockReturnValue({ where });
     const select = vi.fn().mockReturnValue({ from });
     const db: any = { select };
 
@@ -514,6 +543,9 @@ describe('listPlayers with search', () => {
     expect(where).toHaveBeenCalled();
   });
 });
+
+// IMPORTANT: before writing this test, verify the actual chain order by reading
+// the existing listPlayers function. If the order differs, mirror it here.
 ```
 
 (This is a smoke test — it doesn't verify the actual SQL. Consider it documentation that the field flows through.)
@@ -601,15 +633,15 @@ if (q.search) filters.search = q.search;
 
 (Alongside the existing `if (q.factionId) ...` block.)
 
-- [ ] **Step 3: Manual smoke test**
+- [ ] **Step 3: Manual smoke test (deferred)**
 
-Start the API: `pnpm dev:api`. Then in another terminal:
+This endpoint is `requireAuth`-gated, so it can't be hit until Phase 2 is also complete and you can log in. Defer this manual check to **after** the Phase 2 verification block. At that point, log in via the browser, open DevTools → Console, and run:
 
-```bash
-curl 'http://localhost:3001/api/players?search=al&limit=5' --cookie 'sess=YOUR_SESSION'
+```js
+fetch('/api/players?search=al&limit=5').then(r => r.json()).then(console.log)
 ```
 
-(You may need to be logged in — if so, defer this manual check until after Phase 2.)
+(The session cookie is automatic in the browser context. Skip the `curl --cookie` dance — Fastify's session cookie name varies by config and Windows PowerShell `curl` is an `Invoke-WebRequest` alias with different syntax.)
 
 - [ ] **Step 4: Commit**
 
@@ -1434,7 +1466,15 @@ git commit -m "feat(web): wrap router in AuthProvider"
 **Files:**
 - Modify: `packages/web/src/router.tsx`
 
-- [ ] **Step 1: Wrap protected routes**
+- [ ] **Step 1: Read the existing router fully**
+
+Run: `cat packages/web/src/router.tsx`
+
+You'll see ~16 route definitions, each `createRoute({ getParentRoute: () => rootRoute, path: '...', component: ... })`. The `routeTree` at the bottom adds them all to `rootRoute`. The existing imports include `createRouter`, `createRootRoute`, `createRoute`, `Outlet` from `@tanstack/react-router`. We'll keep all those.
+
+You'll need to know the exact existing route variable names (e.g., `dashboardRoute`, `ticketsRoute`, `ticketDetailRoute`, `billsRoute`, `billDetailRoute`, `documentsRoute`, `votingRoute`, `electionDetailRoute`, `officesRoute`, `playersRoute`, `playerDetailRoute`, `favoursRoute`, `simulationRoute`, `moderationRoute`, `graveyardRoute`, `loginRoute`). Confirm in the file.
+
+- [ ] **Step 2: Wrap protected routes**
 
 The simplest approach: wrap the *root* layout `Shell` in a guard, leaving `/login` as the only unauthenticated route. Replace the rootRoute and add a separate route for `/login`:
 
@@ -1519,13 +1559,13 @@ const routeTree = rootRoute.addChildren([
 
 > Adjust to TanStack Router's exact pattern — the layout-route + Outlet pattern is the idiomatic way to apply guards to a group. If you prefer wrapping each route's component manually (`component: () => <RouteGuard><Dashboard /></RouteGuard>`), that's fine too — pick one pattern and apply consistently.
 
-- [ ] **Step 2: Type-check and dev-server smoke**
+- [ ] **Step 3: Type-check and dev-server smoke**
 
 Run: `pnpm --filter @hansard/web build`. Expected: PASS.
 
 Run dev: `pnpm dev:web`. Visit http://localhost:5173 in an incognito window — you should be redirected to `/login`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add packages/web/src/router.tsx
@@ -2156,23 +2196,30 @@ export function ActivityFeed({ items }: ActivityFeedProps) {
               </span>
             </div>
             <div className="space-y-1">
-              {sectionItems.map((item, idx) => (
-                <div
-                  key={`${item.timestamp}-${idx}`}
-                  className="card flex items-center gap-3 px-3 py-2 transition-colors duration-150 ease-out"
-                >
-                  <PlayerAvatar
-                    player={{
-                      id: item.actorName ?? 'unknown',
-                      characterName: null,
-                      discordUsername: item.actorName ?? '?',
-                    }}
-                    size="sm"
-                  />
-                  <div className="flex-1 text-body-sm text-text-secondary">{item.description}</div>
-                  <div className="text-mono text-xs text-text-tertiary">{relativeTime(item.timestamp)}</div>
-                </div>
-              ))}
+              {sectionItems.map((item, idx) => {
+                // Activity feed items only carry actorName (no UUID), so we hash by
+                // name. Consequence: the same player may show a different color in
+                // the feed vs in pages that hash by player.id. Acceptable — feed is
+                // historical context, exact color match across surfaces isn't critical.
+                const actorKey = item.actorName ?? 'unknown';
+                return (
+                  <div
+                    key={`${item.timestamp}-${idx}`}
+                    className="card flex items-center gap-3 px-3 py-2 transition-colors duration-150 ease-out"
+                  >
+                    <PlayerAvatar
+                      player={{
+                        id: actorKey,
+                        characterName: null,
+                        discordUsername: actorKey,
+                      }}
+                      size="sm"
+                    />
+                    <div className="flex-1 text-body-sm text-text-secondary">{item.description}</div>
+                    <div className="text-mono text-xs text-text-tertiary">{relativeTime(item.timestamp)}</div>
+                  </div>
+                );
+              })}
             </div>
           </section>
         );
@@ -2970,6 +3017,60 @@ Apply filters to each page that produce empty results. Confirm copy reads correc
 ```bash
 git add packages/web/src/pages/Bills.tsx packages/web/src/pages/Tickets.tsx packages/web/src/pages/Voting.tsx packages/web/src/pages/Documents.tsx packages/web/src/pages/Graveyard.tsx packages/web/src/pages/Favours.tsx
 git commit -m "feat(web): bespoke empty-state copy across list pages"
+```
+
+---
+
+## Task 7.5: Hover transition sweep
+
+**Files:**
+- Modify: `packages/web/src/main.css`
+
+Per spec: confine to the existing `.card` class and DataTable rows. Add `transition-colors duration-150 ease-out` if missing. Do NOT change other elements.
+
+- [ ] **Step 1: Read the existing `.card` class definition in `main.css`**
+
+Run: `grep -A 8 '\.card' packages/web/src/main.css`
+
+- [ ] **Step 2: Update `.card` to ensure consistent transitions**
+
+If `.card` doesn't already include transition rules, add them. The existing class likely uses `@apply` directives — append `transition-colors duration-150 ease-out` to the apply chain. Example before/after:
+
+Before:
+```css
+.card {
+  @apply bg-card border border-border-subtle rounded-card p-4 border-l-2;
+}
+```
+
+After:
+```css
+.card {
+  @apply bg-card border border-border-subtle rounded-card p-4 border-l-2 transition-colors duration-150 ease-out;
+}
+```
+
+(Adjust to whatever the existing apply chain actually contains — read first.)
+
+- [ ] **Step 3: Read DataTable row rendering**
+
+Run: `grep -n 'tr\|row' packages/web/src/components/shared/DataTable.tsx | head -10`
+
+- [ ] **Step 4: Add hover transition to DataTable row class (only if missing)**
+
+In `DataTable.tsx`, the row className typically includes `hover:bg-hover` or similar. If it doesn't already include `transition-colors`, append `transition-colors duration-150 ease-out` to the row className.
+
+If the row already has `transition-colors`, no change needed — close this task.
+
+- [ ] **Step 5: Manual verify**
+
+Run `pnpm dev:web`. Hover over a Dashboard metric card and a row in any DataTable — confirm the color shift is smooth (~150ms), not abrupt.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/web/src/main.css packages/web/src/components/shared/DataTable.tsx
+git commit -m "feat(web): consistent 150ms hover transitions on cards and table rows"
 ```
 
 ---

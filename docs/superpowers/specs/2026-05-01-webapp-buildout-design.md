@@ -33,6 +33,12 @@ Polish tier is **Generous**: hooks up data, redesigns Login (ceremonial parchmen
   }
   ```
   Gating call sites use `isStaff` / `hasPermission` directly. They never need to null-check `user` because the booleans default to `false`/`[]`.
+- **Query options for `useAuth`**: 401 from `/api/auth/me` is *normal state* (unauthenticated), not an error. The global `retry: 1` in `main.tsx` would cause double auth checks on every unauthed page load. The auth query MUST opt out: `{ retry: false, throwOnError: false, staleTime: Infinity }` (re-fetched only by explicit `invalidateQueries` after login or logout mutation success).
+- **Loading-state policy** (prevents flash-of-wrong-permissions on first paint):
+  - `<RouteGuard>` renders `<PageSkeleton />` while `isLoading` is true. No flash to a 403 page or to staff content before we know who the user is.
+  - Section-level (`{isStaff && <Panel />}`) and button-level (`{isStaff && <button>}`) gating accepts a brief invisible-to-visible transition on hydration — staff users may see their gated controls appear ~50-150ms after first paint. Documented choice; the alternative `(isStaff && !isLoading)` everywhere is verbose and the flicker is minor for non-route-level controls.
+  - Sidebar Moderation entry: hidden while `isLoading` (treat sidebar like a route guard — first paint must not show staff entries to non-staff).
+- **Logout flow**: on `POST /api/auth/logout` mutation success, (a) `queryClient.clear()` to drop all cached responses, (b) explicit `router.navigate({ to: '/login' })`. Don't rely on the next 401 to trigger redirect — the user should land on `/login` immediately, not see a flash of broken UI.
 - **Discord OAuth callback** (`packages/api/src/plugins/auth.ts`): on success, look up `players` by `discord_id`. If no row exists, **auto-create as active player** (user choice — frictionless onboarding). The auto-create only needs `discordId` and `discordUsername` from the OAuth profile — every other column on `players` has a default (`isActive: true`, `isAlive: true`, `healthStatus: 'healthy'`, `ailments: []`, `startingFavoursGranted: false`, `isStaff: false`, `registeredAt: now()`). The auto-create also writes a `playerEventLog` row with `eventType: 'registration'`. Read `isStaff` and `staffRole` directly off the player row — there is no `staff_roles` table.
 - **Office-holder permissions**: at session-create time, look up the player's current office holdings (`office_holders` where `endDate IS NULL`, joined to `offices.permissions: jsonb<string[]>`), aggregate (union, deduped) into `session.user.permissions`. This unblocks `requireRole('legislative_leader')` on `/api/bills/:slug/votes` and `requireRole('appoint_ministers')` on Offices routes — currently unreachable from the webapp.
 - **Permission staleness (known limitation)**: `session.user.permissions` is computed once at login and not refreshed. If a player gains/loses an office mid-session, permissions are stale until they log out and back in. Acceptable for a DPS where role changes are rare events. Documented; not solved here.
@@ -249,6 +255,7 @@ All colors use Tailwind tokens already defined in `tailwind.config.ts` (`bg-page
 - Footer: `Cancel` (ghost) + primary action button in system color.
 - Submit: optimistic insert into the active-actions list with a "pending" tag; replaces with server response on settle. On error: keep modal open, show inline error banner above buttons.
 - Close on Escape; click-outside-to-close.
+- **Close-mid-flight safety**: the mutation lives in TanStack Query cache, not modal local state. If the user closes the modal while the request is in flight, `onSettled` still updates the cache normally — the action appears (or doesn't) in the list as if the modal had stayed open. Don't manually cancel in-flight mutations on close.
 
 ### Light global polish sweep
 
@@ -316,3 +323,4 @@ All colors use Tailwind tokens already defined in `tailwind.config.ts` (`bg-page
 - Documents create / edit / new-collection UIs don't exist.
 - Offices CRUD UIs don't exist.
 - Mobile-specific layout has not been audited.
+- Session cookie hardening (`secure: true`, `sameSite: 'lax'|'strict'`, `httpOnly: true`) is set by the existing Fastify session plugin config and not modified here. Worth verifying for production launch — out of scope for this spec, flagged for ops.

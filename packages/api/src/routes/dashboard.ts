@@ -100,10 +100,15 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       } | null = null;
 
       try {
-        const [prevTicketResult] = await db
-          .select({ value: count() })
-          .from(tickets)
-          .where(and(
+        // Run the 5 queries in parallel — they're fully independent.
+        const [
+          [prevTicketResult],
+          [prevVoteResult],
+          [prevPlayerResult],
+          [prevBillResult],
+          [prevModResult],
+        ] = await Promise.all([
+          db.select({ value: count() }).from(tickets).where(and(
             or(
               eq(tickets.status, 'open'),
               eq(tickets.status, 'in_progress'),
@@ -111,46 +116,31 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
               eq(tickets.status, 'resolved'),
             ),
             lt(tickets.createdAt, sevenDaysAgo),
-          ));
-
-        const [prevVoteResult] = await db
-          .select({ value: count() })
-          .from(elections)
-          .where(and(
+          )),
+          db.select({ value: count() }).from(elections).where(and(
             or(
               eq(elections.status, 'voting_open'),
               eq(elections.status, 'draft'),
             ),
             lt(elections.createdAt, sevenDaysAgo),
-          ));
-
-        const [prevPlayerResult] = await db
-          .select({ value: count() })
-          .from(players)
-          .where(and(
+          )),
+          db.select({ value: count() }).from(players).where(and(
             eq(players.isActive, true),
             eq(players.isAlive, true),
             lt(players.registeredAt, sevenDaysAgo),
-          ));
-
-        const [prevBillResult] = await db
-          .select({ value: count() })
-          .from(bills)
-          .where(and(
+          )),
+          db.select({ value: count() }).from(bills).where(and(
             or(
               eq(bills.status, 'submitted'),
               eq(bills.status, 'voting'),
             ),
             lt(bills.submittedAt, sevenDaysAgo),
-          ));
-
-        const [prevModResult] = await db
-          .select({ value: count() })
-          .from(modActions)
-          .where(and(
+          )),
+          db.select({ value: count() }).from(modActions).where(and(
             eq(modActions.isActive, true),
             lt(modActions.createdAt, sevenDaysAgo),
-          ));
+          )),
+        ]);
 
         prevWeek = {
           activeTickets: prevTicketResult?.value ?? 0,

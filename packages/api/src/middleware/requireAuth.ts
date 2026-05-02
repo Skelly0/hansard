@@ -20,7 +20,7 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
   const result = await fastify.db.select().from(players).where(eq(players.id, user.id)).limit(1);
 
   if (result.length === 0) {
-    request.session.destroy();
+    await request.session.destroy();
     return reply.status(401).send({ error: 'Session player no longer exists' });
   }
 

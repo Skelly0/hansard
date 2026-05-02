@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { findOrCreatePlayerByDiscordId, aggregatePermissionsForPlayer } from './playerService';
+import { findOrCreatePlayerByDiscordId, aggregatePermissionsForPlayer, listPlayers } from './playerService';
 
 // Mock drizzle db: handles
 //   - .select().from().where().limit() (returns existing or empty)
@@ -91,5 +91,46 @@ describe('aggregatePermissionsForPlayer', () => {
     // not undefined — which would happen if both filters were accidentally removed.
     const whereArg = db._where.mock.calls[0][0];
     expect(whereArg).toBeTruthy();
+  });
+});
+
+describe('listPlayers with search', () => {
+  it('passes search to the where clause', async () => {
+    // Real chain in playerService.ts: from → where → orderBy → limit → offset
+    const offset = vi.fn().mockResolvedValue([{
+      id: 'p1',
+      discordId: '111',
+      discordUsername: 'aldrick',
+      characterName: 'Aldrick Vance',
+      characterBio: null,
+      characterPortraitUrl: null,
+      factionId: null,
+      partyId: null,
+      birthDate: '1990-01-01',
+      startingAge: 35,
+      currentAge: 35,
+      deathDate: null,
+      causeOfDeath: null,
+      isAlive: true,
+      healthStatus: 'healthy',
+      ailments: [],
+      startingFavoursGranted: false,
+      isActive: true,
+      isStaff: false,
+      staffRole: null,
+      registeredAt: new Date(),
+      lastActiveAt: null,
+      profileData: null,
+    }]);
+    const limit = vi.fn().mockReturnValue({ offset });
+    const orderBy = vi.fn().mockReturnValue({ limit });
+    const where = vi.fn().mockReturnValue({ orderBy });
+    const from = vi.fn().mockReturnValue({ where });
+    const select = vi.fn().mockReturnValue({ from });
+    const db: any = { select };
+
+    const results = await listPlayers(db, { search: 'aldrick', limit: 10, offset: 0 });
+    expect(results).toHaveLength(1);
+    expect(where).toHaveBeenCalled();
   });
 });

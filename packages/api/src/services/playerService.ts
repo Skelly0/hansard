@@ -1,4 +1,4 @@
-import { eq, and, desc, isNull, type SQL } from 'drizzle-orm';
+import { eq, and, desc, isNull, ilike, or, type SQL } from 'drizzle-orm';
 import {
   players,
   playerEventLog,
@@ -43,6 +43,7 @@ export interface ListPlayersFilters {
   isActive?: boolean;
   isStaff?: boolean;
   isAlive?: boolean;
+  search?: string;       // case-insensitive substring on characterName OR discordUsername
   limit?: number;
   offset?: number;
 }
@@ -175,6 +176,10 @@ export async function listPlayers(db: Database, filters: ListPlayersFilters = {}
   }
   if (filters.isAlive !== undefined) {
     conditions.push(eq(players.isAlive, filters.isAlive));
+  }
+  if (filters.search !== undefined && filters.search.length > 0) {
+    const term = `%${filters.search}%`;
+    conditions.push(or(ilike(players.characterName, term), ilike(players.discordUsername, term))!);
   }
 
   const limit = filters.limit ?? 100;

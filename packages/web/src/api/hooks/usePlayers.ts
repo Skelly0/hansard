@@ -160,3 +160,11 @@ export function useChangeParty() {
     },
   });
 }
+
+/**
+ * Convenience for player typeahead. Disabled when search is empty/short
+ * to avoid spamming the API on every keystroke.
+ */
+export function useSearchPlayers(search: string, limit = 8) {
+  return usePlayers(search.length >= 2 ? { search, limit } : undefined);
+}

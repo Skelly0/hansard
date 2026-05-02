@@ -490,7 +490,7 @@ export async function findOrCreatePlayerByDiscordId(
       description: `Player auto-registered via Discord OAuth (@${input.discordUsername})`,
     });
   } catch (err) {
-    // Swallow — we already have the player; logging is nice-to-have
+    console.warn('Failed to write registration event log for player', player.id, err);
   }
 
   return { player, wasCreated: true };

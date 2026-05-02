@@ -8,6 +8,7 @@ import {
   useRollbackDocument,
 } from '../api/hooks/useDocuments';
 import type { Document, DocumentVersion } from '../api/hooks/useDocuments';
+import { useAuth } from '../api/hooks/useAuth';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
@@ -23,6 +24,7 @@ const collectionTypeLabel: Record<string, string> = {
 // ---- Version History Panel ----
 
 function VersionHistoryPanel({ doc }: { doc: Document }) {
+  const { isStaff } = useAuth();
   const { data: versions } = useDocumentVersions(doc.slug);
   const [compareFrom, setCompareFrom] = useState<number | null>(null);
   const [compareTo, setCompareTo] = useState<number | null>(null);
@@ -152,8 +154,8 @@ function VersionHistoryPanel({ doc }: { doc: Document }) {
             </button>
           )}
 
-          {/* Rollback button (staff-gated server-side) */}
-          {v.versionNumber < doc.currentVersion && (
+          {/* Rollback button — staff-only (also enforced server-side) */}
+          {isStaff && v.versionNumber < doc.currentVersion && (
             <button
               onClick={() => handleRollback(v.versionNumber)}
               className={`text-body-sm font-medium flex-shrink-0 transition-colors ${

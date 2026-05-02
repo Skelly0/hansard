@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { findOrCreatePlayerByDiscordId } from './playerService';
+import { findOrCreatePlayerByDiscordId, aggregatePermissionsForPlayer } from './playerService';
 
 // Mock drizzle db: handles
 //   - .select().from().where().limit() (returns existing or empty)
@@ -50,19 +50,18 @@ describe('findOrCreatePlayerByDiscordId', () => {
   });
 });
 
-import { aggregatePermissionsForPlayer } from './playerService';
-
 describe('aggregatePermissionsForPlayer', () => {
+  // Capture the WHERE predicate so we can assert it was applied
+  function makePermissionsMockDb(rows: any[]) {
+    const where = vi.fn().mockResolvedValue(rows);
+    const innerJoin = vi.fn().mockReturnValue({ where });
+    const from = vi.fn().mockReturnValue({ innerJoin });
+    const select = vi.fn().mockReturnValue({ from });
+    return { select, _where: where, _innerJoin: innerJoin, _from: from };
+  }
+
   it('returns empty array when player holds no offices', async () => {
-    const db: any = {
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          innerJoin: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      }),
-    };
+    const db: any = makePermissionsMockDb([]);
     const result = await aggregatePermissionsForPlayer(db, 'player-uuid');
     expect(result).toEqual([]);
   });
@@ -73,16 +72,24 @@ describe('aggregatePermissionsForPlayer', () => {
       { permissions: ['legislative_leader', 'appoint_ministers'] },
       { permissions: null },
     ];
-    const db: any = {
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          innerJoin: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(rows),
-          }),
-        }),
-      }),
-    };
+    const db: any = makePermissionsMockDb(rows);
     const result = await aggregatePermissionsForPlayer(db, 'player-uuid');
     expect(result.sort()).toEqual(['appoint_ministers', 'call_elections', 'legislative_leader']);
+  });
+
+  it('applies the active-holding WHERE predicate (regression guard)', async () => {
+    // The contract: filter by playerId AND endDate IS NULL.
+    // If the implementation drops either filter, requireRole correctness breaks.
+    // We can't easily inspect drizzle SQL chunks, but we can assert the call shape.
+    const db: any = makePermissionsMockDb([]);
+    await aggregatePermissionsForPlayer(db, 'player-uuid');
+    expect(db.select).toHaveBeenCalledTimes(1);
+    expect(db._from).toHaveBeenCalledTimes(1);
+    expect(db._innerJoin).toHaveBeenCalledTimes(1);
+    expect(db._where).toHaveBeenCalledTimes(1);
+    // The WHERE arg should be a truthy SQL expression (drizzle's `and(...)` result),
+    // not undefined — which would happen if both filters were accidentally removed.
+    const whereArg = db._where.mock.calls[0][0];
+    expect(whereArg).toBeTruthy();
   });
 });

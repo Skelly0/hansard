@@ -444,3 +444,54 @@ function toPlayerEvent(row: typeof playerEventLog.$inferSelect): PlayerEvent {
     createdAt: row.createdAt.toISOString(),
   };
 }
+
+// ============================================================
+// Discord OAuth: find-or-create player on login
+// ============================================================
+
+export interface FindOrCreateResult {
+  player: typeof players.$inferSelect;
+  wasCreated: boolean;
+}
+
+/**
+ * Look up a player by Discord ID. If absent, insert a new active player row.
+ * Uses ON CONFLICT to be safe under concurrent OAuth callbacks (two tabs).
+ *
+ * On fresh insert, also writes a playerEventLog row (eventType='registration').
+ */
+export async function findOrCreatePlayerByDiscordId(
+  db: Database,
+  input: { discordId: string; discordUsername: string },
+): Promise<FindOrCreateResult> {
+  const existing = await db.select().from(players).where(eq(players.discordId, input.discordId)).limit(1);
+  if (existing.length > 0) {
+    return { player: existing[0], wasCreated: false };
+  }
+
+  const inserted = await db
+    .insert(players)
+    .values({
+      discordId: input.discordId,
+      discordUsername: input.discordUsername,
+    })
+    .onConflictDoUpdate({
+      target: players.discordId,
+      set: { discordUsername: input.discordUsername },
+    })
+    .returning();
+
+  const player = inserted[0];
+
+  try {
+    await db.insert(playerEventLog).values({
+      playerId: player.id,
+      eventType: 'registration',
+      description: `Player auto-registered via Discord OAuth (@${input.discordUsername})`,
+    });
+  } catch (err) {
+    // Swallow — we already have the player; logging is nice-to-have
+  }
+
+  return { player, wasCreated: true };
+}

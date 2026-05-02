@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
 import { useTicket, useAddTicketMessage, useUpdateTicket, useCloseTicket } from '../api/hooks/useTickets';
+import { useAuth } from '../api/hooks/useAuth';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 
 export function TicketDetail() {
   const { id } = useParams({ strict: false }) as { id: string };
+  const { user, isStaff } = useAuth();
   const { data: ticket, isLoading } = useTicket(id);
   const addMessage = useAddTicketMessage();
   const updateTicket = useUpdateTicket();
@@ -15,6 +17,9 @@ export function TicketDetail() {
   const [isInternal, setIsInternal] = useState(false);
 
   if (isLoading || !ticket) return <PageSkeleton />;
+
+  const isCreator = ticket.createdById === user?.id;
+  const canClose = isStaff || isCreator;
 
   const handleSendMessage = () => {
     if (!newMessage.trim()) return;
@@ -60,7 +65,7 @@ export function TicketDetail() {
           <h1 className="text-display">{ticket.title}</h1>
         </div>
 
-        {ticket.status !== 'closed' && (
+        {ticket.status !== 'closed' && canClose && (
           <button
             onClick={handleClose}
             className="btn-secondary text-sm whitespace-nowrap"

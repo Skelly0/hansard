@@ -6,6 +6,7 @@ import {
   useAdvanceTime,
   type TimeAdvanceEntry,
 } from '../api/hooks/useSimulation';
+import { useAuth } from '../api/hooks/useAuth';
 import { Tag } from '../components/shared/Tag';
 import { MetricCard } from '../components/shared/MetricCard';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
@@ -369,10 +370,8 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
 
 // ---- Main Page ----
 
-// TODO: Replace with real auth hook when available
-const IS_STAFF = true;
-
 export function Simulation() {
+  const { isStaff } = useAuth();
   const { isLoading } = useSimulationClock();
 
   if (isLoading) return <PageSkeleton />;
@@ -392,7 +391,7 @@ export function Simulation() {
       <ClockHeader />
 
       {/* Staff controls */}
-      {IS_STAFF && <ControlsCard />}
+      {isStaff && <ControlsCard />}
 
       {/* History */}
       <h2 className="text-heading-1 mb-4">Recent Advances</h2>

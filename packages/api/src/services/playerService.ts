@@ -1,9 +1,11 @@
-import { eq, and, desc, type SQL } from 'drizzle-orm';
+import { eq, and, desc, isNull, type SQL } from 'drizzle-orm';
 import {
   players,
   playerEventLog,
   parties,
   factions,
+  officeHolders,
+  offices,
   type Database,
 } from '@hansard/db';
 import type {
@@ -494,4 +496,25 @@ export async function findOrCreatePlayerByDiscordId(
   }
 
   return { player, wasCreated: true };
+}
+
+/**
+ * Aggregate permissions for a player from all currently-active office holdings.
+ * Currently-active = office_holders.endDate IS NULL.
+ * Returns a deduped list of permission strings.
+ */
+export async function aggregatePermissionsForPlayer(db: Database, playerId: string): Promise<string[]> {
+  const rows = await db
+    .select({ permissions: offices.permissions })
+    .from(officeHolders)
+    .innerJoin(offices, eq(officeHolders.officeId, offices.id))
+    .where(and(eq(officeHolders.playerId, playerId), isNull(officeHolders.endDate)));
+
+  const set = new Set<string>();
+  for (const row of rows) {
+    if (Array.isArray(row.permissions)) {
+      for (const p of row.permissions) set.add(p);
+    }
+  }
+  return Array.from(set);
 }

@@ -49,3 +49,40 @@ describe('findOrCreatePlayerByDiscordId', () => {
     expect(result.wasCreated).toBe(true);
   });
 });
+
+import { aggregatePermissionsForPlayer } from './playerService';
+
+describe('aggregatePermissionsForPlayer', () => {
+  it('returns empty array when player holds no offices', async () => {
+    const db: any = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    };
+    const result = await aggregatePermissionsForPlayer(db, 'player-uuid');
+    expect(result).toEqual([]);
+  });
+
+  it('aggregates and dedupes permissions across multiple offices', async () => {
+    const rows = [
+      { permissions: ['legislative_leader', 'call_elections'] },
+      { permissions: ['legislative_leader', 'appoint_ministers'] },
+      { permissions: null },
+    ];
+    const db: any = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(rows),
+          }),
+        }),
+      }),
+    };
+    const result = await aggregatePermissionsForPlayer(db, 'player-uuid');
+    expect(result.sort()).toEqual(['appoint_ministers', 'call_elections', 'legislative_leader']);
+  });
+});

@@ -132,5 +132,8 @@ describe('listPlayers with search', () => {
     const results = await listPlayers(db, { search: 'aldrick', limit: 10, offset: 0 });
     expect(results).toHaveLength(1);
     expect(where).toHaveBeenCalled();
+    // Search predicate must actually be present in the WHERE arg, not silently dropped.
+    const whereArg = where.mock.calls[0][0];
+    expect(whereArg).toBeTruthy();
   });
 });

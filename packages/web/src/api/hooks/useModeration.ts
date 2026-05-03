@@ -81,9 +81,58 @@ export function useModStats() {
 export function useCreateModAction() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { targetPlayerId: string; type: string; reason: string; internalNotes?: string; expiresAt?: string }) =>
-      api.post<ModAction>('/moderation/actions', body),
-    onSuccess: (_d, vars) => {
+    mutationFn: (body: {
+      targetPlayerId: string;
+      type: string;
+      reason: string;
+      internalNotes?: string;
+      expiresAt?: string;
+    }) => api.post<ModAction>('/moderation/actions', body),
+
+    onMutate: async (vars) => {
+      // Cancel outgoing refetches so optimistic data isn't overwritten
+      await qc.cancelQueries({ queryKey: ['moderation', 'actions'] });
+
+      // Snapshot prior list-cache entries
+      const snapshots = qc.getQueriesData<{ data: ModAction[]; total: number }>({
+        queryKey: ['moderation', 'actions'],
+      });
+
+      // Optimistically prepend a pending action to all matching list caches
+      const optimistic: ModAction = {
+        id: `optimistic-${Date.now()}`,
+        targetPlayerId: vars.targetPlayerId,
+        moderatorId: 'pending',
+        type: vars.type as ModAction['type'],
+        reason: vars.reason,
+        internalNotes: vars.internalNotes,
+        expiresAt: vars.expiresAt,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      for (const [key, value] of snapshots) {
+        if (value) {
+          qc.setQueryData(key, {
+            ...value,
+            data: [optimistic, ...value.data],
+            total: value.total + 1,
+          });
+        }
+      }
+
+      return { snapshots };
+    },
+
+    onError: (_err, _vars, context) => {
+      // Roll back to the snapshots
+      for (const [key, value] of context?.snapshots ?? []) {
+        qc.setQueryData(key, value);
+      }
+    },
+
+    onSettled: (_data, _err, vars) => {
       qc.invalidateQueries({ queryKey: ['moderation'] });
       qc.invalidateQueries({ queryKey: ['players', vars.targetPlayerId] });
     },

@@ -1,6 +1,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import '../types.js';
+import { findOrCreatePlayerByDiscordId, aggregatePermissionsForPlayer } from '../services/playerService.js';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const DISCORD_AUTH_URL = 'https://discord.com/api/oauth2/authorize';
@@ -25,10 +26,16 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
 
   // GET /api/auth/discord/callback — handle OAuth2 callback
   fastify.get('/api/auth/discord/callback', async (request: FastifyRequest, reply: FastifyReply) => {
-    const { code } = request.query as { code?: string };
+    const { code, error } = request.query as { code?: string; error?: string };
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+    // Generic error redirect (covers access_denied, server_error, invalid_request, etc.)
+    if (error) {
+      return reply.redirect(`${frontendUrl}/login?error=${encodeURIComponent(error)}`);
+    }
 
     if (!code) {
-      return reply.status(400).send({ error: 'Missing authorization code' });
+      return reply.redirect(`${frontendUrl}/login?error=missing_code`);
     }
 
     try {
@@ -47,46 +54,48 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
 
       if (!tokenResponse.ok) {
         fastify.log.error('Discord token exchange failed: %s', tokenResponse.status);
-        return reply.status(502).send({ error: 'Discord token exchange failed' });
+        return reply.redirect(`${frontendUrl}/login?error=token_exchange_failed`);
       }
 
-      const tokenData = await tokenResponse.json() as {
-        access_token: string;
-        token_type: string;
-      };
+      const tokenData = await tokenResponse.json() as { access_token: string; token_type: string };
 
-      // Fetch user profile from Discord
+      // Fetch Discord profile
       const userResponse = await fetch(`${DISCORD_API}/users/@me`, {
         headers: { Authorization: `${tokenData.token_type} ${tokenData.access_token}` },
       });
 
       if (!userResponse.ok) {
         fastify.log.error('Discord user fetch failed: %s', userResponse.status);
-        return reply.status(502).send({ error: 'Failed to fetch Discord user' });
+        return reply.redirect(`${frontendUrl}/login?error=profile_fetch_failed`);
       }
 
       const discordUser = await userResponse.json() as {
         id: string;
         username: string;
-        discriminator: string;
         avatar: string | null;
       };
 
-      // Store user in session
-      // TODO: Look up user in DB, check staff/roles
+      // Find or create player; aggregate permissions
+      const { player } = await findOrCreatePlayerByDiscordId(fastify.db, {
+        discordId: discordUser.id,
+        discordUsername: discordUser.username,
+      });
+      const permissions = await aggregatePermissionsForPlayer(fastify.db, player.id);
+
       request.session.user = {
-        id: discordUser.id,
-        username: discordUser.username,
+        id: player.id,                        // players.id (UUID) — not Discord snowflake
+        discordId: discordUser.id,
+        username: player.discordUsername,
         avatar: discordUser.avatar,
-        isStaff: false, // stub — will be resolved from DB
-        permissions: [],
+        isStaff: player.isStaff,
+        staffRole: player.staffRole,
+        permissions,
       };
 
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      return reply.redirect(`${frontendUrl}/dashboard`);
+      return reply.redirect(`${frontendUrl}/`);
     } catch (err) {
       fastify.log.error(err, 'OAuth2 callback error');
-      return reply.status(500).send({ error: 'Internal server error during authentication' });
+      return reply.redirect(`${frontendUrl}/login?error=server_error`);
     }
   });
 

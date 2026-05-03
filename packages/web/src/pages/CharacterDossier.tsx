@@ -10,6 +10,7 @@ import {
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import type { PlayerDossier, PlayerEvent } from '../api/hooks/usePlayers';
 
 // ---------------------------------------------------------------------------
@@ -44,29 +45,6 @@ function formatDate(iso?: string): string {
     month: 'short',
     year: 'numeric',
   });
-}
-
-/** Serif initials fallback */
-function InitialsCircle({ name, size = 128 }: { name: string; size?: number }) {
-  const initials = name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('');
-
-  return (
-    <div
-      className="rounded-full bg-inset border border-border-subtle flex items-center justify-center flex-shrink-0"
-      style={{ width: size, height: size }}
-    >
-      <span
-        className="font-display font-semibold text-text-tertiary select-none"
-        style={{ fontSize: size * 0.36 }}
-      >
-        {initials}
-      </span>
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -116,17 +94,7 @@ export function CharacterDossier() {
       {/* ── Header ── */}
       <div className="flex items-start gap-6 mb-8">
         {/* Portrait */}
-        {player.characterPortraitUrl ? (
-          <img
-            src={player.characterPortraitUrl}
-            alt={displayName}
-            className={`w-32 h-32 rounded-full object-cover flex-shrink-0 border border-border-subtle ${
-              isDeceased ? 'grayscale' : ''
-            }`}
-          />
-        ) : (
-          <InitialsCircle name={displayName} size={128} />
-        )}
+        <PlayerAvatar player={player} size="md" />
 
         {/* Name + meta */}
         <div className="flex-1 min-w-0">

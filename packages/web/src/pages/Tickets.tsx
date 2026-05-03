@@ -185,7 +185,7 @@ export function Tickets() {
           columns={columns}
           data={tickets}
           rowKey={(row) => row.id}
-          emptyMessage="No tickets match the current filters."
+          emptyMessage="Inbox is empty. The chamber rests."
         />
       </div>
 

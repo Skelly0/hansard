@@ -1,4 +1,6 @@
 import { Link, useRouterState } from '@tanstack/react-router';
+import { useAuth } from '../../api/hooks/useAuth';
+import { UserMenu } from './UserMenu';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -33,6 +35,12 @@ const NAV_ITEMS: NavItem[] = [
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
+  const { isStaff, isLoading: authLoading } = useAuth();
+
+  const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (item.path === '/moderation') return isStaff && !authLoading;
+    return true;
+  });
 
   return (
     <nav
@@ -57,7 +65,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
       {/* Navigation */}
       <div className="flex-1 overflow-y-auto py-2">
-        {NAV_ITEMS.map((item, i) => {
+        {visibleNavItems.map((item, i) => {
           const isActive = item.path === '/'
             ? currentPath === '/'
             : currentPath.startsWith(item.path);
@@ -99,13 +107,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </div>
 
       {/* Footer */}
-      {!collapsed && (
-        <div className="px-4 py-3 border-t border-border-subtle">
-          <p className="text-mono text-text-tertiary text-xs">
-            DPS Season Manager
-          </p>
-        </div>
-      )}
+      <UserMenu collapsed={collapsed} />
     </nav>
   );
 }

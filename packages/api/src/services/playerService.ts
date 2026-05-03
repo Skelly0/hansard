@@ -1,9 +1,11 @@
-import { eq, and, desc, type SQL } from 'drizzle-orm';
+import { eq, and, desc, isNull, ilike, or, type SQL } from 'drizzle-orm';
 import {
   players,
   playerEventLog,
   parties,
   factions,
+  officeHolders,
+  offices,
   type Database,
 } from '@hansard/db';
 import type {
@@ -41,6 +43,7 @@ export interface ListPlayersFilters {
   isActive?: boolean;
   isStaff?: boolean;
   isAlive?: boolean;
+  search?: string;       // case-insensitive substring on characterName OR discordUsername
   limit?: number;
   offset?: number;
 }
@@ -173,6 +176,10 @@ export async function listPlayers(db: Database, filters: ListPlayersFilters = {}
   }
   if (filters.isAlive !== undefined) {
     conditions.push(eq(players.isAlive, filters.isAlive));
+  }
+  if (filters.search !== undefined && filters.search.length > 0) {
+    const term = `%${filters.search}%`;
+    conditions.push(or(ilike(players.characterName, term), ilike(players.discordUsername, term))!);
   }
 
   const limit = filters.limit ?? 100;
@@ -443,4 +450,76 @@ function toPlayerEvent(row: typeof playerEventLog.$inferSelect): PlayerEvent {
     isAutomatic: row.isAutomatic,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+// ============================================================
+// Discord OAuth: find-or-create player on login
+// ============================================================
+
+export interface FindOrCreateResult {
+  player: typeof players.$inferSelect;
+  wasCreated: boolean;
+}
+
+/**
+ * Look up a player by Discord ID. If absent, insert a new active player row.
+ * Uses ON CONFLICT to be safe under concurrent OAuth callbacks (two tabs).
+ *
+ * On fresh insert, also writes a playerEventLog row (eventType='registration').
+ */
+export async function findOrCreatePlayerByDiscordId(
+  db: Database,
+  input: { discordId: string; discordUsername: string },
+): Promise<FindOrCreateResult> {
+  const existing = await db.select().from(players).where(eq(players.discordId, input.discordId)).limit(1);
+  if (existing.length > 0) {
+    return { player: existing[0], wasCreated: false };
+  }
+
+  const inserted = await db
+    .insert(players)
+    .values({
+      discordId: input.discordId,
+      discordUsername: input.discordUsername,
+    })
+    .onConflictDoUpdate({
+      target: players.discordId,
+      set: { discordUsername: input.discordUsername },
+    })
+    .returning();
+
+  const player = inserted[0];
+
+  try {
+    await db.insert(playerEventLog).values({
+      playerId: player.id,
+      eventType: 'registration',
+      description: `Player auto-registered via Discord OAuth (@${input.discordUsername})`,
+    });
+  } catch (err) {
+    console.warn('Failed to write registration event log for player', player.id, err);
+  }
+
+  return { player, wasCreated: true };
+}
+
+/**
+ * Aggregate permissions for a player from all currently-active office holdings.
+ * Currently-active = office_holders.endDate IS NULL.
+ * Returns a deduped list of permission strings.
+ */
+export async function aggregatePermissionsForPlayer(db: Database, playerId: string): Promise<string[]> {
+  const rows = await db
+    .select({ permissions: offices.permissions })
+    .from(officeHolders)
+    .innerJoin(offices, eq(officeHolders.officeId, offices.id))
+    .where(and(eq(officeHolders.playerId, playerId), isNull(officeHolders.endDate)));
+
+  const set = new Set<string>();
+  for (const row of rows) {
+    if (Array.isArray(row.permissions)) {
+      for (const p of row.permissions) set.add(p);
+    }
+  }
+  return Array.from(set);
 }

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { eq, and, desc, count, inArray, or } from 'drizzle-orm';
+import { eq, and, desc, count, inArray, or, lt } from 'drizzle-orm';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
   tickets,
@@ -89,6 +89,71 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       const currentSimTick = clock?.currentTick ?? 0;
       const currentSimDate = clock?.currentDate ?? null;
 
+      // === Previous-week counts (for trend deltas) ===
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      let prevWeek: {
+        activeTickets: number;
+        upcomingVotes: number;
+        playerCount: number;
+        activeBills: number;
+        activeModActions: number;
+      } | null = null;
+
+      try {
+        // Run the 5 queries in parallel — they're fully independent.
+        const [
+          [prevTicketResult],
+          [prevVoteResult],
+          [prevPlayerResult],
+          [prevBillResult],
+          [prevModResult],
+        ] = await Promise.all([
+          db.select({ value: count() }).from(tickets).where(and(
+            or(
+              eq(tickets.status, 'open'),
+              eq(tickets.status, 'in_progress'),
+              eq(tickets.status, 'waiting'),
+              eq(tickets.status, 'resolved'),
+            ),
+            lt(tickets.createdAt, sevenDaysAgo),
+          )),
+          db.select({ value: count() }).from(elections).where(and(
+            or(
+              eq(elections.status, 'voting_open'),
+              eq(elections.status, 'draft'),
+            ),
+            lt(elections.createdAt, sevenDaysAgo),
+          )),
+          db.select({ value: count() }).from(players).where(and(
+            eq(players.isActive, true),
+            eq(players.isAlive, true),
+            lt(players.registeredAt, sevenDaysAgo),
+          )),
+          db.select({ value: count() }).from(bills).where(and(
+            or(
+              eq(bills.status, 'submitted'),
+              eq(bills.status, 'voting'),
+            ),
+            lt(bills.submittedAt, sevenDaysAgo),
+          )),
+          db.select({ value: count() }).from(modActions).where(and(
+            eq(modActions.isActive, true),
+            lt(modActions.createdAt, sevenDaysAgo),
+          )),
+        ]);
+
+        prevWeek = {
+          activeTickets: prevTicketResult?.value ?? 0,
+          upcomingVotes: prevVoteResult?.value ?? 0,
+          playerCount: prevPlayerResult?.value ?? 0,
+          activeBills: prevBillResult?.value ?? 0,
+          activeModActions: prevModResult?.value ?? 0,
+        };
+      } catch (err) {
+        fastify.log.warn({ err }, 'Failed to compute prevWeek dashboard counts');
+        // prevWeek stays null
+      }
+
       return {
         activeTickets,
         upcomingVotes,
@@ -97,6 +162,7 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         activeModActions,
         currentSimTick,
         currentSimDate,
+        prevWeek,
       };
     },
   );

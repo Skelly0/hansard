@@ -5,6 +5,7 @@ import {
   Outlet,
 } from '@tanstack/react-router';
 import { Shell } from './components/layout/Shell';
+import { RouteGuard } from './components/auth/RouteGuard';
 import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
 import { Tickets } from './pages/Tickets';
@@ -30,119 +31,148 @@ const rootRoute = createRootRoute({
   ),
 });
 
-const dashboardRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/',
-  component: Dashboard,
-});
-
+// /login is the only unauthenticated route
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   component: Login,
 });
 
-const ticketsRoute = createRoute({
+// Layout route applying RouteGuard to all protected pages
+const protectedLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'protected',
+  component: () => (
+    <RouteGuard>
+      <Outlet />
+    </RouteGuard>
+  ),
+});
+
+// Nested layout route: protected + staff
+const moderationLayoutRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  id: 'moderation-protected',
+  component: () => (
+    <RouteGuard requireStaff>
+      <Outlet />
+    </RouteGuard>
+  ),
+});
+
+// Page routes — most are children of protectedLayoutRoute
+const dashboardRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/',
+  component: Dashboard,
+});
+
+const ticketsRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
   path: '/tickets',
   component: Tickets,
 });
 
 const ticketDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/tickets/$id',
   component: TicketDetail,
 });
 
 const billsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/bills',
   component: Bills,
 });
 
 const billDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/bills/$slug',
   component: BillDetail,
 });
 
 const documentsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/documents',
   component: Documents,
 });
 
 const votingRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/voting',
   component: Voting,
 });
 
 const electionDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/voting/$id',
   component: ElectionDetail,
 });
 
 const officesRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/offices',
   component: Offices,
 });
 
 const playersRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/players',
   component: Players,
 });
 
 const playerDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/players/$id',
   component: CharacterDossier,
 });
 
 const favoursRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/favours',
   component: Favours,
 });
 
 const simulationRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/simulation',
   component: Simulation,
 });
 
-const moderationRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/moderation',
-  component: Moderation,
-});
-
 const graveyardRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => protectedLayoutRoute,
   path: '/graveyard',
   component: Graveyard,
 });
 
+// Moderation gets the staff guard
+const moderationRoute = createRoute({
+  getParentRoute: () => moderationLayoutRoute,
+  path: '/moderation',
+  component: Moderation,
+});
+
 const routeTree = rootRoute.addChildren([
-  dashboardRoute,
   loginRoute,
-  ticketsRoute,
-  ticketDetailRoute,
-  billsRoute,
-  billDetailRoute,
-  documentsRoute,
-  votingRoute,
-  electionDetailRoute,
-  officesRoute,
-  playersRoute,
-  playerDetailRoute,
-  favoursRoute,
-  simulationRoute,
-  moderationRoute,
-  graveyardRoute,
+  protectedLayoutRoute.addChildren([
+    dashboardRoute,
+    ticketsRoute,
+    ticketDetailRoute,
+    billsRoute,
+    billDetailRoute,
+    documentsRoute,
+    votingRoute,
+    electionDetailRoute,
+    officesRoute,
+    playersRoute,
+    playerDetailRoute,
+    favoursRoute,
+    simulationRoute,
+    graveyardRoute,
+    moderationLayoutRoute.addChildren([
+      moderationRoute,
+    ]),
+  ]),
 ]);
 
 export const router = createRouter({ routeTree });

@@ -33,6 +33,7 @@ interface ListPlayersQuery {
   isActive?: string;
   isStaff?: string;
   isAlive?: string;
+  search?: string;
   limit?: string;
   offset?: string;
 }
@@ -68,6 +69,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       if (q.isActive !== undefined) filters.isActive = q.isActive === 'true';
       if (q.isStaff !== undefined) filters.isStaff = q.isStaff === 'true';
       if (q.isAlive !== undefined) filters.isAlive = q.isAlive === 'true';
+      if (q.search) filters.search = q.search.slice(0, 100);
       if (q.limit) filters.limit = parseInt(q.limit, 10);
       if (q.offset) filters.offset = parseInt(q.offset, 10);
 

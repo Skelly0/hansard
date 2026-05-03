@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   useFavourCategories,
   useAllFavourBalances,
@@ -8,6 +8,7 @@ import {
   type FavourCategory,
   type FavourTransaction,
 } from '../api/hooks/useFavours';
+import { useAuth } from '../api/hooks/useAuth';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
@@ -124,7 +125,7 @@ function StaffOverview() {
         columns={columns}
         data={rows}
         rowKey={(row) => row.playerId}
-        emptyMessage="No favour balances recorded yet."
+        emptyMessage="No exchanges of favour on record."
       />
     </div>
   );
@@ -294,14 +295,17 @@ function TransactionList({
 
 type TabKey = 'staff' | 'my';
 
-// TODO: Replace with real auth context when available
-const MOCK_PLAYER_ID = '';
-
 export function Favours() {
-  const [tab, setTab] = useState<TabKey>('staff');
+  const { user, isStaff } = useAuth();
+  const [tab, setTab] = useState<TabKey>(isStaff ? 'staff' : 'my');
 
-  // If we have a player ID from auth, use it. Otherwise fall back to empty (disabled query).
-  const playerId = MOCK_PLAYER_ID;
+  // Snap non-staff users away from the staff tab if their auth state changes.
+  useEffect(() => {
+    if (!isStaff && tab === 'staff') setTab('my');
+  }, [isStaff, tab]);
+
+  // Use the signed-in player's ID; empty disables the query for unauthed users.
+  const playerId = user?.id ?? '';
 
   return (
     <div className="p-8">
@@ -316,16 +320,18 @@ export function Favours() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 border-b border-border-subtle">
-        <TabButton active={tab === 'staff'} onClick={() => setTab('staff')}>
-          Staff Overview
-        </TabButton>
+        {isStaff && (
+          <TabButton active={tab === 'staff'} onClick={() => setTab('staff')}>
+            Staff Overview
+          </TabButton>
+        )}
         <TabButton active={tab === 'my'} onClick={() => setTab('my')}>
           My Favours
         </TabButton>
       </div>
 
       {/* Content */}
-      {tab === 'staff' && <StaffOverview />}
+      {isStaff && tab === 'staff' && <StaffOverview />}
       {tab === 'my' && (
         playerId ? (
           <MyFavours playerId={playerId} />

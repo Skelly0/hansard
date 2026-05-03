@@ -32,10 +32,9 @@
 
 @layer components {
   .card {
-    @apply bg-card border border-border-subtle rounded-card;
+    @apply bg-card border border-border-subtle rounded-card transition-colors duration-150 ease-out;
     border-left-width: 3px;
     padding: 16px 20px;
-    transition: border-color 150ms ease;
   }
   .card:hover {
     @apply border-border;
@@ -92,4 +91,38 @@
 .page-enter-active {
   opacity: 1;
   transition: opacity 120ms ease;
+}
+
+/* === Login parchment === */
+.bg-parchment {
+  background: linear-gradient(180deg, #FAF9F5 0%, #F5E6DF 100%);
+}
+
+.parchment-frame {
+  position: relative;
+}
+
+.parchment-frame::before,
+.parchment-frame::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  border-radius: 4px;
+}
+
+.parchment-frame::before {
+  inset: 12px;
+  border: 1px solid #D4D1C7;
+}
+
+.parchment-frame::after {
+  inset: 18px;
+  border: 1px solid #E8E6DC;
+}
+
+/* === Hairline rule === */
+.rule {
+  border: 0;
+  border-top: 1px solid #E8E6DC;
+  margin: 1.5rem 0;
 }

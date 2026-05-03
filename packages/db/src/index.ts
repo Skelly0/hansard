@@ -10,3 +10,6 @@ export function createDb(connectionString: string) {
 export type Database = ReturnType<typeof createDb>;
 
 export * from './schema';
+
+import type { players } from './schema/players';
+export type Player = typeof players.$inferSelect;

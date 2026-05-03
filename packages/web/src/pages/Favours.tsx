@@ -125,7 +125,7 @@ function StaffOverview() {
         columns={columns}
         data={rows}
         rowKey={(row) => row.playerId}
-        emptyMessage="No favour balances recorded yet."
+        emptyMessage="No exchanges of favour on record."
       />
     </div>
   );

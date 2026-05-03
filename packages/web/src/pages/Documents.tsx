@@ -379,7 +379,7 @@ export function Documents() {
           columns={columns}
           data={documents}
           rowKey={(row) => row.id}
-          emptyMessage="No documents match the current filters."
+          emptyMessage="No documents in this collection."
         />
       </div>
 

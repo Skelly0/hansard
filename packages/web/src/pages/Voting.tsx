@@ -193,7 +193,7 @@ export function Voting() {
           columns={columns}
           data={elections}
           rowKey={(row) => row.id}
-          emptyMessage="No elections match the current filters."
+          emptyMessage="No votes are scheduled."
         />
       </div>
 

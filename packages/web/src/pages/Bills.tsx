@@ -184,7 +184,7 @@ export function Bills() {
           columns={columns}
           data={bills}
           rowKey={(row) => row.id}
-          emptyMessage="No bills match the current filters."
+          emptyMessage="The legislature has yet to introduce a bill in this filter."
         />
       </div>
 

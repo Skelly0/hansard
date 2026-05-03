@@ -18,6 +18,12 @@ TypeScript monorepo with pnpm workspaces:
 - **Warm serif aesthetic** — Crimson Pro for headings, Lora for body text, JetBrains Mono for data. No sans-serif body text. Warm cream backgrounds, terracotta accent. Parliamentary record feel, not SaaS.
 - **Voting algorithms** use a strategy pattern (`TallyStrategy` interface) for 8 methods: FPTP, ranked choice, STV, approval, proportional, yea/nay, two-round runoff, exhaustive ballot.
 - **Circular DB references** — some cross-table references (bills↔elections, players↔offices) are stored as plain uuid columns without FK constraints to avoid circular import issues. Linked at query time.
+- **Auth flow** — Discord OAuth via `/api/auth/discord` → callback looks up player by `discord_id`, **auto-creates an active player** if absent, aggregates `permissions` from current office holdings (`office_holders` joined to `offices.permissions`). `session.user.id` is `players.id` (UUID), NOT the Discord snowflake. `requireAuth` middleware refetches the player on every request and populates `request.player` for handlers.
+- **Frontend gating** — `useAuth()` (TanStack Query wrapper around `/api/auth/me` with `retry: false`) returns `{ user, isStaff, permissions, hasPermission, logout, isLoading }`. Three patterns: route-level `<RouteGuard requireStaff>`, section-level `{isStaff && ...}`, button-level `{hasPermission('x') && ...}`. Backend remains source of truth — frontend gating is for UX.
+
+## Testing
+
+`vitest` is set up in both `packages/web` (with `@testing-library/react` + `happy-dom`) and `packages/api`. Run `pnpm --filter @hansard/web test:run` or `pnpm --filter @hansard/api test:run`. Pure-logic units (auth hooks, color hash, trend formatter, service functions) get TDD. UI integration is verified manually.
 
 ## Commands
 

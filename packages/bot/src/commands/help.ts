@@ -39,24 +39,74 @@ const command: Command = {
       grouped.get(label)!.push(cmd);
     }
 
-    const fields: EmbedField[] = [...grouped.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([label, cmds]) => ({
-        name: label,
-        value: cmds
-          .sort((a, b) => a.data.name.localeCompare(b.data.name))
-          .map((c) => `\`/${c.data.name}\` — ${c.data.description}`)
-          .join('\n'),
-      }));
+    // Discord limits: 1024 chars per field value, 25 fields per embed,
+    // 6000 chars total per embed. Split categories into chunks, then pack
+    // chunks into embeds, sending overflow as followUp messages.
+    const FIELD_VALUE_LIMIT = 1024;
+    const EMBED_TOTAL_LIMIT = 5500; // safety margin under 6000
+    const FIELDS_PER_EMBED = 24;
 
-    const embed = createEmbed({
-      title: 'Hansard — Commands',
-      description: 'A ledger of every slash command, grouped by system. Type `/` in any channel to invoke.',
-      system: 'simulation',
-      fields,
-    });
+    const allFields: EmbedField[] = [];
+    for (const [label, cmds] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const lines = cmds
+        .sort((a, b) => a.data.name.localeCompare(b.data.name))
+        .map((c) => `\`/${c.data.name}\` — ${c.data.description}`);
 
-    await interaction.editReply({ embeds: [embed] });
+      const chunks: string[] = [];
+      let current = '';
+      for (const line of lines) {
+        const candidate = current ? `${current}\n${line}` : line;
+        if (candidate.length > FIELD_VALUE_LIMIT) {
+          if (current) chunks.push(current);
+          current = line.length > FIELD_VALUE_LIMIT ? line.slice(0, FIELD_VALUE_LIMIT - 1) + '…' : line;
+        } else {
+          current = candidate;
+        }
+      }
+      if (current) chunks.push(current);
+
+      chunks.forEach((value, i) => {
+        allFields.push({
+          name: chunks.length > 1 ? `${label} (${i + 1}/${chunks.length})` : label,
+          value,
+        });
+      });
+    }
+
+    const fieldGroups: EmbedField[][] = [];
+    let bucket: EmbedField[] = [];
+    let bucketChars = 0;
+    for (const field of allFields) {
+      const fieldChars = field.name.length + field.value.length;
+      if (bucket.length >= FIELDS_PER_EMBED || bucketChars + fieldChars > EMBED_TOTAL_LIMIT) {
+        if (bucket.length) fieldGroups.push(bucket);
+        bucket = [];
+        bucketChars = 0;
+      }
+      bucket.push(field);
+      bucketChars += fieldChars;
+    }
+    if (bucket.length) fieldGroups.push(bucket);
+
+    const totalPages = fieldGroups.length;
+    for (let i = 0; i < totalPages; i++) {
+      const isFirst = i === 0;
+      const pageSuffix = totalPages > 1 ? ` (${i + 1}/${totalPages})` : '';
+      const embed = createEmbed({
+        title: `Hansard — Commands${pageSuffix}`,
+        description: isFirst
+          ? 'A ledger of every slash command, grouped by system. Type `/` in any channel to invoke.'
+          : undefined,
+        system: 'simulation',
+        fields: fieldGroups[i],
+      });
+
+      if (isFirst) {
+        await interaction.editReply({ embeds: [embed] });
+      } else {
+        await interaction.followUp({ embeds: [embed], ephemeral: true });
+      }
+    }
   },
 };
 

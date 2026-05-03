@@ -22,7 +22,7 @@ export function colorForId(id: string): string {
 interface PlayerAvatarProps {
   player: {
     id: string;
-    characterName: string | null;
+    characterName?: string | null;
     discordUsername: string;
   };
   size?: 'sm' | 'md';

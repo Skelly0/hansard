@@ -4,6 +4,7 @@ import { usePlayers } from '../api/hooks/usePlayers';
 import { Tag } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { Skeleton, PageSkeleton } from '../components/shared/SkeletonLoader';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import type { Player } from '../api/hooks/usePlayers';
 
 /** Health status to dot colour mapping */
@@ -15,29 +16,6 @@ function healthDotClass(status: string): string {
     critical: 'bg-[var(--health-critical)]',
   };
   return map[status] || map.healthy;
-}
-
-/** Serif initials fallback for players without a portrait */
-function InitialsCircle({ name, size = 64 }: { name: string; size?: number }) {
-  const initials = name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('');
-
-  return (
-    <div
-      className="rounded-full bg-inset border border-border-subtle flex items-center justify-center flex-shrink-0"
-      style={{ width: size, height: size }}
-    >
-      <span
-        className="font-display font-semibold text-text-tertiary select-none"
-        style={{ fontSize: size * 0.38 }}
-      >
-        {initials}
-      </span>
-    </div>
-  );
 }
 
 /** Skeleton for a single player card while loading */
@@ -221,17 +199,7 @@ function PlayerCard({ player }: { player: Player }) {
       >
         <div className="flex items-start gap-3">
           {/* Portrait */}
-          {player.characterPortraitUrl ? (
-            <img
-              src={player.characterPortraitUrl}
-              alt={displayName}
-              className={`w-16 h-16 rounded-full object-cover flex-shrink-0 border border-border-subtle ${
-                isDeceased ? 'grayscale' : ''
-              }`}
-            />
-          ) : (
-            <InitialsCircle name={displayName} size={64} />
-          )}
+          <PlayerAvatar player={player} size="sm" />
 
           {/* Info */}
           <div className="flex-1 min-w-0">

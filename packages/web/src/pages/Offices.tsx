@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { useOffices } from '../api/hooks/useOffices';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 
 const tierOrder = ['head_of_state', 'head_of_government', 'cabinet', 'legislature', 'regional'];
 const tierLabel: Record<string, string> = {
@@ -83,19 +84,10 @@ export function Offices() {
                       <div className="space-y-2 mb-3">
                         {holders.map((holder) => (
                           <div key={holder.id} className="flex items-center gap-2">
-                            {holder.player?.characterPortraitUrl ? (
-                              <img
-                                src={holder.player.characterPortraitUrl}
-                                alt=""
-                                className="w-8 h-8 rounded-full object-cover border border-border-subtle"
-                              />
-                            ) : (
-                              <div className="w-8 h-8 rounded-full bg-inset border border-border-subtle flex items-center justify-center">
-                                <span className="font-display text-xs text-text-tertiary font-semibold">
-                                  {(holder.player?.characterName || '?')[0]}
-                                </span>
-                              </div>
-                            )}
+                            <PlayerAvatar
+                              player={holder.player ?? { id: holder.playerId, characterName: null, discordUsername: '?' }}
+                              size="md"
+                            />
                             <div>
                               <Link
                                 to="/players/$id"

@@ -32,10 +32,9 @@
 
 @layer components {
   .card {
-    @apply bg-card border border-border-subtle rounded-card;
+    @apply bg-card border border-border-subtle rounded-card transition-colors duration-150 ease-out;
     border-left-width: 3px;
     padding: 16px 20px;
-    transition: border-color 150ms ease;
   }
   .card:hover {
     @apply border-border;

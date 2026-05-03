@@ -6,6 +6,7 @@ import { Tag } from '../components/shared/Tag';
 import { MetricCard } from '../components/shared/MetricCard';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { ModActionModal } from '../components/shared/ModActionModal';
 
 // ---- Type helpers ----
 
@@ -63,31 +64,6 @@ function formatExpiry(iso?: string): string {
   const now = new Date();
   if (d < now) return 'Expired';
   return formatDate(iso);
-}
-
-// ---- Quick Action Modal Stubs ----
-
-interface ModalStubProps {
-  title: string;
-  onClose: () => void;
-}
-
-function ModalStub({ title, onClose }: ModalStubProps) {
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30">
-      <div className="bg-card border border-border-subtle rounded-card p-6 shadow-modal w-full max-w-md">
-        <h2 className="text-heading-1 mb-4">{title}</h2>
-        <p className="text-body text-text-secondary mb-6">
-          This action form is under construction.
-        </p>
-        <div className="flex justify-end">
-          <button onClick={onClose} className="btn-secondary">
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 // ---- Main Page ----
@@ -338,10 +314,12 @@ export function Moderation() {
         className="mt-6 justify-center flex"
       />
 
-      {/* Modal stubs */}
-      {modal === 'warn' && <ModalStub title="Issue Warning" onClose={() => setModal(null)} />}
-      {modal === 'mute' && <ModalStub title="Mute Player" onClose={() => setModal(null)} />}
-      {modal === 'suspend' && <ModalStub title="Suspend Player" onClose={() => setModal(null)} />}
+      {modal && (
+        <ModActionModal
+          type={modal}
+          onClose={() => setModal(null)}
+        />
+      )}
     </div>
   );
 }

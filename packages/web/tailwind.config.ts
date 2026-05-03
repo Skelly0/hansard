@@ -68,6 +68,7 @@ export default {
       },
       boxShadow: {
         modal: '0 4px 12px rgba(20, 20, 19, 0.08)',
+        'modal-warm': '0 8px 32px rgba(120, 90, 60, 0.18)',
       },
     },
   },

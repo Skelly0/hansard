@@ -3,7 +3,7 @@ import {
   PermissionFlagsBits,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, ne } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { modActions, modNotes, players, playerEventLog } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
@@ -455,6 +455,193 @@ async function handleUnsuspend(interaction: ChatInputCommandInteraction): Promis
   }
 }
 
+// ─── /mod appeal-list ──────────────────────────────────────────────────────
+
+async function handleAppealList(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  const pending = await db
+    .select()
+    .from(modActions)
+    .where(eq(modActions.appealStatus, 'pending'))
+    .orderBy(desc(modActions.updatedAt))
+    .limit(25);
+
+  if (pending.length === 0) {
+    await interaction.editReply({
+      embeds: [createEmbed({
+        title: 'Pending Appeals',
+        description: '*No pending appeals.*',
+        system: 'moderation',
+      })],
+    });
+    return;
+  }
+
+  const lines: string[] = [];
+  for (const a of pending) {
+    const [target] = await db
+      .select({ characterName: players.characterName, discordId: players.discordId })
+      .from(players)
+      .where(eq(players.id, a.targetPlayerId))
+      .limit(1);
+    const name = target?.characterName ?? (target?.discordId ? `<@${target.discordId}>` : 'unknown');
+    const since = `<t:${Math.floor(a.updatedAt.getTime() / 1000)}:R>`;
+    lines.push(
+      `\`${a.id.slice(0, 8)}\` — **${name}** — \`${formatType(a.type)}\` — ${since}\n> Reason: ${truncate(a.reason, 80)}\n> Appeal: ${truncate(a.appealReason ?? '*(no appeal text)*', 100)}`,
+    );
+  }
+
+  const embed = createEmbed({
+    title: `Pending Appeals (${pending.length})`,
+    description: lines.join('\n\n'),
+    system: 'moderation',
+    fields: [
+      {
+        name: 'Review',
+        value: 'Use `/mod appeal-review action-id:<full-id> decision:<accept|deny> reason:<...>`',
+      },
+    ],
+  });
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+// ─── /mod appeal-review ────────────────────────────────────────────────────
+
+async function handleAppealReview(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  const actionId = interaction.options.getString('action-id', true).trim();
+  const decision = interaction.options.getString('decision', true);
+  const reviewReason = interaction.options.getString('reason', true);
+
+  if (decision !== 'accept' && decision !== 'deny') {
+    await interaction.editReply({ embeds: [errorEmbed('Decision must be `accept` or `deny`.')] });
+    return;
+  }
+
+  const reviewerPlayer = await lookupModerator(interaction.user.id);
+  if (!reviewerPlayer) {
+    await interaction.editReply({ embeds: [errorEmbed('You are not registered as a player.')] });
+    return;
+  }
+
+  const [action] = await db
+    .select()
+    .from(modActions)
+    .where(eq(modActions.id, actionId))
+    .limit(1);
+
+  if (!action) {
+    await interaction.editReply({ embeds: [errorEmbed(`Mod action \`${actionId}\` not found.`)] });
+    return;
+  }
+
+  if (action.appealStatus !== 'pending') {
+    await interaction.editReply({
+      embeds: [errorEmbed(`This action's appeal is not pending (current: \`${action.appealStatus ?? 'none'}\`).`)],
+    });
+    return;
+  }
+
+  const newStatus: 'accepted' | 'denied' = decision === 'accept' ? 'accepted' : 'denied';
+  const accepted = newStatus === 'accepted';
+
+  const internalNote = [
+    action.internalNotes ?? '',
+    `[${new Date().toISOString()}] Appeal ${newStatus} by ${interaction.user.username}: ${reviewReason}`,
+  ].filter(Boolean).join('\n');
+
+  await db
+    .update(modActions)
+    .set({
+      appealStatus: newStatus,
+      appealReviewedById: reviewerPlayer.id,
+      internalNotes: internalNote,
+      isActive: accepted ? false : action.isActive,
+      updatedAt: new Date(),
+    })
+    .where(eq(modActions.id, action.id));
+
+  // If accepted, lift the suspension — but only if no OTHER active suspension is in force.
+  if (accepted && action.type === 'temporary_suspension') {
+    const [otherSuspension] = await db
+      .select({ id: modActions.id })
+      .from(modActions)
+      .where(
+        and(
+          eq(modActions.targetPlayerId, action.targetPlayerId),
+          eq(modActions.type, 'temporary_suspension'),
+          eq(modActions.isActive, true),
+          ne(modActions.id, action.id),
+        ),
+      )
+      .limit(1);
+
+    if (!otherSuspension) {
+      await db
+        .update(players)
+        .set({ isActive: true })
+        .where(eq(players.id, action.targetPlayerId));
+    }
+  }
+
+  await db.insert(playerEventLog).values({
+    playerId: action.targetPlayerId,
+    eventType: accepted ? 'unsuspension' : 'suspension',
+    description: `Appeal ${newStatus} for ${formatType(action.type)}: ${reviewReason}`,
+    newValue: {
+      modActionId: action.id,
+      decision: newStatus,
+      reviewedById: reviewerPlayer.id,
+      reviewReason,
+    },
+    triggeredById: reviewerPlayer.id,
+  });
+
+  const [target] = await db
+    .select({ characterName: players.characterName, discordId: players.discordId })
+    .from(players)
+    .where(eq(players.id, action.targetPlayerId))
+    .limit(1);
+  const targetName = target?.characterName ?? (target?.discordId ? `<@${target.discordId}>` : 'unknown');
+
+  const embed = createEmbed({
+    title: `Appeal ${accepted ? 'Accepted' : 'Denied'}`,
+    system: 'moderation',
+    fields: [
+      { name: 'Action', value: `\`${formatType(action.type)}\` (\`${action.id}\`)`, inline: true },
+      { name: 'Player', value: targetName, inline: true },
+      { name: 'Reviewer', value: interaction.user.toString(), inline: true },
+      { name: 'Decision', value: `\`${newStatus}\``, inline: true },
+      { name: 'Reason', value: `> ${reviewReason}` },
+      ...(accepted ? [{ name: 'Effect', value: 'Action expired; suspensions lifted.' }] : []),
+    ],
+  });
+
+  await interaction.editReply({ embeds: [embed] });
+
+  // DM the target user about the decision
+  if (target?.discordId) {
+    try {
+      const user = await interaction.client.users.fetch(target.discordId);
+      const dm = createEmbed({
+        title: `Your appeal has been ${newStatus}`,
+        description: [
+          `**Action:** \`${formatType(action.type)}\``,
+          `**Reviewer note:** ${reviewReason}`,
+          accepted ? '\nThe action has been lifted.' : '\nThe action remains in effect.',
+        ].join('\n'),
+        system: 'moderation',
+      });
+      await user.send({ embeds: [dm] });
+    } catch {
+      // DMs disabled
+    }
+  }
+}
+
 // ─── Command Definition ─────────────────────────────────────────────────────
 
 const command: Command = {
@@ -513,6 +700,28 @@ const command: Command = {
         .addUserOption((opt) =>
           opt.setName('user').setDescription('The user to unsuspend').setRequired(true),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('appeal-list')
+        .setDescription('List pending appeals'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('appeal-review')
+        .setDescription('Approve or deny a pending appeal')
+        .addStringOption((opt) =>
+          opt.setName('action-id').setDescription('The mod action UUID to review').setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName('decision').setDescription('Decision').setRequired(true).addChoices(
+            { name: 'accept', value: 'accept' },
+            { name: 'deny', value: 'deny' },
+          ),
+        )
+        .addStringOption((opt) =>
+          opt.setName('reason').setDescription('Reviewer note explaining the decision').setRequired(true).setMaxLength(1000),
+        ),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -544,6 +753,10 @@ const command: Command = {
         return handleSuspend(interaction);
       case 'unsuspend':
         return handleUnsuspend(interaction);
+      case 'appeal-list':
+        return handleAppealList(interaction);
+      case 'appeal-review':
+        return handleAppealReview(interaction);
       default:
         await interaction.reply({ embeds: [errorEmbed(`Unknown subcommand: ${subcommand}`)], ephemeral: true });
     }

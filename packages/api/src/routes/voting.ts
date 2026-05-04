@@ -229,6 +229,37 @@ export default async function votingRoutes(fastify: FastifyInstance) {
   );
 
   // ------------------------------------------------------------------
+  // WITHDRAW / remove candidate (creator or staff)
+  // ------------------------------------------------------------------
+  fastify.delete(
+    '/api/elections/:id/candidates/:playerId',
+    { preHandler: [requireAuth] },
+    async (request, reply) => {
+      const service = getService();
+      const user = request.session.user!;
+      const { id, playerId } = request.params as { id: string; playerId: string };
+
+      const election = await service.getElection(id);
+      if (!election) {
+        return reply.status(404).send({ error: 'Election not found' });
+      }
+
+      // The candidate themselves, the election creator, or staff can withdraw
+      const isSelf = user.id === playerId;
+      const isOwner = election.createdById === user.id;
+      if (!isSelf && !isOwner && !user.isStaff) {
+        return reply.status(403).send({ error: 'Not allowed to withdraw this candidate' });
+      }
+
+      const updated = await service.withdrawCandidate(id, playerId);
+      if (!updated) {
+        return reply.status(404).send({ error: 'Candidate not found' });
+      }
+      return updated;
+    },
+  );
+
+  // ------------------------------------------------------------------
   // CAST ballot
   // ------------------------------------------------------------------
   fastify.post(

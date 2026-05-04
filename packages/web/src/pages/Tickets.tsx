@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useTickets, useTicketCategories } from '../api/hooks/useTickets';
+import { useTickets, useTicketCategories, useTicketMetrics } from '../api/hooks/useTickets';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { MetricCard } from '../components/shared/MetricCard';
 import type { Ticket } from '../api/hooks/useTickets';
 
 const STATUSES = ['all', 'open', 'in_progress', 'waiting', 'resolved', 'closed'];
@@ -17,7 +18,10 @@ const priorityLabel: Record<string, string> = {
   urgent: 'Urgent',
 };
 
+type TabKey = 'list' | 'metrics';
+
 export function Tickets() {
+  const [tab, setTab] = useState<TabKey>('list');
   const [status, setStatus] = useState('all');
   const [category, setCategory] = useState('all');
   const [priority, setPriority] = useState('all');
@@ -133,6 +137,27 @@ export function Tickets() {
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 mb-6 border-b border-border-subtle">
+        <button
+          onClick={() => setTab('list')}
+          className={`px-4 py-2.5 text-body-sm font-medium relative transition-colors duration-150 ${tab === 'list' ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}`}
+        >
+          All Tickets
+          {tab === 'list' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-tickets" />}
+        </button>
+        <button
+          onClick={() => setTab('metrics')}
+          className={`px-4 py-2.5 text-body-sm font-medium relative transition-colors duration-150 ${tab === 'metrics' ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}`}
+        >
+          Metrics
+          {tab === 'metrics' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-tickets" />}
+        </button>
+      </div>
+
+      {tab === 'metrics' && <TicketMetricsView />}
+      {tab === 'list' && <>
+
       {/* Filters */}
       <div className="flex flex-wrap gap-3 mb-6">
         {/* Status filter */}
@@ -196,6 +221,87 @@ export function Tickets() {
         onPageChange={setPage}
         className="mt-6 justify-center flex"
       />
+      </>}
+    </div>
+  );
+}
+
+function formatDuration(ms: number | null | undefined): string {
+  if (ms == null) return '—';
+  const hours = ms / (1000 * 60 * 60);
+  if (hours < 1) return `${Math.round(ms / (1000 * 60))} min`;
+  if (hours < 48) return `${hours.toFixed(1)} h`;
+  return `${(hours / 24).toFixed(1)} d`;
+}
+
+function TicketMetricsView() {
+  const { data: metrics, isLoading } = useTicketMetrics();
+
+  if (isLoading) return <PageSkeleton />;
+  if (!metrics) {
+    return (
+      <div className="card border-l-accent-tickets">
+        <p className="text-body text-text-tertiary italic">No metrics available.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <MetricCard
+          label="Open"
+          value={metrics.openCount}
+          color="text-accent-tickets"
+          borderColor="border-l-accent-tickets"
+        />
+        <MetricCard
+          label="In Progress"
+          value={(metrics as any).inProgressCount ?? 0}
+          color="text-status-pending"
+          borderColor="border-l-status-pending"
+        />
+        <MetricCard
+          label="Resolved (24h)"
+          value={(metrics as any).resolvedToday ?? metrics.resolvedThisWeek ?? 0}
+          color="text-status-passed"
+          borderColor="border-l-status-passed"
+        />
+        <MetricCard
+          label="Avg First Response"
+          value={formatDuration(metrics.avgResponseTimeMs)}
+          color="text-text-primary"
+          borderColor="border-l-border-subtle"
+        />
+      </div>
+
+      {metrics.byCategory && metrics.byCategory.length > 0 && (
+        <div>
+          <h2 className="text-heading-2 text-text-secondary mb-3">By Category</h2>
+          <div className="card border-l-accent-tickets space-y-2">
+            {metrics.byCategory.map((row) => (
+              <div key={row.categoryId} className="flex items-center justify-between py-1">
+                <span className="text-body-sm text-text-primary">{row.categoryName}</span>
+                <span className="font-mono text-sm text-text-secondary">{row.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {metrics.byPriority && Object.keys(metrics.byPriority).length > 0 && (
+        <div>
+          <h2 className="text-heading-2 text-text-secondary mb-3">By Priority</h2>
+          <div className="card border-l-accent-tickets space-y-2">
+            {Object.entries(metrics.byPriority).map(([prio, count]) => (
+              <div key={prio} className="flex items-center justify-between py-1">
+                <span className="text-body-sm text-text-primary capitalize">{prio}</span>
+                <span className="font-mono text-sm text-text-secondary">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

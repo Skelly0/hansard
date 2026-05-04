@@ -41,6 +41,10 @@ docker compose up -d  # Start PostgreSQL + all services
 
 Node.js 20+, TypeScript, pnpm workspaces, PostgreSQL 16, Drizzle ORM, discord.js v14, Fastify v5, React 18, Vite, TanStack Router + Query, Tailwind CSS, Docker Compose.
 
+## Bot Command Surface (recent additions)
+
+Document admin (`/document-create`, `/document-edit`, `/document-restore`), bulk favour grants (`/favour-grant-bulk` filtered by party or office), global event timeline (`/sim-events`), moderation appeal review (`/mod appeal-list`, `/mod appeal-review`), and staff player administration (`/player-admin character-create`, `/player-admin change-party`).
+
 ## Full Spec
 
 See `dps-scaffold.md` for the complete architecture document with all schemas, routes, commands, and design guidelines.

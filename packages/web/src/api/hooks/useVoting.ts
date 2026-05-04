@@ -165,8 +165,48 @@ export function useCastBallot() {
 export function useRegisterCandidate() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ electionId, statement }: { electionId: string; statement?: string }) =>
-      api.post(`/elections/${electionId}/candidates`, { statement }),
+    mutationFn: ({ electionId, statement, playerId, partyId }: { electionId: string; statement?: string; playerId?: string; partyId?: string }) =>
+      api.post(`/elections/${electionId}/candidates`, { statement, playerId, partyId }),
+    onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['elections', vars.electionId] }); },
+  });
+}
+
+export function useWithdrawCandidate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ electionId, playerId }: { electionId: string; playerId: string }) =>
+      api.delete(`/elections/${electionId}/candidates/${playerId}`),
+    onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['elections', vars.electionId] }); },
+  });
+}
+
+export function useCertifyElection() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/elections/${id}/certify`),
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ['elections'] });
+      qc.invalidateQueries({ queryKey: ['elections', id] });
+    },
+  });
+}
+
+export function useCreateRunoff() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<Election>(`/elections/${id}/create-runoff`),
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ['elections'] });
+      qc.invalidateQueries({ queryKey: ['elections', id] });
+    },
+  });
+}
+
+export function useNpcConfirm() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ electionId, ...body }: { electionId: string; yea: number; nay: number; abstain: number; notes?: string }) =>
+      api.post(`/elections/${electionId}/npc-confirm`, body),
     onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['elections', vars.electionId] }); },
   });
 }

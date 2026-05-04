@@ -50,6 +50,26 @@ export function useSimulationClock() {
   });
 }
 
+export interface SimEvent {
+  id: string;
+  playerId: string;
+  eventType: string;
+  description: string;
+  simTick?: number;
+  simDate?: string;
+  isAutomatic: boolean;
+  createdAt: string;
+  characterName?: string | null;
+  discordUsername?: string | null;
+}
+
+export function useSimEvents(limit = 50) {
+  return useQuery({
+    queryKey: ['simulation', 'events', limit],
+    queryFn: () => api.get<SimEvent[]>(`/simulation/events?limit=${limit}`),
+  });
+}
+
 export function useTimeAdvanceHistory() {
   return useQuery({
     queryKey: ['simulation', 'history'],

@@ -78,6 +78,7 @@ interface TicketFilters {
   assignee?: string;
   priority?: string;
   tags?: string[];
+  search?: string;
   page?: number;
   limit?: number;
 }
@@ -91,6 +92,7 @@ export function useTickets(filters?: TicketFilters) {
   if (filters?.assignee) params.set('assignee', filters.assignee);
   if (filters?.priority) params.set('priority', filters.priority);
   if (filters?.tags?.length) params.set('tags', filters.tags.join(','));
+  if (filters?.search) params.set('search', filters.search);
   if (filters?.page) params.set('page', String(filters.page));
   if (filters?.limit) params.set('limit', String(filters.limit));
   const qs = params.toString();
@@ -162,6 +164,30 @@ export function useAssignTicket() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['tickets'] });
       qc.invalidateQueries({ queryKey: ['tickets', vars.ticketId] });
+    },
+  });
+}
+
+export function useLinkTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ ticketId, otherTicketId }: { ticketId: string; otherTicketId: string }) =>
+      api.post(`/tickets/${ticketId}/link`, { otherTicketId }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['tickets', vars.ticketId] });
+      qc.invalidateQueries({ queryKey: ['tickets', vars.otherTicketId] });
+    },
+  });
+}
+
+export function useUnlinkTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ ticketId, otherTicketId }: { ticketId: string; otherTicketId: string }) =>
+      api.delete(`/tickets/${ticketId}/link/${otherTicketId}`),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['tickets', vars.ticketId] });
+      qc.invalidateQueries({ queryKey: ['tickets', vars.otherTicketId] });
     },
   });
 }

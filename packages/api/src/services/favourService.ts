@@ -57,14 +57,20 @@ export interface TransactionFilters {
 // ============================================================
 
 /**
- * List all active favour categories.
+ * List favour categories. By default only active ones; pass
+ * `{ includeInactive: true }` to surface deactivated categories
+ * (used by the staff "Manage categories" admin UI).
  */
-export async function getCategories(db: Database): Promise<FavourCategory[]> {
-  const rows = await db
-    .select()
-    .from(favourCategories)
-    .where(eq(favourCategories.isActive, true))
-    .orderBy(asc(favourCategories.sortOrder), asc(favourCategories.name));
+export async function getCategories(
+  db: Database,
+  options: { includeInactive?: boolean } = {},
+): Promise<FavourCategory[]> {
+  const base = db.select().from(favourCategories);
+  const rows = options.includeInactive
+    ? await base.orderBy(asc(favourCategories.sortOrder), asc(favourCategories.name))
+    : await base
+        .where(eq(favourCategories.isActive, true))
+        .orderBy(asc(favourCategories.sortOrder), asc(favourCategories.name));
 
   return rows.map(toCategory);
 }

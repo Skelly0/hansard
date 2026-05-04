@@ -1,10 +1,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
   useFavourCategories,
+  useAllFavourCategories,
   useAllFavourBalances,
   useFavourBalances,
   useFavourHistory,
-  type FavourBalance,
+  useCreateFavourCategory,
+  useUpdateFavourCategory,
+  useDeleteFavourCategory,
   type FavourCategory,
   type FavourTransaction,
 } from '../api/hooks/useFavours';
@@ -12,6 +15,7 @@ import { useAuth } from '../api/hooks/useAuth';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { Modal, ConfirmModal } from '../components/shared/Modal';
 
 // ---- Types for the matrix view ----
 
@@ -291,17 +295,344 @@ function TransactionList({
   );
 }
 
+// ---- Manage categories (staff) ----
+
+interface CategoryFormState {
+  name: string;
+  shortName: string;
+  description: string;
+  emoji: string;
+  colour: string;
+  spendableOn: string;
+  sortOrder: number;
+  isActive: boolean;
+}
+
+const EMPTY_FORM: CategoryFormState = {
+  name: '',
+  shortName: '',
+  description: '',
+  emoji: '',
+  colour: '',
+  spendableOn: '',
+  sortOrder: 0,
+  isActive: true,
+};
+
+function ManageCategories() {
+  const { data: categories, isLoading } = useAllFavourCategories();
+  const create = useCreateFavourCategory();
+  const update = useUpdateFavourCategory();
+  const remove = useDeleteFavourCategory();
+
+  const [editing, setEditing] = useState<FavourCategory | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<FavourCategory | null>(null);
+  const [form, setForm] = useState<CategoryFormState>(EMPTY_FORM);
+  const [error, setError] = useState<string | null>(null);
+
+  const openNew = () => {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    setError(null);
+    setCreating(true);
+  };
+
+  const openEdit = (cat: FavourCategory) => {
+    setCreating(false);
+    setEditing(cat);
+    setForm({
+      name: cat.name,
+      shortName: cat.shortName ?? '',
+      description: cat.description ?? '',
+      emoji: cat.emoji ?? '',
+      colour: cat.colour ?? '',
+      spendableOn: (cat.spendableOn ?? []).join(', '),
+      sortOrder: cat.sortOrder,
+      isActive: cat.isActive,
+    });
+    setError(null);
+  };
+
+  const closeForm = () => {
+    setCreating(false);
+    setEditing(null);
+    setError(null);
+  };
+
+  const handleSubmit = async () => {
+    setError(null);
+    if (!form.name.trim()) {
+      setError('Name is required.');
+      return;
+    }
+    const spendableOn = form.spendableOn
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    try {
+      if (editing) {
+        await update.mutateAsync({
+          id: editing.id,
+          name: form.name.trim(),
+          shortName: form.shortName.trim() || null,
+          description: form.description.trim() || null,
+          emoji: form.emoji.trim() || null,
+          colour: form.colour.trim() || null,
+          spendableOn: spendableOn.length ? spendableOn : null,
+          sortOrder: form.sortOrder,
+          isActive: form.isActive,
+        });
+      } else {
+        await create.mutateAsync({
+          name: form.name.trim(),
+          shortName: form.shortName.trim() || undefined,
+          description: form.description.trim() || undefined,
+          emoji: form.emoji.trim() || undefined,
+          colour: form.colour.trim() || undefined,
+          spendableOn: spendableOn.length ? spendableOn : undefined,
+          sortOrder: form.sortOrder,
+        });
+      }
+      closeForm();
+    } catch (e: any) {
+      setError(e?.message ?? 'Save failed.');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirmDelete) return;
+    try {
+      await remove.mutateAsync(confirmDelete.id);
+      setConfirmDelete(null);
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not deactivate category.');
+    }
+  };
+
+  if (isLoading) return <PageSkeleton />;
+
+  const sorted = [...(categories ?? [])].sort((a, b) => {
+    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+    return a.sortOrder - b.sortOrder;
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-body-sm text-text-tertiary">
+          {sorted.length} categor{sorted.length === 1 ? 'y' : 'ies'} on record
+        </p>
+        <button onClick={openNew} className="btn-primary text-sm">
+          New Category
+        </button>
+      </div>
+
+      <div className="card border-l-accent-favours">
+        {sorted.length === 0 ? (
+          <p className="text-body text-text-tertiary italic">
+            No categories defined yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {sorted.map((cat) => (
+              <div
+                key={cat.id}
+                className={`flex items-center gap-3 py-2 px-2 -mx-2 rounded transition-colors duration-150 hover:bg-hover ${cat.isActive ? '' : 'opacity-60'}`}
+              >
+                <span className="text-lg w-6 text-center">{cat.emoji || '·'}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display font-medium text-text-primary truncate">
+                      {cat.name}
+                    </span>
+                    {cat.shortName && (
+                      <span className="font-mono text-xs text-text-tertiary">
+                        {cat.shortName}
+                      </span>
+                    )}
+                    {!cat.isActive && <Tag color="closed">Inactive</Tag>}
+                  </div>
+                  {cat.description && (
+                    <p className="text-body-sm text-text-secondary truncate italic">
+                      {cat.description}
+                    </p>
+                  )}
+                </div>
+                <span className="font-mono text-xs text-text-tertiary w-10 text-right">
+                  #{cat.sortOrder}
+                </span>
+                <button
+                  onClick={() => openEdit(cat)}
+                  className="text-body-sm text-accent-primary hover:underline"
+                >
+                  Edit
+                </button>
+                {cat.isActive && (
+                  <button
+                    onClick={() => setConfirmDelete(cat)}
+                    className="text-body-sm text-status-rejected hover:underline"
+                  >
+                    Deactivate
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <Modal
+        open={creating || !!editing}
+        onClose={closeForm}
+        title={editing ? `Edit ${editing.name}` : 'New Favour Category'}
+        railClass="bg-accent-favours"
+        maxWidth="max-w-lg"
+        footer={
+          <>
+            <button onClick={closeForm} className="btn-secondary">Cancel</button>
+            <button
+              onClick={handleSubmit}
+              disabled={create.isPending || update.isPending}
+              className="btn-primary disabled:opacity-50"
+            >
+              {(create.isPending || update.isPending) ? 'Saving…' : 'Save'}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <CategoryFormFields form={form} setForm={setForm} showActiveToggle={!!editing} />
+          {error && <p className="text-body-sm text-status-rejected">{error}</p>}
+        </div>
+      </Modal>
+
+      <ConfirmModal
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={handleDelete}
+        variant="danger"
+        title="Deactivate category?"
+        message={
+          <>
+            Deactivating <strong>{confirmDelete?.name}</strong> hides it from spend / grant flows.
+            Existing balances and transactions are preserved. You can reactivate it via Edit.
+          </>
+        }
+        confirmLabel="Deactivate"
+        pending={remove.isPending}
+      />
+    </div>
+  );
+}
+
+function CategoryFormFields({
+  form,
+  setForm,
+  showActiveToggle,
+}: {
+  form: CategoryFormState;
+  setForm: (f: CategoryFormState) => void;
+  showActiveToggle: boolean;
+}) {
+  const fieldClass = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-label-ui text-text-tertiary block mb-1">Name *</label>
+          <input
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            className={fieldClass}
+            autoFocus
+          />
+        </div>
+        <div>
+          <label className="text-label-ui text-text-tertiary block mb-1">Short name</label>
+          <input
+            value={form.shortName}
+            onChange={(e) => setForm({ ...form, shortName: e.target.value })}
+            className={fieldClass}
+          />
+        </div>
+      </div>
+      <div>
+        <label className="text-label-ui text-text-tertiary block mb-1">Description</label>
+        <textarea
+          value={form.description}
+          onChange={(e) => setForm({ ...form, description: e.target.value })}
+          rows={2}
+          className={`${fieldClass} resize-y`}
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className="text-label-ui text-text-tertiary block mb-1">Emoji</label>
+          <input
+            value={form.emoji}
+            onChange={(e) => setForm({ ...form, emoji: e.target.value })}
+            placeholder="🤝"
+            className={fieldClass}
+          />
+        </div>
+        <div>
+          <label className="text-label-ui text-text-tertiary block mb-1">Colour</label>
+          <input
+            value={form.colour}
+            onChange={(e) => setForm({ ...form, colour: e.target.value })}
+            placeholder="#C4873B"
+            className={`${fieldClass} font-mono`}
+          />
+        </div>
+        <div>
+          <label className="text-label-ui text-text-tertiary block mb-1">Sort order</label>
+          <input
+            type="number"
+            value={form.sortOrder}
+            onChange={(e) => setForm({ ...form, sortOrder: parseInt(e.target.value) || 0 })}
+            className={`${fieldClass} font-mono`}
+          />
+        </div>
+      </div>
+      <div>
+        <label className="text-label-ui text-text-tertiary block mb-1">
+          Spendable on <span className="italic normal-case text-text-tertiary">(comma-separated tags)</span>
+        </label>
+        <input
+          value={form.spendableOn}
+          onChange={(e) => setForm({ ...form, spendableOn: e.target.value })}
+          placeholder="bills, appointments, …"
+          className={fieldClass}
+        />
+      </div>
+      {showActiveToggle && (
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.isActive}
+            onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+            className="accent-accent-favours"
+          />
+          <span className="text-body-sm text-text-secondary">Active</span>
+        </label>
+      )}
+    </>
+  );
+}
+
 // ---- Main Page ----
 
-type TabKey = 'staff' | 'my';
+type TabKey = 'staff' | 'my' | 'categories';
 
 export function Favours() {
   const { user, isStaff } = useAuth();
   const [tab, setTab] = useState<TabKey>(isStaff ? 'staff' : 'my');
 
-  // Snap non-staff users away from the staff tab if their auth state changes.
+  // Snap non-staff users away from staff-only tabs if their auth state changes.
   useEffect(() => {
-    if (!isStaff && tab === 'staff') setTab('my');
+    if (!isStaff && (tab === 'staff' || tab === 'categories')) setTab('my');
   }, [isStaff, tab]);
 
   // Use the signed-in player's ID; empty disables the query for unauthed users.
@@ -328,9 +659,15 @@ export function Favours() {
         <TabButton active={tab === 'my'} onClick={() => setTab('my')}>
           My Favours
         </TabButton>
+        {isStaff && (
+          <TabButton active={tab === 'categories'} onClick={() => setTab('categories')}>
+            Manage Categories
+          </TabButton>
+        )}
       </div>
 
       {/* Content */}
+      {isStaff && tab === 'categories' && <ManageCategories />}
       {isStaff && tab === 'staff' && <StaffOverview />}
       {tab === 'my' && (
         playerId ? (

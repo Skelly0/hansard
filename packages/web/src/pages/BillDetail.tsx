@@ -1,13 +1,21 @@
 import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
-import { useBill, useBillVoters, useBillAmendments } from '../api/hooks/useBills';
+import {
+  useBill,
+  useBillVoters,
+  useBillAmendments,
+  useUpdateBillEffects,
+  useEnterNpcVote,
+} from '../api/hooks/useBills';
+import { useAuth } from '../api/hooks/useAuth';
 import { useDocumentDiff } from '../api/hooks/useDocuments';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { StatusTimeline } from '../components/shared/StatusTimeline';
 import { ResultsBars } from '../components/shared/ResultsBars';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { RedlineDiff, type DiffHunk } from '../components/shared/RedlineDiff';
-import type { BillVoter } from '../api/hooks/useBills';
+import { Modal } from '../components/shared/Modal';
+import type { BillVoter, BillDetail as BillDetailType } from '../api/hooks/useBills';
 
 /** The canonical bill lifecycle stages */
 const BILL_STAGES = [
@@ -38,10 +46,13 @@ function getStageIndex(status: string): number {
 
 export function BillDetail() {
   const { slug } = useParams({ strict: false }) as { slug: string };
+  const { isStaff } = useAuth();
   const { data: bill, isLoading } = useBill(slug);
   const { data: voters } = useBillVoters(slug);
   const [voteExpanded, setVoteExpanded] = useState(false);
   const [redlineOpen, setRedlineOpen] = useState(false);
+  const [effectsOpen, setEffectsOpen] = useState(false);
+  const [npcOpen, setNpcOpen] = useState(false);
 
   // Fetch child amendments (bills that amend this one)
   const { data: amendmentsData } = useBillAmendments(bill?.id);
@@ -405,7 +416,17 @@ export function BillDetail() {
           {/* NPC House Result */}
           {bill.npcVoteRequired && (
             <div>
-              <h3 className="text-heading-2 text-text-secondary mb-3">NPC House</h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-heading-2 text-text-secondary">NPC House</h3>
+                {isStaff && (
+                  <button
+                    onClick={() => setNpcOpen(true)}
+                    className="text-body-sm text-accent-primary hover:underline"
+                  >
+                    Record vote
+                  </button>
+                )}
+              </div>
               <div className="card border-l-accent-voting">
                 {bill.npcVote ? (
                   <>
@@ -437,9 +458,27 @@ export function BillDetail() {
           )}
 
           {/* Estimated Effects */}
-          {bill.estimatedEffects && (
+          {(bill.estimatedEffects || isStaff) && (
             <div>
-              <h3 className="text-heading-2 text-text-secondary mb-3">Estimated Effects</h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-heading-2 text-text-secondary">Estimated Effects</h3>
+                {isStaff && (
+                  <button
+                    onClick={() => setEffectsOpen(true)}
+                    className="text-body-sm text-accent-primary hover:underline"
+                  >
+                    {bill.estimatedEffects ? 'Edit' : 'Set'}
+                  </button>
+                )}
+              </div>
+              {!bill.estimatedEffects && isStaff && (
+                <div className="card border-l-accent-simulation">
+                  <p className="text-body-sm text-text-tertiary italic">
+                    No effects recorded yet.
+                  </p>
+                </div>
+              )}
+              {bill.estimatedEffects && (
               <div className="card border-l-accent-simulation space-y-3">
                 {bill.estimatedEffects.economy && (
                   <div>
@@ -477,6 +516,7 @@ export function BillDetail() {
                   </p>
                 )}
               </div>
+              )}
             </div>
           )}
 
@@ -493,6 +533,161 @@ export function BillDetail() {
           )}
         </div>
       </div>
+
+      {isStaff && (
+        <>
+          <EffectsModal open={effectsOpen} onClose={() => setEffectsOpen(false)} bill={bill} />
+          <NpcVoteModal open={npcOpen} onClose={() => setNpcOpen(false)} slug={bill.slug} />
+        </>
+      )}
     </div>
+  );
+}
+
+// ============================================================
+// Staff modals — amend effects + record NPC vote
+// ============================================================
+
+function EffectsModal({ open, onClose, bill }: { open: boolean; onClose: () => void; bill: BillDetailType }) {
+  const update = useUpdateBillEffects();
+  const e = bill.estimatedEffects ?? {};
+  const [econDesc, setEconDesc] = useState(e.economy?.description ?? '');
+  const [econSectors, setEconSectors] = useState((e.economy?.affectedSectors ?? []).join(', '));
+  const [econGdp, setEconGdp] = useState(e.economy?.estimatedGdpImpact ?? '');
+  const [popDesc, setPopDesc] = useState(e.popsim?.description ?? '');
+  const [popGroups, setPopGroups] = useState((e.popsim?.affectedGroups ?? []).join(', '));
+  const [popImpact, setPopImpact] = useState(e.popsim?.estimatedApprovalImpact ?? '');
+  const [notes, setNotes] = useState(e.notes ?? '');
+  const [error, setError] = useState<string | null>(null);
+
+  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+
+  const submit = async () => {
+    setError(null);
+    try {
+      const economy = econDesc.trim()
+        ? {
+            description: econDesc.trim(),
+            affectedSectors: econSectors.split(',').map((s) => s.trim()).filter(Boolean),
+            estimatedGdpImpact: econGdp.trim() || undefined,
+          }
+        : undefined;
+      const popsim = popDesc.trim()
+        ? {
+            description: popDesc.trim(),
+            affectedGroups: popGroups.split(',').map((s) => s.trim()).filter(Boolean),
+            estimatedApprovalImpact: popImpact.trim() || undefined,
+          }
+        : undefined;
+      await update.mutateAsync({ slug: bill.slug, economy, popsim, notes: notes.trim() || undefined });
+      onClose();
+    } catch (err: any) {
+      setError(err?.message ?? 'Save failed.');
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Estimated Effects"
+      railClass="bg-accent-simulation"
+      maxWidth="max-w-xl"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button onClick={submit} disabled={update.isPending} className="btn-primary disabled:opacity-50">
+            {update.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <fieldset className="space-y-2">
+          <legend className="text-label-ui text-text-tertiary">Economy</legend>
+          <textarea value={econDesc} onChange={(ev) => setEconDesc(ev.target.value)} rows={2} placeholder="Description" className={`${fc} resize-y`} />
+          <input value={econSectors} onChange={(ev) => setEconSectors(ev.target.value)} placeholder="Affected sectors (comma-separated)" className={fc} />
+          <input value={econGdp} onChange={(ev) => setEconGdp(ev.target.value)} placeholder="Estimated GDP impact" className={fc} />
+        </fieldset>
+        <fieldset className="space-y-2">
+          <legend className="text-label-ui text-text-tertiary">Population</legend>
+          <textarea value={popDesc} onChange={(ev) => setPopDesc(ev.target.value)} rows={2} placeholder="Description" className={`${fc} resize-y`} />
+          <input value={popGroups} onChange={(ev) => setPopGroups(ev.target.value)} placeholder="Affected groups (comma-separated)" className={fc} />
+          <input value={popImpact} onChange={(ev) => setPopImpact(ev.target.value)} placeholder="Estimated approval impact" className={fc} />
+        </fieldset>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Notes</span>
+          <textarea value={notes} onChange={(ev) => setNotes(ev.target.value)} rows={2} className={`${fc} resize-y`} />
+        </label>
+        {error && <p className="text-body-sm text-status-rejected">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+function NpcVoteModal({ open, onClose, slug }: { open: boolean; onClose: () => void; slug: string }) {
+  const enter = useEnterNpcVote();
+  const [yea, setYea] = useState(0);
+  const [nay, setNay] = useState(0);
+  const [abstain, setAbstain] = useState(0);
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setError(null);
+    if (yea + nay + abstain === 0) {
+      setError('Enter at least one tally.');
+      return;
+    }
+    try {
+      await enter.mutateAsync({ slug, yea, nay, abstain, notes: notes || undefined });
+      onClose();
+    } catch (err: any) {
+      setError(err?.message ?? 'Could not submit.');
+    }
+  };
+
+  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 font-mono text-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Record NPC House Vote"
+      railClass="bg-accent-voting"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button onClick={submit} disabled={enter.isPending} className="btn-primary disabled:opacity-50">
+            {enter.isPending ? 'Saving…' : 'Record'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-body-sm text-text-secondary">
+          Tally entered by staff for the NPC bloc. Yea &gt; Nay passes; otherwise rejected.
+        </p>
+        <div className="grid grid-cols-3 gap-3">
+          <label>
+            <span className="text-label-ui text-text-tertiary block mb-1">Yea</span>
+            <input type="number" min={0} value={yea} onChange={(ev) => setYea(parseInt(ev.target.value) || 0)} className={fc} />
+          </label>
+          <label>
+            <span className="text-label-ui text-text-tertiary block mb-1">Nay</span>
+            <input type="number" min={0} value={nay} onChange={(ev) => setNay(parseInt(ev.target.value) || 0)} className={fc} />
+          </label>
+          <label>
+            <span className="text-label-ui text-text-tertiary block mb-1">Abstain</span>
+            <input type="number" min={0} value={abstain} onChange={(ev) => setAbstain(parseInt(ev.target.value) || 0)} className={fc} />
+          </label>
+        </div>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Notes</span>
+          <textarea value={notes} onChange={(ev) => setNotes(ev.target.value)} rows={2} className={`${fc} font-body resize-y`} />
+        </label>
+        {error && <p className="text-body-sm text-status-rejected">{error}</p>}
+      </div>
+    </Modal>
   );
 }

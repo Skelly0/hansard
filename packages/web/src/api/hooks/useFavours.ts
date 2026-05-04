@@ -134,8 +134,42 @@ export function useRemoveFavours() {
 export function useCreateFavourCategory() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; shortName?: string; description?: string; emoji?: string; colour?: string; spendableOn?: string[] }) =>
+    mutationFn: (body: { name: string; shortName?: string; description?: string; emoji?: string; colour?: string; spendableOn?: string[]; sortOrder?: number }) =>
       api.post<FavourCategory>('/favours/categories', body),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['favour-categories'] }); },
+  });
+}
+
+/** Staff: list ALL categories including inactive ones. Falls back to active list (caller must filter). */
+export function useAllFavourCategories() {
+  return useQuery({
+    queryKey: ['favour-categories', 'all'],
+    queryFn: () => api.get<FavourCategory[]>('/favours/categories?includeInactive=1'),
+  });
+}
+
+export function useUpdateFavourCategory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: {
+      id: string;
+      name?: string;
+      shortName?: string | null;
+      description?: string | null;
+      emoji?: string | null;
+      colour?: string | null;
+      spendableOn?: string[] | null;
+      isActive?: boolean;
+      sortOrder?: number;
+    }) => api.patch<FavourCategory>(`/favours/categories/${id}`, body),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['favour-categories'] }); },
+  });
+}
+
+export function useDeleteFavourCategory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<FavourCategory>(`/favours/categories/${id}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['favour-categories'] }); },
   });
 }

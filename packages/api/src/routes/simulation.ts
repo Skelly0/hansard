@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
-import { simulationClock } from '@hansard/db';
+import { eq, desc } from 'drizzle-orm';
+import { simulationClock, playerEventLog, players } from '@hansard/db';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireStaff } from '../middleware/requireStaff.js';
 import * as simService from '../services/simulationService.js';
@@ -163,10 +163,13 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
     '/api/simulation/death',
     { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
-      const { playerId, cause } = request.body as {
+      const body = request.body as {
         playerId: string;
-        cause: string;
+        cause?: string;
+        causeOfDeath?: string;
       };
+      const playerId = body.playerId;
+      const cause = body.cause ?? body.causeOfDeath;
 
       if (!playerId || !cause) {
         return reply.status(400).send({ error: 'playerId and cause are required' });
@@ -184,6 +187,35 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
         const message = err instanceof Error ? err.message : 'Failed to kill character';
         return reply.status(400).send({ error: message });
       }
+    },
+  );
+
+  // ============================================================
+  // GET /api/simulation/events — recent sim events from playerEventLog
+  // ============================================================
+  fastify.get<{ Querystring: { limit?: string; eventType?: string } }>(
+    '/api/simulation/events',
+    { preHandler: [requireAuth] },
+    async (request) => {
+      const limit = Math.min(parseInt(request.query.limit ?? '50', 10) || 50, 200);
+      const rows = await fastify.db
+        .select({
+          id: playerEventLog.id,
+          playerId: playerEventLog.playerId,
+          eventType: playerEventLog.eventType,
+          description: playerEventLog.description,
+          simTick: playerEventLog.simTick,
+          simDate: playerEventLog.simDate,
+          isAutomatic: playerEventLog.isAutomatic,
+          createdAt: playerEventLog.createdAt,
+          characterName: players.characterName,
+          discordUsername: players.discordUsername,
+        })
+        .from(playerEventLog)
+        .leftJoin(players, eq(playerEventLog.playerId, players.id))
+        .orderBy(desc(playerEventLog.createdAt))
+        .limit(limit);
+      return rows;
     },
   );
 

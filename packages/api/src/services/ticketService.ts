@@ -402,6 +402,65 @@ export class TicketService {
   }
 
   // ----------------------------------------------------------
+  // linkTickets / unlinkTickets — symmetric pairing via jsonb array
+  // ----------------------------------------------------------
+
+  async linkTickets(ticketId: string, otherTicketId: string, actorId: string): Promise<Ticket | null> {
+    const [a] = await this.db.select().from(tickets).where(eq(tickets.id, ticketId)).limit(1);
+    if (!a) return null;
+    const [b] = await this.db.select().from(tickets).where(eq(tickets.id, otherTicketId)).limit(1);
+    if (!b) return null;
+
+    const aLinks = ((a.linkedTicketIds ?? []) as string[]);
+    const bLinks = ((b.linkedTicketIds ?? []) as string[]);
+
+    const newA = aLinks.includes(otherTicketId) ? aLinks : [...aLinks, otherTicketId];
+    const newB = bLinks.includes(ticketId) ? bLinks : [...bLinks, ticketId];
+
+    const now = new Date();
+    await this.db.update(tickets).set({ linkedTicketIds: newA, updatedAt: now }).where(eq(tickets.id, ticketId));
+    await this.db.update(tickets).set({ linkedTicketIds: newB, updatedAt: now }).where(eq(tickets.id, otherTicketId));
+
+    await this.db.insert(ticketAuditLog).values({
+      ticketId, actorId, action: 'linked',
+      newValue: { linkedTicketId: otherTicketId },
+    });
+    await this.db.insert(ticketAuditLog).values({
+      ticketId: otherTicketId, actorId, action: 'linked',
+      newValue: { linkedTicketId: ticketId },
+    });
+
+    const [updated] = await this.db.select().from(tickets).where(eq(tickets.id, ticketId)).limit(1);
+    return updated as unknown as Ticket;
+  }
+
+  async unlinkTickets(ticketId: string, otherTicketId: string, actorId: string): Promise<Ticket | null> {
+    const [a] = await this.db.select().from(tickets).where(eq(tickets.id, ticketId)).limit(1);
+    if (!a) return null;
+    const [b] = await this.db.select().from(tickets).where(eq(tickets.id, otherTicketId)).limit(1);
+    if (!b) return null;
+
+    const aLinks = ((a.linkedTicketIds ?? []) as string[]).filter((x) => x !== otherTicketId);
+    const bLinks = ((b.linkedTicketIds ?? []) as string[]).filter((x) => x !== ticketId);
+
+    const now = new Date();
+    await this.db.update(tickets).set({ linkedTicketIds: aLinks, updatedAt: now }).where(eq(tickets.id, ticketId));
+    await this.db.update(tickets).set({ linkedTicketIds: bLinks, updatedAt: now }).where(eq(tickets.id, otherTicketId));
+
+    await this.db.insert(ticketAuditLog).values({
+      ticketId, actorId, action: 'unlinked',
+      oldValue: { linkedTicketId: otherTicketId },
+    });
+    await this.db.insert(ticketAuditLog).values({
+      ticketId: otherTicketId, actorId, action: 'unlinked',
+      oldValue: { linkedTicketId: ticketId },
+    });
+
+    const [updated] = await this.db.select().from(tickets).where(eq(tickets.id, ticketId)).limit(1);
+    return updated as unknown as Ticket;
+  }
+
+  // ----------------------------------------------------------
   // getCategories
   // ----------------------------------------------------------
 

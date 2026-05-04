@@ -4,12 +4,20 @@ import {
   useTimeAdvanceHistory,
   useAdvancePreview,
   useAdvanceTime,
+  useAssignAilment,
+  useHealCharacter,
+  useKillCharacter,
+  useSimEvents,
   type TimeAdvanceEntry,
+  type SimEvent,
 } from '../api/hooks/useSimulation';
+import { useSearchPlayers, usePlayer } from '../api/hooks/usePlayers';
 import { useAuth } from '../api/hooks/useAuth';
 import { Tag } from '../components/shared/Tag';
 import { MetricCard } from '../components/shared/MetricCard';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { Modal } from '../components/shared/Modal';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 
 // ---- Helpers ----
 
@@ -393,9 +401,358 @@ export function Simulation() {
       {/* Staff controls */}
       {isStaff && <ControlsCard />}
 
+      {/* Ailment / kill controls */}
+      {isStaff && <PlayerHealthControls />}
+
       {/* History */}
-      <h2 className="text-heading-1 mb-4">Recent Advances</h2>
+      <h2 className="text-heading-1 mt-8 mb-4">Recent Advances</h2>
       <AdvanceHistoryLog />
+
+      {/* Sim event log */}
+      <h2 className="text-heading-1 mt-8 mb-4">Sim Event Log</h2>
+      <SimEventLog />
+    </div>
+  );
+}
+
+// ============================================================
+// Player health controls — ailments + kill (staff)
+// ============================================================
+
+function PlayerHealthControls() {
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<{ id: string; characterName: string | null; discordUsername: string } | null>(null);
+  const { data: searchResults } = useSearchPlayers(search);
+  const { data: dossier } = usePlayer(selected?.id);
+
+  const [ailmentOpen, setAilmentOpen] = useState(false);
+  const [killOpen, setKillOpen] = useState(false);
+
+  const heal = useHealCharacter();
+
+  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+
+  return (
+    <div className="card border-l-accent-simulation mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-heading-2">Character Health</h2>
+        <Tag color="moderation">staff</Tag>
+      </div>
+
+      {!selected ? (
+        <div>
+          <p className="text-body-sm text-text-secondary mb-2">
+            Find a character to assign or remove ailments, or — if the season truly demands — record a death.
+          </p>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search players…"
+            className={fc}
+          />
+          {searchResults?.data && searchResults.data.length > 0 && (
+            <div className="mt-2 border border-border-subtle rounded-card overflow-hidden max-h-60 overflow-y-auto">
+              {searchResults.data.map((p: any) => (
+                <button
+                  key={p.id}
+                  onClick={() => { setSelected({ id: p.id, characterName: p.characterName, discordUsername: p.discordUsername }); setSearch(''); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-hover text-left transition-colors duration-150"
+                >
+                  <PlayerAvatar player={p} size="sm" />
+                  <span className="text-body-sm">{p.characterName ?? p.discordUsername}</span>
+                  {!p.isAlive && <Tag color="deceased">deceased</Tag>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <PlayerAvatar player={selected} size="md" />
+            <div className="flex-1">
+              <p className="font-display font-medium text-text-primary">
+                {selected.characterName ?? selected.discordUsername}
+              </p>
+              {dossier && (
+                <p className="text-body-sm text-text-tertiary">
+                  Age {dossier.currentAge ?? '—'} ·{' '}
+                  <span className={dossier.healthStatus === 'critical' ? 'text-status-rejected' : dossier.healthStatus === 'major' ? 'text-status-pending' : ''}>
+                    {dossier.healthStatus}
+                  </span>
+                </p>
+              )}
+            </div>
+            <button onClick={() => setSelected(null)} className="text-body-sm text-text-tertiary hover:text-text-primary">
+              change
+            </button>
+          </div>
+
+          {dossier?.ailments && dossier.ailments.length > 0 && (
+            <div>
+              <p className="text-label-ui text-text-tertiary mb-2">Active ailments</p>
+              <div className="space-y-1">
+                {dossier.ailments.map((a) => (
+                  <div key={a.condition} className="flex items-center gap-2 text-body-sm">
+                    <Tag color={a.severity === 'critical' ? 'rejected' : a.severity === 'major' ? 'pending' : 'closed'}>
+                      {a.severity}
+                    </Tag>
+                    <span className="text-text-primary">{a.condition}</span>
+                    <button
+                      onClick={() => heal.mutate({ playerId: selected.id, condition: a.condition })}
+                      disabled={heal.isPending}
+                      className="ml-auto text-body-sm text-accent-primary hover:underline disabled:opacity-50"
+                    >
+                      Heal
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setAilmentOpen(true)}
+              disabled={!dossier?.isAlive}
+              className="btn-secondary text-sm disabled:opacity-40"
+            >
+              Assign Ailment
+            </button>
+            <button
+              onClick={() => setKillOpen(true)}
+              disabled={!dossier?.isAlive}
+              className="px-4 py-1.5 rounded-card font-medium bg-status-rejected hover:bg-status-rejected/90 text-text-inverse text-sm transition-colors duration-150 disabled:opacity-40"
+            >
+              Kill Character
+            </button>
+          </div>
+        </div>
+      )}
+
+      {selected && (
+        <>
+          <AilmentModal
+            open={ailmentOpen}
+            onClose={() => setAilmentOpen(false)}
+            playerId={selected.id}
+            playerName={selected.characterName ?? selected.discordUsername}
+          />
+          <KillModal
+            open={killOpen}
+            onClose={() => setKillOpen(false)}
+            playerId={selected.id}
+            playerName={selected.characterName ?? selected.discordUsername}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function AilmentModal({
+  open,
+  onClose,
+  playerId,
+  playerName,
+}: {
+  open: boolean;
+  onClose: () => void;
+  playerId: string;
+  playerName: string;
+}) {
+  const assign = useAssignAilment();
+  const [condition, setCondition] = useState('');
+  const [severity, setSeverity] = useState<'minor' | 'major' | 'critical'>('minor');
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setError(null);
+    if (!condition.trim()) { setError('Condition is required.'); return; }
+    try {
+      await assign.mutateAsync({ playerId, condition: condition.trim(), severity, notes: notes.trim() || undefined });
+      setCondition('');
+      setNotes('');
+      onClose();
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not assign ailment.');
+    }
+  };
+
+  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Assign Ailment — ${playerName}`}
+      railClass="bg-accent-simulation"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button onClick={submit} disabled={assign.isPending} className="btn-primary disabled:opacity-50">
+            {assign.isPending ? 'Saving…' : 'Assign'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Condition</span>
+          <input value={condition} onChange={(e) => setCondition(e.target.value)} placeholder="e.g. consumption" className={fc} autoFocus />
+        </label>
+        <div>
+          <span className="text-label-ui text-text-tertiary block mb-1">Severity</span>
+          <div className="flex gap-2">
+            {(['minor', 'major', 'critical'] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSeverity(s)}
+                className={`px-3 py-1.5 rounded-card text-body-sm border transition-colors duration-150 ${severity === s ? 'border-accent-simulation bg-accent-simulation/10 text-accent-simulation font-medium' : 'border-border-subtle text-text-tertiary hover:border-border-default'}`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Notes</span>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${fc} resize-y`} />
+        </label>
+        {error && <p className="text-body-sm text-status-rejected">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+function KillModal({
+  open,
+  onClose,
+  playerId,
+  playerName,
+}: {
+  open: boolean;
+  onClose: () => void;
+  playerId: string;
+  playerName: string;
+}) {
+  const kill = useKillCharacter();
+  const [cause, setCause] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    if (!cause.trim()) { setError('Cause of death is required.'); return; }
+    try {
+      await kill.mutateAsync({ playerId, causeOfDeath: cause.trim() });
+      setCause('');
+      setConfirmed(false);
+      onClose();
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not record death.');
+    }
+  };
+
+  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => { setConfirmed(false); onClose(); }}
+      title={`Kill Character — ${playerName}`}
+      railClass="bg-status-rejected"
+      footer={
+        <>
+          <button onClick={() => { setConfirmed(false); onClose(); }} className="btn-secondary">Cancel</button>
+          <button
+            onClick={submit}
+            disabled={kill.isPending || !confirmed}
+            className="px-4 py-1.5 rounded-card font-medium bg-status-rejected hover:bg-status-rejected/90 text-text-inverse disabled:opacity-50 transition-colors duration-150"
+          >
+            {kill.isPending ? 'Recording…' : 'Confirm Death'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-body-sm text-status-rejected">
+          This is a <strong>permanent</strong> sim event. The character will be marked dead, all offices vacated,
+          and a death entry written to the player event log. Confirmation cannot be undone via the UI.
+        </p>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Cause of death</span>
+          <input value={cause} onChange={(e) => setCause(e.target.value)} placeholder="e.g. duel, illness, accident…" className={fc} autoFocus />
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="accent-status-rejected" />
+          <span className="text-body-sm text-text-secondary">
+            I understand this is irreversible.
+          </span>
+        </label>
+        {error && <p className="text-body-sm text-status-rejected">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+// ============================================================
+// Sim event log
+// ============================================================
+
+const EVENT_COLOR: Record<string, string> = {
+  death: 'deceased',
+  ailment_acquired: 'pending',
+  ailment_recovered: 'passed',
+  office_appointed: 'offices',
+  office_left: 'closed',
+  party_change: 'players',
+};
+
+function SimEventLog() {
+  const { data: events, isLoading } = useSimEvents(50);
+
+  if (isLoading) {
+    return <div className="card border-l-accent-simulation"><div className="skeleton h-4 w-3/4" /></div>;
+  }
+  if (!events || events.length === 0) {
+    return (
+      <div className="card border-l-accent-simulation">
+        <p className="text-body text-text-tertiary italic">No sim events recorded yet.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card border-l-accent-simulation">
+      <div className="space-y-1">
+        {events.map((e) => <SimEventRow key={e.id} event={e} />)}
+      </div>
+    </div>
+  );
+}
+
+function SimEventRow({ event }: { event: SimEvent }) {
+  const color = EVENT_COLOR[event.eventType] ?? 'simulation';
+  return (
+    <div className="flex items-center gap-3 py-1.5 border-b border-border-subtle last:border-0">
+      <span className="font-mono text-xs text-text-tertiary w-32 flex-shrink-0">
+        {new Date(event.createdAt).toLocaleDateString('en-GB', {
+          day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+        })}
+      </span>
+      <Tag color={color}>{event.eventType.replace(/_/g, ' ')}</Tag>
+      <span className="text-body-sm text-text-primary flex-1 truncate">
+        {event.characterName ? <span className="font-medium">{event.characterName}: </span> : null}
+        {event.description}
+      </span>
+      {event.simDate && (
+        <span className="font-mono text-xs text-text-tertiary">
+          {event.simDate}
+        </span>
+      )}
+      {!event.isAutomatic && <Tag color="moderation">manual</Tag>}
     </div>
   );
 }

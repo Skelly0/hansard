@@ -1,10 +1,28 @@
+import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
-import { useElection, useElectionResults, useElectionRounds, useElectionTurnout } from '../api/hooks/useVoting';
+import {
+  useElection,
+  useElectionResults,
+  useElectionRounds,
+  useElectionTurnout,
+  useOpenVoting,
+  useCloseVoting,
+  useTallyVotes,
+  useCertifyElection,
+  useCreateRunoff,
+  useNpcConfirm,
+  useWithdrawCandidate,
+  useRegisterCandidate,
+} from '../api/hooks/useVoting';
+import { useAuth } from '../api/hooks/useAuth';
+import { useSearchPlayers } from '../api/hooks/usePlayers';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { StatusTimeline } from '../components/shared/StatusTimeline';
 import { ResultsBars, MultiRoundBars } from '../components/shared/ResultsBars';
 import { MetricCard } from '../components/shared/MetricCard';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { Modal, ConfirmModal } from '../components/shared/Modal';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 
 const ELECTION_STAGES = [
   { key: 'draft', label: 'Draft' },
@@ -55,6 +73,7 @@ const methodLabel: Record<string, string> = {
 
 export function ElectionDetail() {
   const { id } = useParams({ strict: false }) as { id: string };
+  const { isStaff } = useAuth();
   const { data: election, isLoading } = useElection(id);
   const { data: results } = useElectionResults(id);
   const { data: rounds } = useElectionRounds(id);
@@ -152,6 +171,9 @@ export function ElectionDetail() {
           horizontal
         />
       </div>
+
+      {/* Staff controls */}
+      {isStaff && <StaffControls electionId={election.id} status={election.status} method={election.method} />}
 
       {/* Metrics row */}
       {turnout && (
@@ -307,9 +329,14 @@ export function ElectionDetail() {
           {/* Candidates */}
           {election.candidates && election.candidates.length > 0 && (
             <div>
-              <h3 className="text-heading-2 text-text-secondary mb-3">
-                Candidates ({election.candidates.length})
-              </h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-heading-2 text-text-secondary">
+                  Candidates ({election.candidates.length})
+                </h3>
+                {isStaff && (
+                  <AddCandidateButton electionId={election.id} />
+                )}
+              </div>
               <div className="space-y-2">
                 {election.candidates.map((candidate) => (
                   <div
@@ -318,7 +345,7 @@ export function ElectionDetail() {
                       candidate.isWithdrawn ? 'opacity-50' : ''
                     }`}
                   >
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <Link
                         to="/players/$id"
                         params={{ id: candidate.playerId }}
@@ -331,6 +358,13 @@ export function ElectionDetail() {
                       )}
                       {candidate.isWithdrawn && (
                         <Tag color="closed">Withdrawn</Tag>
+                      )}
+                      {isStaff && !candidate.isWithdrawn && (
+                        <WithdrawCandidateButton
+                          electionId={election.id}
+                          playerId={candidate.playerId}
+                          name={candidate.player?.characterName ?? 'Unknown'}
+                        />
                       )}
                     </div>
                     {candidate.statement && (
@@ -398,5 +432,338 @@ export function ElectionDetail() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ============================================================
+// Staff control panel
+// ============================================================
+
+function StaffControls({
+  electionId,
+  status,
+  method,
+}: {
+  electionId: string;
+  status: string;
+  method: string;
+}) {
+  const openVoting = useOpenVoting();
+  const closeVoting = useCloseVoting();
+  const tally = useTallyVotes();
+  const certify = useCertifyElection();
+  const createRunoff = useCreateRunoff();
+
+  const [confirmAction, setConfirmAction] = useState<null | 'open' | 'close' | 'tally' | 'certify' | 'runoff'>(null);
+  const [npcOpen, setNpcOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (action: NonNullable<typeof confirmAction>) => {
+    setError(null);
+    try {
+      if (action === 'open') await openVoting.mutateAsync(electionId);
+      if (action === 'close') await closeVoting.mutateAsync(electionId);
+      if (action === 'tally') await tally.mutateAsync(electionId);
+      if (action === 'certify') await certify.mutateAsync(electionId);
+      if (action === 'runoff') await createRunoff.mutateAsync(electionId);
+      setConfirmAction(null);
+    } catch (e: any) {
+      setError(e?.message ?? 'Action failed.');
+    }
+  };
+
+  const canOpen = ['draft', 'nominations_closed', 'nominations_open'].includes(status);
+  const canClose = status === 'voting_open';
+  const canTally = ['voting_open', 'voting_closed'].includes(status);
+  const canCertify = ['tallied', 'npc_pending'].includes(status);
+  const canRunoff = status === 'runoff_needed';
+  const canNpc = ['tallied', 'npc_pending'].includes(status);
+  const isYeaNay = method === 'yea_nay_abstain';
+
+  return (
+    <div className="card border-l-accent-voting mb-8">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-heading-2 text-text-secondary">Staff Controls</h2>
+        <Tag color="moderation">staff</Tag>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => setConfirmAction('open')} disabled={!canOpen} className="btn-secondary text-sm disabled:opacity-40">
+          Open Voting
+        </button>
+        <button onClick={() => setConfirmAction('close')} disabled={!canClose} className="btn-secondary text-sm disabled:opacity-40">
+          Close Voting
+        </button>
+        <button onClick={() => setConfirmAction('tally')} disabled={!canTally} className="btn-secondary text-sm disabled:opacity-40">
+          Tally Votes
+        </button>
+        <button onClick={() => setConfirmAction('runoff')} disabled={!canRunoff} className="btn-secondary text-sm disabled:opacity-40">
+          Create Runoff
+        </button>
+        <button onClick={() => setNpcOpen(true)} disabled={!canNpc} className="btn-secondary text-sm disabled:opacity-40">
+          Enter NPC Confirmation
+        </button>
+        <button onClick={() => setConfirmAction('certify')} disabled={!canCertify} className="btn-primary text-sm disabled:opacity-40">
+          Certify Results
+        </button>
+      </div>
+      {error && <p className="text-body-sm text-status-rejected mt-3">{error}</p>}
+
+      <ConfirmModal
+        open={confirmAction === 'certify'}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => run('certify')}
+        title="Certify these results?"
+        message="Certification is final. The result is sealed and any linked appointments will follow."
+        confirmLabel="Certify"
+        pending={certify.isPending}
+      />
+      <ConfirmModal
+        open={confirmAction === 'runoff'}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => run('runoff')}
+        title="Create runoff round?"
+        message="A new round election will be created with the qualifying candidates carried over. You can adjust dates afterwards."
+        confirmLabel="Create Runoff"
+        pending={createRunoff.isPending}
+      />
+      <ConfirmModal
+        open={confirmAction === 'open'}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => run('open')}
+        title="Open voting?"
+        message="This makes the ballot live. Players will be able to cast votes immediately."
+        confirmLabel="Open"
+        pending={openVoting.isPending}
+      />
+      <ConfirmModal
+        open={confirmAction === 'close'}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => run('close')}
+        title="Close voting?"
+        message="No further ballots can be cast once closed. You can still tally afterwards."
+        confirmLabel="Close"
+        pending={closeVoting.isPending}
+      />
+      <ConfirmModal
+        open={confirmAction === 'tally'}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => run('tally')}
+        title="Tally votes now?"
+        message="Tallying writes results to the record. For sealed results this will reveal them."
+        confirmLabel="Tally"
+        pending={tally.isPending}
+      />
+
+      <NpcConfirmModal
+        open={npcOpen}
+        onClose={() => setNpcOpen(false)}
+        electionId={electionId}
+      />
+    </div>
+  );
+}
+
+function NpcConfirmModal({
+  open,
+  onClose,
+  electionId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  electionId: string;
+}) {
+  const npc = useNpcConfirm();
+  const [yea, setYea] = useState(0);
+  const [nay, setNay] = useState(0);
+  const [abstain, setAbstain] = useState(0);
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setError(null);
+    if (yea + nay + abstain === 0) {
+      setError('Enter at least one tally.');
+      return;
+    }
+    try {
+      await npc.mutateAsync({ electionId, yea, nay, abstain, notes: notes || undefined });
+      onClose();
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not submit.');
+    }
+  };
+
+  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 font-mono text-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="NPC Confirmation"
+      railClass="bg-accent-voting"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button onClick={submit} disabled={npc.isPending} className="btn-primary disabled:opacity-50">
+            {npc.isPending ? 'Submitting…' : 'Record'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-body-sm text-text-secondary">
+          Record the tally from the NPC house. Yea &gt; Nay confirms; otherwise rejected.
+        </p>
+        <div className="grid grid-cols-3 gap-3">
+          <label className="block">
+            <span className="text-label-ui text-text-tertiary block mb-1">Yea</span>
+            <input type="number" min={0} value={yea} onChange={(e) => setYea(parseInt(e.target.value) || 0)} className={fc} />
+          </label>
+          <label className="block">
+            <span className="text-label-ui text-text-tertiary block mb-1">Nay</span>
+            <input type="number" min={0} value={nay} onChange={(e) => setNay(parseInt(e.target.value) || 0)} className={fc} />
+          </label>
+          <label className="block">
+            <span className="text-label-ui text-text-tertiary block mb-1">Abstain</span>
+            <input type="number" min={0} value={abstain} onChange={(e) => setAbstain(parseInt(e.target.value) || 0)} className={fc} />
+          </label>
+        </div>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Notes</span>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${fc} font-body resize-y`} />
+        </label>
+        {error && <p className="text-body-sm text-status-rejected">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+function WithdrawCandidateButton({
+  electionId,
+  playerId,
+  name,
+}: {
+  electionId: string;
+  playerId: string;
+  name: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const withdraw = useWithdrawCandidate();
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="text-body-sm text-status-rejected hover:underline ml-auto"
+      >
+        Withdraw
+      </button>
+      <ConfirmModal
+        open={open}
+        onClose={() => setOpen(false)}
+        onConfirm={async () => {
+          await withdraw.mutateAsync({ electionId, playerId });
+          setOpen(false);
+        }}
+        variant="danger"
+        title={`Withdraw ${name}?`}
+        message="This marks the candidate as withdrawn. They will no longer appear on the ballot."
+        confirmLabel="Withdraw"
+        pending={withdraw.isPending}
+      />
+    </>
+  );
+}
+
+function AddCandidateButton({ electionId }: { electionId: string }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<{ id: string; characterName: string | null; discordUsername: string } | null>(null);
+  const [statement, setStatement] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const register = useRegisterCandidate();
+  const { data: searchResults } = useSearchPlayers(search);
+
+  const submit = async () => {
+    setError(null);
+    if (!selected) { setError('Select a player first.'); return; }
+    try {
+      await register.mutateAsync({
+        electionId,
+        playerId: selected.id,
+        statement: statement.trim() || undefined,
+      });
+      setOpen(false);
+      setSelected(null);
+      setStatement('');
+      setSearch('');
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not add candidate.');
+    }
+  };
+
+  return (
+    <>
+      <button onClick={() => setOpen(true)} className="text-body-sm text-accent-primary hover:underline">
+        + Add
+      </button>
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Nominate Candidate"
+        railClass="bg-accent-voting"
+        footer={
+          <>
+            <button onClick={() => setOpen(false)} className="btn-secondary">Cancel</button>
+            <button onClick={submit} disabled={register.isPending} className="btn-primary disabled:opacity-50">
+              {register.isPending ? 'Adding…' : 'Add Candidate'}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          {selected ? (
+            <div className="flex items-center gap-2 bg-card border border-border-default rounded-card px-3 py-2">
+              <PlayerAvatar player={selected} size="sm" />
+              <span className="text-body-sm">{selected.characterName ?? selected.discordUsername}</span>
+              <button onClick={() => setSelected(null)} className="ml-auto text-xs text-text-tertiary hover:text-status-rejected">change</button>
+            </div>
+          ) : (
+            <>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search players…"
+                autoFocus
+                className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary"
+              />
+              {searchResults?.data && searchResults.data.length > 0 && (
+                <div className="border border-border-subtle rounded-card overflow-hidden">
+                  {searchResults.data.map((p: any) => (
+                    <button
+                      key={p.id}
+                      onClick={() => setSelected({ id: p.id, characterName: p.characterName, discordUsername: p.discordUsername })}
+                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-hover text-left transition-colors duration-150"
+                    >
+                      <PlayerAvatar player={p} size="sm" />
+                      <span className="text-body-sm">{p.characterName ?? p.discordUsername}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          <label className="block">
+            <span className="text-label-ui text-text-tertiary block mb-1">Statement (optional)</span>
+            <textarea
+              value={statement}
+              onChange={(e) => setStatement(e.target.value)}
+              rows={3}
+              className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary resize-y"
+            />
+          </label>
+          {error && <p className="text-body-sm text-status-rejected">{error}</p>}
+        </div>
+      </Modal>
+    </>
   );
 }

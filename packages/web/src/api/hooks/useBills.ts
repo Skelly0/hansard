@@ -183,6 +183,17 @@ export function useEnterNpcVote() {
   });
 }
 
+export function useUpdateBillEffects() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ slug, ...effects }: { slug: string; economy?: { description: string; affectedSectors?: string[]; estimatedGdpImpact?: string }; popsim?: { description: string; affectedGroups?: string[]; estimatedApprovalImpact?: string }; notes?: string }) =>
+      api.patch<Bill>(`/bills/${slug}/effects`, effects),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['bills', vars.slug] });
+    },
+  });
+}
+
 export function useEnactBill() {
   const qc = useQueryClient();
   return useMutation({

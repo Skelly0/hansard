@@ -1,9 +1,21 @@
 import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
-import { useTicket, useAddTicketMessage, useUpdateTicket, useCloseTicket } from '../api/hooks/useTickets';
+import {
+  useTicket,
+  useAddTicketMessage,
+  useUpdateTicket,
+  useCloseTicket,
+  useLinkTicket,
+  useUnlinkTicket,
+  useTickets,
+} from '../api/hooks/useTickets';
 import { useAuth } from '../api/hooks/useAuth';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { Modal } from '../components/shared/Modal';
+
+const PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
+type Priority = (typeof PRIORITIES)[number];
 
 export function TicketDetail() {
   const { id } = useParams({ strict: false }) as { id: string };
@@ -65,15 +77,20 @@ export function TicketDetail() {
           <h1 className="text-display">{ticket.title}</h1>
         </div>
 
-        {ticket.status !== 'closed' && canClose && (
-          <button
-            onClick={handleClose}
-            className="btn-secondary text-sm whitespace-nowrap"
-            disabled={closeTicket.isPending}
-          >
-            Close Ticket
-          </button>
-        )}
+        <div className="flex flex-col gap-2 items-end shrink-0">
+          {isStaff && ticket.status !== 'closed' && (
+            <PriorityChanger ticketId={ticket.id} current={ticket.priority} />
+          )}
+          {ticket.status !== 'closed' && canClose && (
+            <button
+              onClick={handleClose}
+              className="btn-secondary text-sm whitespace-nowrap"
+              disabled={closeTicket.isPending}
+            >
+              Close Ticket
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Metadata */}
@@ -121,6 +138,9 @@ export function TicketDetail() {
           </div>
         )}
       </div>
+
+      {/* Linked tickets */}
+      <LinkedTickets ticketId={ticket.id} linkedIds={ticket.linkedTicketIds ?? []} canManage={isStaff} />
 
       {/* Description */}
       <div className="mb-8">
@@ -232,5 +252,201 @@ export function TicketDetail() {
         )}
       </div>
     </div>
+  );
+}
+
+// ============================================================
+// Priority changer (staff)
+// ============================================================
+
+function PriorityChanger({ ticketId, current }: { ticketId: string; current: Priority }) {
+  const update = useUpdateTicket();
+  const onChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const next = e.target.value as Priority;
+    if (next === current) return;
+    update.mutate({ id: ticketId, priority: next });
+  };
+  return (
+    <label className="flex items-center gap-2 text-body-sm text-text-secondary">
+      <span className="text-label-ui text-text-tertiary">Priority</span>
+      <select
+        value={current}
+        onChange={onChange}
+        disabled={update.isPending}
+        className="bg-card border border-border-subtle rounded-card px-2 py-1 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150"
+      >
+        {PRIORITIES.map((p) => (
+          <option key={p} value={p}>{p}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+// ============================================================
+// Linked tickets section
+// ============================================================
+
+function LinkedTickets({
+  ticketId,
+  linkedIds,
+  canManage,
+}: {
+  ticketId: string;
+  linkedIds: string[];
+  canManage: boolean;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const link = useLinkTicket();
+  const unlink = useUnlinkTicket();
+
+  // Fetch a generous slice of recent tickets to enable id→ticket lookup +
+  // the picker. Real-world setups may want a dedicated /by-ids endpoint.
+  const { data } = useTickets({ limit: 100 });
+  const allTickets = data?.data ?? [];
+  const linked = allTickets.filter((t) => linkedIds.includes(t.id));
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-heading-2 text-text-secondary">
+          Linked Tickets {linkedIds.length > 0 && `(${linkedIds.length})`}
+        </h2>
+        {canManage && (
+          <button
+            onClick={() => setPickerOpen(true)}
+            className="text-body-sm text-accent-primary hover:underline"
+          >
+            + Link Ticket
+          </button>
+        )}
+      </div>
+      {linkedIds.length === 0 ? (
+        <div className="card border-l-border-subtle">
+          <p className="text-body-sm text-text-tertiary italic">No linked tickets.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {linked.map((t) => (
+            <div key={t.id} className="card border-l-accent-tickets flex items-center gap-3">
+              <Link
+                to="/tickets/$id"
+                params={{ id: t.id }}
+                className="font-mono text-sm text-accent-primary hover:underline"
+              >
+                #{String(t.number).padStart(3, '0')}
+              </Link>
+              <Link
+                to="/tickets/$id"
+                params={{ id: t.id }}
+                className="text-body-sm text-text-primary hover:text-accent-primary transition-colors duration-150 flex-1 truncate"
+              >
+                {t.title}
+              </Link>
+              <Tag color={statusToTagColor(t.status)}>{t.status.replace(/_/g, ' ')}</Tag>
+              {canManage && (
+                <button
+                  onClick={() => unlink.mutate({ ticketId, otherTicketId: t.id })}
+                  className="text-body-sm text-status-rejected hover:underline"
+                  disabled={unlink.isPending}
+                >
+                  Unlink
+                </button>
+              )}
+            </div>
+          ))}
+          {/* Show stale ids that we couldn't resolve from the recent slice */}
+          {linkedIds.filter((id) => !linked.find((t) => t.id === id)).map((id) => (
+            <div key={id} className="card border-l-border-subtle flex items-center gap-3">
+              <Link to="/tickets/$id" params={{ id }} className="text-body-sm text-accent-primary hover:underline">
+                View ticket →
+              </Link>
+              {canManage && (
+                <button
+                  onClick={() => unlink.mutate({ ticketId, otherTicketId: id })}
+                  className="ml-auto text-body-sm text-status-rejected hover:underline"
+                >
+                  Unlink
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <LinkPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        currentTicketId={ticketId}
+        existingLinks={linkedIds}
+        onPick={async (otherId) => {
+          await link.mutateAsync({ ticketId, otherTicketId: otherId });
+          setPickerOpen(false);
+        }}
+        pending={link.isPending}
+      />
+    </div>
+  );
+}
+
+function LinkPicker({
+  open,
+  onClose,
+  currentTicketId,
+  existingLinks,
+  onPick,
+  pending,
+}: {
+  open: boolean;
+  onClose: () => void;
+  currentTicketId: string;
+  existingLinks: string[];
+  onPick: (id: string) => void | Promise<void>;
+  pending: boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const { data } = useTickets({ search: query || undefined, limit: 25 });
+  const candidates = (data?.data ?? []).filter(
+    (t) => t.id !== currentTicketId && !existingLinks.includes(t.id),
+  );
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Link a Ticket"
+      railClass="bg-accent-tickets"
+      maxWidth="max-w-lg"
+    >
+      <div className="space-y-3">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search tickets…"
+          autoFocus
+          className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150"
+        />
+        <div className="max-h-72 overflow-y-auto border border-border-subtle rounded-card divide-y divide-border-subtle">
+          {candidates.length === 0 ? (
+            <div className="px-3 py-4 text-body-sm text-text-tertiary italic">
+              No tickets match.
+            </div>
+          ) : (
+            candidates.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => onPick(t.id)}
+                disabled={pending}
+                className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-hover transition-colors duration-150 disabled:opacity-50"
+              >
+                <span className="font-mono text-xs text-text-tertiary">#{String(t.number).padStart(3, '0')}</span>
+                <span className="text-body-sm text-text-primary truncate flex-1">{t.title}</span>
+                <Tag color={statusToTagColor(t.status)}>{t.status.replace(/_/g, ' ')}</Tag>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </Modal>
   );
 }

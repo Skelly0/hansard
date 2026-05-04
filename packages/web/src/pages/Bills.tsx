@@ -1,10 +1,14 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useBills } from '../api/hooks/useBills';
+import { useBills, useCreateBill } from '../api/hooks/useBills';
+import { useAuth } from '../api/hooks/useAuth';
+import { useSearchPlayers } from '../api/hooks/usePlayers';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { Modal } from '../components/shared/Modal';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import type { Bill } from '../api/hooks/useBills';
 
 const BILL_STATUSES = [
@@ -21,6 +25,9 @@ const SORT_OPTIONS = [
 ];
 
 export function Bills() {
+  const { isStaff, hasPermission } = useAuth();
+  const canSubmitForOthers = isStaff || hasPermission('legislative_leader');
+  const [submitForOpen, setSubmitForOpen] = useState(false);
   const [status, setStatus] = useState('all');
   const [sort, setSort] = useState('newest');
   const [search, setSearch] = useState('');
@@ -132,6 +139,11 @@ export function Bills() {
             Legislative registry &mdash; {total} bill{total !== 1 ? 's' : ''}
           </p>
         </div>
+        {canSubmitForOthers && (
+          <button onClick={() => setSubmitForOpen(true)} className="btn-secondary text-sm">
+            Submit on behalf
+          </button>
+        )}
       </div>
 
       {/* Filters */}
@@ -194,6 +206,110 @@ export function Bills() {
         onPageChange={setPage}
         className="mt-6 justify-center flex"
       />
+
+      {canSubmitForOthers && (
+        <SubmitForModal open={submitForOpen} onClose={() => setSubmitForOpen(false)} />
+      )}
     </div>
+  );
+}
+
+function SubmitForModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const create = useCreateBill();
+  const [search, setSearch] = useState('');
+  const [author, setAuthor] = useState<{ id: string; characterName: string | null; discordUsername: string } | null>(null);
+  const [title, setTitle] = useState('');
+  const [googleDocUrl, setGoogleDocUrl] = useState('');
+  const [summary, setSummary] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const { data: searchResults } = useSearchPlayers(search);
+
+  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+
+  const submit = async () => {
+    setError(null);
+    if (!author) { setError('Pick an author.'); return; }
+    if (!title.trim() || !googleDocUrl.trim()) {
+      setError('Title and Google Doc URL are required.');
+      return;
+    }
+    try {
+      await create.mutateAsync({
+        title: title.trim(),
+        googleDocUrl: googleDocUrl.trim(),
+        summary: summary.trim() || undefined,
+        authorId: author.id,
+      });
+      onClose();
+      setTitle('');
+      setGoogleDocUrl('');
+      setSummary('');
+      setAuthor(null);
+      setSearch('');
+    } catch (e: any) {
+      setError(e?.message ?? 'Submission failed.');
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Submit Bill on Behalf"
+      railClass="bg-accent-bills"
+      maxWidth="max-w-lg"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button onClick={submit} disabled={create.isPending} className="btn-primary disabled:opacity-50">
+            {create.isPending ? 'Submitting…' : 'Submit'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div>
+          <label className="text-label-ui text-text-tertiary block mb-1">Author</label>
+          {author ? (
+            <div className="flex items-center gap-2 bg-card border border-border-default rounded-card px-3 py-2">
+              <PlayerAvatar player={author} size="sm" />
+              <span className="text-body-sm">{author.characterName ?? author.discordUsername}</span>
+              <button onClick={() => setAuthor(null)} className="ml-auto text-xs text-text-tertiary hover:text-status-rejected">change</button>
+            </div>
+          ) : (
+            <>
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search players…" className={fc} />
+              {searchResults?.data && searchResults.data.length > 0 && (
+                <div className="mt-1 border border-border-subtle rounded-card overflow-hidden">
+                  {searchResults.data.map((p: any) => (
+                    <button
+                      key={p.id}
+                      onClick={() => setAuthor({ id: p.id, characterName: p.characterName, discordUsername: p.discordUsername })}
+                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-hover text-left transition-colors duration-150"
+                    >
+                      <PlayerAvatar player={p} size="sm" />
+                      <span className="text-body-sm">{p.characterName ?? p.discordUsername}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Title</span>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} className={fc} />
+        </label>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Google Doc URL</span>
+          <input value={googleDocUrl} onChange={(e) => setGoogleDocUrl(e.target.value)} className={fc} />
+        </label>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Summary (optional)</span>
+          <textarea value={summary} onChange={(e) => setSummary(e.target.value)} rows={3} className={`${fc} resize-y`} />
+        </label>
+        {error && <p className="text-body-sm text-status-rejected">{error}</p>}
+      </div>
+    </Modal>
   );
 }

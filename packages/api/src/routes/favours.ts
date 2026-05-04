@@ -23,12 +23,13 @@ export default async function favourRoutes(fastify: FastifyInstance) {
   // Categories
   // ============================================================
 
-  // GET /api/favours/categories — list all favour categories
-  fastify.get(
+  // GET /api/favours/categories — list favour categories (active by default)
+  fastify.get<{ Querystring: { includeInactive?: string } }>(
     '/api/favours/categories',
     { preHandler: [requireAuth] },
-    async () => {
-      return getCategories(fastify.db);
+    async (request) => {
+      const includeInactive = request.query.includeInactive === '1' || request.query.includeInactive === 'true';
+      return getCategories(fastify.db, { includeInactive });
     },
   );
 

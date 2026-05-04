@@ -210,21 +210,21 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
 
   fastify.post<{
     Params: { id: string };
-    Body: { assigneeId: string };
+    Body: { assigneeId?: string; assignedToId?: string };
   }>(
     '/api/tickets/:id/assign',
     { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
       const user = request.session.user!;
-      const { assigneeId } = request.body;
+      const target = request.body.assigneeId ?? request.body.assignedToId;
 
-      if (!assigneeId) {
+      if (!target) {
         return reply.status(400).send({ error: 'assigneeId is required' });
       }
 
       const updated = await ticketService.assignTicket(
         request.params.id,
-        assigneeId,
+        target,
         user.id,
       );
 
@@ -260,6 +260,60 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'Ticket not found' });
       }
 
+      return updated;
+    },
+  );
+
+  // ============================================================
+  // POST /api/tickets/:id/link — Link two tickets symmetrically (staff)
+  // ============================================================
+
+  fastify.post<{
+    Params: { id: string };
+    Body: { otherTicketId: string };
+  }>(
+    '/api/tickets/:id/link',
+    { preHandler: [requireAuth, requireStaff] },
+    async (request, reply) => {
+      const { otherTicketId } = request.body;
+      if (!otherTicketId) {
+        return reply.status(400).send({ error: 'otherTicketId is required' });
+      }
+      if (otherTicketId === request.params.id) {
+        return reply.status(400).send({ error: 'Cannot link a ticket to itself' });
+      }
+
+      const updated = await ticketService.linkTickets(
+        request.params.id,
+        otherTicketId,
+        request.session.user!.id,
+      );
+
+      if (!updated) {
+        return reply.status(404).send({ error: 'Ticket not found' });
+      }
+      return updated;
+    },
+  );
+
+  // ============================================================
+  // DELETE /api/tickets/:id/link/:otherId — Unlink two tickets (staff)
+  // ============================================================
+
+  fastify.delete<{
+    Params: { id: string; otherId: string };
+  }>(
+    '/api/tickets/:id/link/:otherId',
+    { preHandler: [requireAuth, requireStaff] },
+    async (request, reply) => {
+      const updated = await ticketService.unlinkTickets(
+        request.params.id,
+        request.params.otherId,
+        request.session.user!.id,
+      );
+      if (!updated) {
+        return reply.status(404).send({ error: 'Ticket not found' });
+      }
       return updated;
     },
   );

@@ -11,6 +11,7 @@ import dashboardRoutes from './routes/dashboard.js';
 import playerRoutes from './routes/players.js';
 import simulationRoutes from './routes/simulation.js';
 import officeRoutes from './routes/offices.js';
+import partyRoutes from './routes/parties.js';
 import favourRoutes from './routes/favours.js';
 import ticketRoutes from './routes/tickets.js';
 import moderationRoutes from './routes/moderation.js';
@@ -61,6 +62,7 @@ export async function buildApp() {
   await fastify.register(playerRoutes);
   await fastify.register(simulationRoutes);
   await fastify.register(officeRoutes);
+  await fastify.register(partyRoutes);
   await fastify.register(favourRoutes);
   await fastify.register(ticketRoutes);
   await fastify.register(moderationRoutes);

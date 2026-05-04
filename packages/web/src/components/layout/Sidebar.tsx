@@ -25,6 +25,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Voting', path: '/voting', icon: '🗳️' },
   // People & Power
   { label: 'Players', path: '/players', icon: '👤', section: 'People & Power' },
+  { label: 'Parties', path: '/parties', icon: '🎗️' },
   { label: 'Offices', path: '/offices', icon: '🏛️' },
   { label: 'Favours', path: '/favours', icon: '🤝' },
   // World

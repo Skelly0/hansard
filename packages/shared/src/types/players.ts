@@ -120,6 +120,33 @@ export interface Party {
   dissolvedAt: string | null;
 }
 
+export interface CreatePartyInput {
+  name: string;
+  shortName?: string | null;
+  factionId?: string | null;
+  leaderId?: string | null;
+  ideology?: string | null;
+  colour?: string | null;
+  discordRoleId?: string | null;
+}
+
+export interface UpdatePartyInput {
+  name?: string;
+  shortName?: string | null;
+  factionId?: string | null;
+  leaderId?: string | null;
+  ideology?: string | null;
+  colour?: string | null;
+  discordRoleId?: string | null;
+  isActive?: boolean;
+}
+
+export interface PartyWithStats extends Party {
+  memberCount: number;
+  factionName?: string | null;
+  leaderName?: string | null;
+}
+
 // ============================================================
 // Office & Office Holders
 // ============================================================

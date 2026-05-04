@@ -17,6 +17,7 @@ import { Voting } from './pages/Voting';
 import { ElectionDetail } from './pages/ElectionDetail';
 import { Offices } from './pages/Offices';
 import { Players } from './pages/Players';
+import { Parties } from './pages/Parties';
 import { CharacterDossier } from './pages/CharacterDossier';
 import { Moderation } from './pages/Moderation';
 import { Graveyard } from './pages/Graveyard';
@@ -133,6 +134,12 @@ const favoursRoute = createRoute({
   component: Favours,
 });
 
+const partiesRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/parties',
+  component: Parties,
+});
+
 const simulationRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/simulation',
@@ -167,6 +174,7 @@ const routeTree = rootRoute.addChildren([
     playersRoute,
     playerDetailRoute,
     favoursRoute,
+    partiesRoute,
     simulationRoute,
     graveyardRoute,
     moderationLayoutRoute.addChildren([

@@ -1,11 +1,11 @@
 import { useSearch } from '@tanstack/react-router';
+import { API_BASE } from '../api/client';
 
 const ERROR_MESSAGES: Record<string, string> = {
   denied: "Sign-in cancelled. Try again when you're ready.",
 };
 
 export function Login() {
-  const apiUrl = import.meta.env.VITE_API_URL || '/api';
   const search = useSearch({ strict: false }) as { error?: string };
   const errorCode = search?.error;
   const errorMessage = errorCode
@@ -39,7 +39,7 @@ export function Login() {
           </p>
         )}
 
-        <a href={`${apiUrl}/auth/discord`} className="btn-primary inline-block">
+        <a href={`${API_BASE}/auth/discord`} className="btn-primary inline-block">
           Sign in with Discord
         </a>
 

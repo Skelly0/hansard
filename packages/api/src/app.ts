@@ -17,12 +17,36 @@ import ticketRoutes from './routes/tickets.js';
 import moderationRoutes from './routes/moderation.js';
 import votingRoutes from './routes/voting.js';
 
+const DEV_SESSION_SECRET = 'hansard-dev-secret-change-me-in-production';
+
+function checkProductionEnv(log: { warn: (msg: string) => void }) {
+  if (process.env.NODE_ENV !== 'production') return;
+  const required = [
+    'CORS_ORIGIN',
+    'DISCORD_REDIRECT_URI',
+    'FRONTEND_URL',
+    'SESSION_SECRET',
+    'DISCORD_CLIENT_ID',
+    'DISCORD_CLIENT_SECRET',
+  ];
+  for (const key of required) {
+    if (!process.env[key]) log.warn(`[startup] ${key} not set — production auth will misbehave`);
+  }
+  if (process.env.SESSION_SECRET === DEV_SESSION_SECRET) {
+    log.warn('[startup] SESSION_SECRET is the dev default — sessions are forge-able');
+  }
+}
+
 export async function buildApp() {
   const fastify = Fastify({
     logger: {
       level: process.env.LOG_LEVEL || 'info',
     },
   });
+
+  checkProductionEnv(fastify.log);
+
+  const isProd = process.env.NODE_ENV === 'production';
 
   // --- Plugins ---
 
@@ -35,13 +59,14 @@ export async function buildApp() {
   // Cookie (required before session)
   await fastify.register(cookie);
 
-  // Session
+  // Session — cross-site cookies (web ↔ api on different subdomains) require
+  // sameSite: 'none' + secure: true. Lax is fine when same-site or proxied (dev).
   await fastify.register(session, {
-    secret: process.env.SESSION_SECRET || 'hansard-dev-secret-change-me-in-production',
+    secret: process.env.SESSION_SECRET || DEV_SESSION_SECRET,
     cookie: {
-      secure: process.env.NODE_ENV === 'production',
+      secure: isProd,
       httpOnly: true,
-      sameSite: 'lax',
+      sameSite: isProd ? 'none' : 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     },
     saveUninitialized: false,

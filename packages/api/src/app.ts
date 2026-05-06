@@ -42,6 +42,10 @@ export async function buildApp() {
     logger: {
       level: process.env.LOG_LEVEL || 'info',
     },
+    // Required behind a TLS-terminating proxy (Railway): without this,
+    // request.protocol stays 'http' and @fastify/session refuses to set
+    // a `secure: true` cookie, breaking login on cross-site deployments.
+    trustProxy: true,
   });
 
   checkProductionEnv(fastify.log);

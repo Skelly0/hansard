@@ -1,4 +1,4 @@
-import { eq, and, desc, isNull, ilike, or, type SQL } from 'drizzle-orm';
+import { eq, and, desc, isNull, ilike, or, inArray, type SQL } from 'drizzle-orm';
 import {
   players,
   playerEventLog,
@@ -366,35 +366,31 @@ export async function getPlayerHealth(
   const player = await getPlayer(db, playerId);
   if (!player) return null;
 
-  // Get health-related events
+  const healthEventTypes = [
+    PlayerEventType.AILMENT_ACQUIRED,
+    PlayerEventType.AILMENT_RECOVERED,
+    PlayerEventType.HEALTH_CHANGED,
+    PlayerEventType.DEATH,
+  ];
+
+  // Filter to health-related event types in SQL so the LIMIT 50 actually
+  // returns up to 50 health events (not 50 events of any type).
   const healthEvents = await db
     .select()
     .from(playerEventLog)
     .where(
       and(
         eq(playerEventLog.playerId, playerId),
-        // We fetch all health-related event types
+        inArray(playerEventLog.eventType, healthEventTypes),
       ),
     )
     .orderBy(desc(playerEventLog.createdAt))
     .limit(50);
 
-  // Filter to health-related events in JS (simpler than building an OR chain)
-  const healthEventTypes = new Set([
-    PlayerEventType.AILMENT_ACQUIRED,
-    PlayerEventType.AILMENT_RECOVERED,
-    PlayerEventType.HEALTH_CHANGED,
-    PlayerEventType.DEATH,
-  ]);
-
-  const filteredEvents = healthEvents
-    .filter((e) => healthEventTypes.has(e.eventType as PlayerEvent['eventType']))
-    .map(toPlayerEvent);
-
   return {
     healthStatus: player.healthStatus,
     ailments: player.ailments,
-    events: filteredEvents,
+    events: healthEvents.map(toPlayerEvent),
   };
 }
 

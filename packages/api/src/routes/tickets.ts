@@ -81,6 +81,21 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
   );
 
   // ============================================================
+  // GET /api/tickets/by-ids?ids=a,b,c — Batch lookup by ID
+  // ============================================================
+
+  fastify.get<{ Querystring: { ids?: string } }>(
+    '/api/tickets/by-ids',
+    { preHandler: [requireAuth] },
+    async (request) => {
+      const raw = request.query.ids ?? '';
+      const ids = raw.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 100);
+      const results = await ticketService.getTicketsByIds(ids);
+      return { tickets: results };
+    },
+  );
+
+  // ============================================================
   // GET /api/tickets/:id — Get ticket with messages + audit log
   // ============================================================
 

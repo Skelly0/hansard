@@ -8,6 +8,7 @@ import {
   useLinkTicket,
   useUnlinkTicket,
   useTickets,
+  useTicketsByIds,
 } from '../api/hooks/useTickets';
 import { useAuth } from '../api/hooks/useAuth';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
@@ -321,12 +322,8 @@ function LinkedTickets({
   const link = useLinkTicket();
   const unlink = useUnlinkTicket();
 
-  // TODO: replace this top-100 fetch with a `/tickets/by-ids` batch endpoint
-  // (or per-id useTicket calls) so we don't pull a wide slice just to resolve
-  // a few linked ticket IDs. Requires API support — see backend backlog.
-  const { data } = useTickets({ limit: 100 });
-  const allTickets = data?.data ?? [];
-  const linked = allTickets.filter((t) => linkedIds.includes(t.id));
+  const { data } = useTicketsByIds(linkedIds);
+  const linked = data?.tickets ?? [];
 
   return (
     <div className="mb-8">

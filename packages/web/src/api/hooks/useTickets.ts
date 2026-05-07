@@ -110,6 +110,16 @@ export function useTicket(id?: string) {
   });
 }
 
+export function useTicketsByIds(ids: string[]) {
+  const sorted = [...ids].sort();
+  return useQuery({
+    queryKey: ['tickets', 'by-ids', sorted],
+    queryFn: () =>
+      api.get<{ tickets: Ticket[] }>(`/tickets/by-ids?ids=${encodeURIComponent(sorted.join(','))}`),
+    enabled: sorted.length > 0,
+  });
+}
+
 export function useTicketCategories() {
   return useQuery({
     queryKey: ['ticket-categories'],

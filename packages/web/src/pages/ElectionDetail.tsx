@@ -16,6 +16,7 @@ import {
 } from '../api/hooks/useVoting';
 import { useAuth } from '../api/hooks/useAuth';
 import { useSearchPlayers } from '../api/hooks/usePlayers';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { StatusTimeline } from '../components/shared/StatusTimeline';
 import { ResultsBars, MultiRoundBars } from '../components/shared/ResultsBars';
@@ -431,19 +432,17 @@ export function ElectionDetail() {
             </div>
           )}
 
-          {/* Related bill */}
+          {/* Related bill — relatedBillId is a UUID, not a slug; until the API
+              returns a slug we can't link reliably, so show the id as text. */}
           {election.relatedBillId && (
             <div>
               <h3 className="text-heading-2 text-text-secondary mb-3">Related Bill</h3>
-              <Link
-                to="/bills/$slug"
-                params={{ slug: election.relatedBillId }}
-                className="card border-l-accent-bills block hover:border-border transition-colors"
-              >
-                <span className="text-body-sm text-accent-primary hover:underline">
-                  View related bill &rarr;
-                </span>
-              </Link>
+              <div className="card border-l-accent-bills">
+                <p className="text-body-sm text-text-secondary">Linked bill</p>
+                <p className="font-mono text-xs text-text-tertiary mt-1 break-all">
+                  {election.relatedBillId}
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -698,7 +697,8 @@ function AddCandidateButton({ electionId }: { electionId: string }) {
   const [statement, setStatement] = useState('');
   const [error, setError] = useState<string | null>(null);
   const register = useRegisterCandidate();
-  const { data: searchResults } = useSearchPlayers(search);
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const { data: searchResults } = useSearchPlayers(debouncedSearch);
 
   const submit = async () => {
     setError(null);

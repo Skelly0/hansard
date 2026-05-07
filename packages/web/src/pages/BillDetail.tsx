@@ -219,13 +219,9 @@ export function BillDetail() {
         {bill.amendsBillId && (
           <div>
             <span className="text-label-ui text-text-tertiary mr-1">Amends</span>
-            <Link
-              to="/bills/$slug"
-              params={{ slug: bill.amendsBillId }}
-              className="hover:text-accent-primary transition-colors font-mono text-xs"
-            >
+            <span className="font-mono text-xs text-text-secondary" title={bill.amendsBillId}>
               Parent Bill
-            </Link>
+            </span>
           </div>
         )}
         {bill.amendsDocumentId && (

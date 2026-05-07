@@ -321,8 +321,9 @@ function LinkedTickets({
   const link = useLinkTicket();
   const unlink = useUnlinkTicket();
 
-  // Fetch a generous slice of recent tickets to enable id→ticket lookup +
-  // the picker. Real-world setups may want a dedicated /by-ids endpoint.
+  // TODO: replace this top-100 fetch with a `/tickets/by-ids` batch endpoint
+  // (or per-id useTicket calls) so we don't pull a wide slice just to resolve
+  // a few linked ticket IDs. Requires API support — see backend backlog.
   const { data } = useTickets({ limit: 100 });
   const allTickets = data?.data ?? [];
   const linked = allTickets.filter((t) => linkedIds.includes(t.id));

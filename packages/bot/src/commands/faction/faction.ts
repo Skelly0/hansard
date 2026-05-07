@@ -299,46 +299,50 @@ async function handleDissolve(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
+  let memberRows: { id: string }[] = [];
+  let partyRows: { id: string }[] = [];
   try {
-    const memberRows = await db
-      .select({ id: players.id })
-      .from(players)
-      .where(and(eq(players.factionId, target.id), eq(players.isActive, true)));
+    await db.transaction(async (tx) => {
+      memberRows = await tx
+        .select({ id: players.id })
+        .from(players)
+        .where(and(eq(players.factionId, target.id), eq(players.isActive, true)));
 
-    if (memberRows.length > 0) {
-      await db
-        .update(players)
-        .set({ factionId: null })
-        .where(eq(players.factionId, target.id));
+      if (memberRows.length > 0) {
+        await tx
+          .update(players)
+          .set({ factionId: null })
+          .where(eq(players.factionId, target.id));
 
-      for (const m of memberRows) {
-        await db.insert(playerEventLog).values({
-          playerId: m.id,
-          eventType: 'faction_change',
-          description: `Faction "${target.name}" was dissolved`,
-          oldValue: { factionId: target.id, factionName: target.name },
-          newValue: { factionId: null, factionName: null },
-          isAutomatic: false,
-        });
+        for (const m of memberRows) {
+          await tx.insert(playerEventLog).values({
+            playerId: m.id,
+            eventType: 'faction_change',
+            description: `Faction "${target.name}" was dissolved`,
+            oldValue: { factionId: target.id, factionName: target.name },
+            newValue: { factionId: null, factionName: null },
+            isAutomatic: false,
+          });
+        }
       }
-    }
 
-    const partyRows = await db
-      .select({ id: parties.id })
-      .from(parties)
-      .where(eq(parties.factionId, target.id));
-
-    if (partyRows.length > 0) {
-      await db
-        .update(parties)
-        .set({ factionId: null })
+      partyRows = await tx
+        .select({ id: parties.id })
+        .from(parties)
         .where(eq(parties.factionId, target.id));
-    }
 
-    await db
-      .update(factions)
-      .set({ isActive: false })
-      .where(eq(factions.id, target.id));
+      if (partyRows.length > 0) {
+        await tx
+          .update(parties)
+          .set({ factionId: null })
+          .where(eq(parties.factionId, target.id));
+      }
+
+      await tx
+        .update(factions)
+        .set({ isActive: false })
+        .where(eq(factions.id, target.id));
+    });
 
     await interaction.editReply({
       embeds: [successEmbed(
@@ -429,8 +433,9 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
     const sub = interaction.options.getSubcommand();
+    const staffOnly = sub === 'create' || sub === 'edit' || sub === 'dissolve';
+    await interaction.deferReply({ ephemeral: staffOnly });
     switch (sub) {
       case 'create':
         await handleCreate(interaction);

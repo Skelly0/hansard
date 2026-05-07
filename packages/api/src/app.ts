@@ -16,6 +16,7 @@ import favourRoutes from './routes/favours.js';
 import ticketRoutes from './routes/tickets.js';
 import moderationRoutes from './routes/moderation.js';
 import votingRoutes from './routes/voting.js';
+import billRoutes from './routes/bills.js';
 
 const DEV_SESSION_SECRET = 'hansard-dev-secret-change-me-in-production';
 
@@ -96,6 +97,7 @@ export async function buildApp() {
   await fastify.register(ticketRoutes);
   await fastify.register(moderationRoutes);
   await fastify.register(votingRoutes);
+  await fastify.register(billRoutes);
 
   return fastify;
 }

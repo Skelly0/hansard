@@ -2,7 +2,10 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
+import { eq } from 'drizzle-orm';
+import { elections, offices, players } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { db } from '../../db.js';
 import { hasPermission } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
@@ -59,16 +62,71 @@ const command: Command = {
       return;
     }
 
-    const officeName = interaction.options.getString('office', true);
+    const officeName = interaction.options.getString('office', true).trim();
     const method = interaction.options.getString('method') ?? 'fptp';
 
-    // TODO: Look up the office by name from the API and get forOfficeId.
-    // TODO: Create the election via the API with type 'position_election'.
+    const allOffices = await db
+      .select({ id: offices.id, name: offices.name })
+      .from(offices)
+      .where(eq(offices.isActive, true));
+    const office = allOffices.find((o) => o.name.toLowerCase() === officeName.toLowerCase())
+      ?? allOffices.find((o) => o.name.toLowerCase().includes(officeName.toLowerCase()));
+
+    if (!office) {
+      await interaction.reply({
+        embeds: [errorEmbed(`Office "${officeName}" not found.`)],
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const [creator] = await db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.discordId, interaction.user.id))
+      .limit(1);
+
+    if (!creator) {
+      await interaction.reply({
+        embeds: [errorEmbed('You are not registered as a player.')],
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const now = new Date();
+    const nominationsCloseAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+    const votingClosesAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    let electionId: string;
+    try {
+      const [row] = await db
+        .insert(elections)
+        .values({
+          title: `Election: ${office.name}`,
+          type: 'position_election',
+          method,
+          config: { runoffEnabled: method === 'two_round_runoff', runoffThreshold: 0.5 } as any,
+          forOfficeId: office.id,
+          nominationsOpenAt: now,
+          nominationsCloseAt,
+          votingOpensAt: nominationsCloseAt,
+          votingClosesAt,
+          status: 'nominations_open',
+          createdById: creator.id,
+        })
+        .returning({ id: elections.id });
+      electionId = row.id;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create election';
+      await interaction.reply({ embeds: [errorEmbed(message)], ephemeral: true });
+      return;
+    }
 
     const embed = createEmbed({
-      title: `Position Election: ${officeName}`,
+      title: `Position Election: ${office.name}`,
       description: [
-        `A position election has been created for **${officeName}**.`,
+        `A position election has been created for **${office.name}**.`,
         '',
         `**Method:** ${method}`,
         `**Status:** Nominations Open`,
@@ -77,9 +135,10 @@ const command: Command = {
       ].join('\n'),
       system: 'voting',
       fields: [
-        { name: 'Office', value: officeName, inline: true },
+        { name: 'Office', value: office.name, inline: true },
         { name: 'Method', value: method, inline: true },
         { name: 'Status', value: 'Nominations Open', inline: true },
+        { name: 'Election ID', value: `\`${electionId}\``, inline: false },
       ],
     });
 

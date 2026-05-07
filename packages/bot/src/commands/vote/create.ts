@@ -10,8 +10,18 @@ import {
   type ModalSubmitInteraction,
   ComponentType,
 } from 'discord.js';
+import { eq } from 'drizzle-orm';
+import { elections, players } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { db } from '../../db.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
+
+const CHANCELLOR_ONLY_TYPES = new Set([
+  'legislative_vote',
+  'position_election',
+  'appointment_confirmation',
+]);
 
 /**
  * /vote create — opens a modal to create a new election or vote.
@@ -137,8 +147,22 @@ export async function handleVoteCreateModal(
 ): Promise<void> {
   const [, electionType, method, majority] = interaction.customId.split(':');
 
+  // Re-check permission for restricted types — modal submits don't re-run
+  // the slash command's permission logic.
+  if (CHANCELLOR_ONLY_TYPES.has(electionType)) {
+    const member = interaction.member;
+    const allowed = member && 'roles' in member ? await isStaff(member as any) : false;
+    if (!allowed) {
+      await interaction.reply({
+        embeds: [errorEmbed('Only the Chancellor or staff can create this type of vote.')],
+        ephemeral: true,
+      });
+      return;
+    }
+  }
+
   const title = interaction.fields.getTextInputValue('title');
-  const description = interaction.fields.getTextInputValue('description') || undefined;
+  const description = interaction.fields.getTextInputValue('description') || null;
   const durationStr = interaction.fields.getTextInputValue('duration') || '48';
   const durationHours = Math.max(1, parseInt(durationStr, 10) || 48);
 
@@ -158,8 +182,42 @@ export async function handleVoteCreateModal(
     config.runoffThreshold = 0.5;
   }
 
-  // TODO: Call the API to create the election.
-  // For now, send a confirmation embed with the details.
+  const [creator] = await db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.discordId, interaction.user.id))
+    .limit(1);
+
+  if (!creator) {
+    await interaction.reply({
+      embeds: [errorEmbed('You are not registered as a player. Run `/character create` first.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  let electionId: string;
+  try {
+    const [row] = await db
+      .insert(elections)
+      .values({
+        title,
+        description,
+        type: electionType,
+        method,
+        config: config as any,
+        votingOpensAt: now,
+        votingClosesAt,
+        status: 'voting_open',
+        createdById: creator.id,
+      })
+      .returning({ id: elections.id });
+    electionId = row.id;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to create election';
+    await interaction.reply({ embeds: [errorEmbed(message)], ephemeral: true });
+    return;
+  }
 
   const methodLabels: Record<string, string> = {
     yea_nay_abstain: 'Yea / Nay / Abstain',
@@ -195,6 +253,7 @@ export async function handleVoteCreateModal(
       ...(method === 'yea_nay_abstain'
         ? [{ name: 'Majority', value: majority.charAt(0).toUpperCase() + majority.slice(1), inline: true }]
         : []),
+      { name: 'Election ID', value: `\`${electionId}\``, inline: false },
     ],
   });
 

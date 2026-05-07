@@ -1,7 +1,7 @@
 import type { Database } from '@hansard/db';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { SessionCache } from '../auth/session.js';
+import { AuthExpiredError, type SessionCache } from '../auth/session.js';
 
 export interface ToolContext {
   db: Database;
@@ -29,6 +29,27 @@ export function errorResult(message: string): CallToolResult {
   return {
     content: [{ type: 'text', text: message }],
     isError: true,
+  };
+}
+
+/**
+ * Wrap a tool handler so expected errors (auth-expired, permission denied,
+ * service-layer throws) become structured MCP errors the LLM can read,
+ * rather than crashing the protocol with an unhandled rejection.
+ */
+export function safeHandler<Args, R extends CallToolResult = CallToolResult>(
+  fn: (args: Args) => Promise<R>,
+): (args: Args) => Promise<CallToolResult> {
+  return async (args: Args) => {
+    try {
+      return await fn(args);
+    } catch (err) {
+      if (err instanceof AuthExpiredError) {
+        return errorResult(err.message);
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResult(`Tool error: ${msg}`);
+    }
   };
 }
 

@@ -1,4 +1,4 @@
-import { exec } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 interface DeviceInitResponse {
   device_code: string;
@@ -80,15 +80,25 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Open the given URL in the user's default browser without going through a
+ * shell — `&` and other shell-active characters in the URL would otherwise
+ * be parsed by `cmd.exe` / `sh` even inside quotes. spawn() with array args
+ * passes them as a single argv slot, sidestepping shell parsing entirely.
+ *
+ * Detached + unref so the CLI can exit while the browser keeps running.
+ */
 function openInBrowser(url: string): void {
-  const cmd = process.platform === 'darwin'
-    ? `open ${quote(url)}`
-    : process.platform === 'win32'
-    ? `start "" ${quote(url)}`
-    : `xdg-open ${quote(url)}`;
-  exec(cmd, () => { /* best-effort; user can copy the URL manually */ });
-}
-
-function quote(s: string): string {
-  return `"${s.replace(/"/g, '\\"')}"`;
+  const opts = { detached: true, stdio: 'ignore' as const };
+  if (process.platform === 'win32') {
+    // The empty "" is the (unused) window title — required because the URL
+    // would otherwise be interpreted as the title.
+    spawn('cmd', ['/c', 'start', '""', url], { ...opts, windowsVerbatimArguments: true })
+      .on('error', () => { /* best-effort */ })
+      .unref();
+  } else if (process.platform === 'darwin') {
+    spawn('open', [url], opts).on('error', () => { /* best-effort */ }).unref();
+  } else {
+    spawn('xdg-open', [url], opts).on('error', () => { /* best-effort */ }).unref();
+  }
 }

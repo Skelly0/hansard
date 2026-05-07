@@ -1,6 +1,6 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
 import { deviceCodes, mcpTokens } from '@hansard/db';
 import '../types.js';
@@ -12,11 +12,14 @@ const DISCORD_AUTH_URL = 'https://discord.com/api/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/oauth2/token';
 
 const DEVICE_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const MCP_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days, sliding
+const MCP_TOKEN_SLIDING_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days, refreshed on use
+const MCP_TOKEN_ABSOLUTE_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 1 year hard cap
 const DEVICE_POLL_INTERVAL_S = 5;
 
 // Crockford-style alphabet (no I/O/0/1) so user codes are easy to read aloud.
 const USER_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+// 4-char block + dash + 4-char block, drawn from USER_CODE_ALPHABET.
+const USER_CODE_REGEX = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/;
 
 function generateUserCode(): string {
   const bytes = randomBytes(8);
@@ -32,6 +35,10 @@ function generateOpaqueToken(bytes = 32): string {
   return randomBytes(bytes).toString('hex');
 }
 
+function sha256Hex(input: string): string {
+  return createHash('sha256').update(input).digest('hex');
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     c === '&' ? '&amp;'
@@ -42,28 +49,41 @@ function escapeHtml(s: string): string {
   );
 }
 
+/**
+ * Resolve the public-facing base URL for device-flow links. Falls back to
+ * `request.protocol://request.hostname`, but production deployments should
+ * set PUBLIC_API_URL so we don't trust the Host header (which `trustProxy`
+ * lets clients control).
+ */
+function publicApiUrl(request: FastifyRequest): string {
+  const fromEnv = process.env.PUBLIC_API_URL;
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  return `${request.protocol}://${request.hostname}`;
+}
+
 export default fp(async function authPlugin(fastify: FastifyInstance) {
   const clientId = process.env.DISCORD_CLIENT_ID ?? '';
   const clientSecret = process.env.DISCORD_CLIENT_SECRET ?? '';
   const redirectUri = process.env.DISCORD_REDIRECT_URI ?? 'http://localhost:3001/api/auth/discord/callback';
 
-  // GET /api/auth/discord — redirect to Discord OAuth2
-  fastify.get('/api/auth/discord', async (request: FastifyRequest, reply: FastifyReply) => {
-    const { state } = request.query as { state?: string };
+  // GET /api/auth/discord — redirect to Discord OAuth2.
+  // We deliberately do NOT forward an attacker-controllable `state` parameter
+  // for device-flow handoff (see /api/auth/device). Device-flow context is
+  // carried server-side via `session.pendingDeviceUserCode` instead.
+  fastify.get('/api/auth/discord', async (_request: FastifyRequest, reply: FastifyReply) => {
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: 'identify guilds',
     });
-    if (state) params.set('state', state);
 
     return reply.redirect(`${DISCORD_AUTH_URL}?${params.toString()}`);
   });
 
   // GET /api/auth/discord/callback — handle OAuth2 callback
   fastify.get('/api/auth/discord/callback', async (request: FastifyRequest, reply: FastifyReply) => {
-    const { code, error, state } = request.query as { code?: string; error?: string; state?: string };
+    const { code, error } = request.query as { code?: string; error?: string };
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
     // Generic error redirect (covers access_denied, server_error, invalid_request, etc.)
@@ -129,11 +149,13 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
         permissions,
       };
 
-      // If this was a device-flow login, hop straight to the approval page
-      // with the user_code preserved (so the user doesn't have to retype it).
-      if (state && state.startsWith('device:')) {
-        const userCode = state.slice('device:'.length);
-        return reply.redirect(`/api/auth/device?user_code=${encodeURIComponent(userCode)}`);
+      // If a device-flow approval was pending in this session, hop straight
+      // to the approval page. We trust this only because it was set in the
+      // SAME session by the user's own click on /api/auth/device, not via
+      // any URL parameter the OAuth provider echoed back.
+      const pendingUserCode = request.session.pendingDeviceUserCode;
+      if (pendingUserCode && USER_CODE_REGEX.test(pendingUserCode)) {
+        return reply.redirect(`/api/auth/device?user_code=${encodeURIComponent(pendingUserCode)}`);
       }
 
       return reply.redirect(`${frontendUrl}/`);
@@ -166,13 +188,14 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
   // POST /api/auth/device/init — CLI calls this first; returns a pending pairing.
   fastify.post('/api/auth/device/init', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
-  }, async (request: FastifyRequest, reply: FastifyReply) => {
+  }, async (request: FastifyRequest, _reply: FastifyReply) => {
     const deviceCode = generateOpaqueToken(32);
+    const deviceCodeHash = sha256Hex(deviceCode);
     let userCode = generateUserCode();
     // Vanishingly rare collision retry — user_code has ~32^8 = 1.1e12 combos.
     for (let attempt = 0; attempt < 3; attempt++) {
       const existing = await fastify.db
-        .select({ deviceCode: deviceCodes.deviceCode })
+        .select({ deviceCodeHash: deviceCodes.deviceCodeHash })
         .from(deviceCodes)
         .where(eq(deviceCodes.userCode, userCode))
         .limit(1);
@@ -182,13 +205,13 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
 
     const expiresAt = new Date(Date.now() + DEVICE_CODE_TTL_MS);
     await fastify.db.insert(deviceCodes).values({
-      deviceCode,
+      deviceCodeHash,
       userCode,
       interval: DEVICE_POLL_INTERVAL_S,
       expiresAt,
     });
 
-    const apiBase = `${request.protocol}://${request.hostname}`;
+    const apiBase = publicApiUrl(request);
     const verificationUri = `${apiBase}/api/auth/device`;
     const verificationUriComplete = `${verificationUri}?user_code=${encodeURIComponent(userCode)}`;
 
@@ -203,17 +226,25 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
   });
 
   // GET /api/auth/device — browser-facing approval page.
-  // - Not logged in: bounce through Discord OAuth, preserving the user_code.
-  // - Logged in, GET: render confirmation page with an "Approve" button.
-  // - The Approve button POSTs back to the same path (handled below).
+  //
+  // The user_code is bound to the session immediately (not echoed through
+  // OAuth state), and the alphabet is validated up front to keep arbitrary
+  // strings from reaching the rendered <script>.
   fastify.get('/api/auth/device', async (request: FastifyRequest, reply: FastifyReply) => {
     const { user_code: userCode } = request.query as { user_code?: string };
-    if (!userCode) {
-      return reply.status(400).type('text/html').send(renderErrorPage('Missing user_code in URL.'));
+    if (!userCode || !USER_CODE_REGEX.test(userCode)) {
+      return reply.status(400).type('text/html').send(renderErrorPage(
+        'Missing or malformed pairing code. Open the URL printed by <code>hansard-mcp login</code>.',
+      ));
     }
 
+    // Bind the pairing to the session before any redirect — that way the
+    // post-Discord-OAuth callback only honours codes this same browser
+    // initiated, not codes an attacker injected via an OAuth `state` param.
+    request.session.pendingDeviceUserCode = userCode;
+
     if (!request.session.user) {
-      return reply.redirect(`/api/auth/discord?state=${encodeURIComponent(`device:${userCode}`)}`);
+      return reply.redirect('/api/auth/discord');
     }
 
     const [pairing] = await fastify.db
@@ -240,17 +271,29 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
   });
 
   // POST /api/auth/device — Approve button target (JSON fetch from the page).
-  // Marks the row approved and binds the player_id from the current session.
+  //
+  // Three layers of CSRF defense:
+  //   1. The pairing's user_code is read from the session, not the body, so
+  //      an attacker who can forge a request can't choose which pairing to
+  //      approve.
+  //   2. Custom header `X-Hansard-Device-Approve: 1` is required. Browsers
+  //      can't send custom headers on a cross-origin request without a
+  //      CORS preflight, which our origin allowlist denies.
+  //   3. The DB update is gated on `approved=false` so a single approval
+  //      can't be replayed to re-bind a different player.
   fastify.post('/api/auth/device', async (request: FastifyRequest, reply: FastifyReply) => {
     const sessionUser = request.session.user;
     if (!sessionUser) {
       return reply.status(401).send({ error: 'Session expired' });
     }
 
-    const body = request.body as { user_code?: string };
-    const userCode = body?.user_code;
-    if (!userCode) {
-      return reply.status(400).send({ error: 'Missing user_code' });
+    if (request.headers['x-hansard-device-approve'] !== '1') {
+      return reply.status(403).send({ error: 'Missing CSRF guard header' });
+    }
+
+    const userCode = request.session.pendingDeviceUserCode;
+    if (!userCode || !USER_CODE_REGEX.test(userCode)) {
+      return reply.status(400).send({ error: 'No pending pairing on this session' });
     }
 
     const [pairing] = await fastify.db
@@ -260,66 +303,105 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
       .limit(1);
 
     if (!pairing) {
+      request.session.pendingDeviceUserCode = undefined;
       return reply.status(404).send({ error: 'Pairing not found' });
     }
     if (pairing.expiresAt.getTime() < Date.now()) {
+      request.session.pendingDeviceUserCode = undefined;
       return reply.status(410).send({ error: 'Pairing expired' });
     }
+    if (pairing.approved) {
+      request.session.pendingDeviceUserCode = undefined;
+      return reply.status(409).send({ error: 'Pairing already approved' });
+    }
 
-    await fastify.db
+    // Single-shot approval: only succeeds if the row is still `approved=false`.
+    const updated = await fastify.db
       .update(deviceCodes)
       .set({ approved: true, playerId: sessionUser.id })
-      .where(eq(deviceCodes.deviceCode, pairing.deviceCode));
+      .where(and(eq(deviceCodes.deviceCodeHash, pairing.deviceCodeHash), eq(deviceCodes.approved, false)))
+      .returning({ deviceCodeHash: deviceCodes.deviceCodeHash });
 
+    if (updated.length === 0) {
+      request.session.pendingDeviceUserCode = undefined;
+      return reply.status(409).send({ error: 'Pairing already approved' });
+    }
+
+    request.session.pendingDeviceUserCode = undefined;
     return { success: true, username: sessionUser.username };
   });
 
   // POST /api/auth/device/poll — CLI polls until the row is approved, then
-  // the row is rotated into mcp_tokens and the bearer is returned.
+  // the row is rotated into mcp_tokens (transactionally, exactly once) and
+  // the bearer is returned.
   fastify.post('/api/auth/device/poll', {
     config: { rateLimit: { max: 240, timeWindow: '1 minute' } },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as { device_code?: string };
     const deviceCode = body?.device_code;
-    if (!deviceCode) {
+    if (!deviceCode || typeof deviceCode !== 'string') {
       return reply.status(400).send({ error: 'Missing device_code' });
     }
+    const deviceCodeHash = sha256Hex(deviceCode);
 
+    // Pre-check outside the txn so we can reply 'pending' without a write.
     const [pairing] = await fastify.db
       .select()
       .from(deviceCodes)
-      .where(eq(deviceCodes.deviceCode, deviceCode))
+      .where(eq(deviceCodes.deviceCodeHash, deviceCodeHash))
       .limit(1);
 
     if (!pairing) {
       return reply.status(404).send({ status: 'expired' });
     }
     if (pairing.expiresAt.getTime() < Date.now()) {
-      await fastify.db.delete(deviceCodes).where(eq(deviceCodes.deviceCode, deviceCode));
+      await fastify.db.delete(deviceCodes).where(eq(deviceCodes.deviceCodeHash, deviceCodeHash));
       return reply.status(410).send({ status: 'expired' });
     }
     if (!pairing.approved || !pairing.playerId) {
       return { status: 'pending' };
     }
 
-    // Approved → rotate into mcp_tokens, then delete the device-code row.
+    // Approved — rotate the row exactly once. The DELETE returns the row
+    // only if it was still present, so two concurrent pollers can't both
+    // succeed in inserting a token.
     const token = generateOpaqueToken(32);
+    const tokenHash = sha256Hex(token);
     const now = new Date();
-    await fastify.db.insert(mcpTokens).values({
-      token,
-      playerId: pairing.playerId,
-      createdAt: now,
-      lastUsedAt: now,
-      expiresAt: new Date(now.getTime() + MCP_TOKEN_TTL_MS),
-    });
-    await fastify.db.delete(deviceCodes).where(eq(deviceCodes.deviceCode, deviceCode));
+    const playerId = pairing.playerId;
 
-    return { status: 'approved', token, player_id: pairing.playerId };
+    const issued = await fastify.db.transaction(async (tx) => {
+      const deleted = await tx
+        .delete(deviceCodes)
+        .where(and(
+          eq(deviceCodes.deviceCodeHash, deviceCodeHash),
+          eq(deviceCodes.approved, true),
+        ))
+        .returning({ playerId: deviceCodes.playerId });
+
+      if (deleted.length === 0 || !deleted[0].playerId) return false;
+
+      await tx.insert(mcpTokens).values({
+        tokenHash,
+        playerId: deleted[0].playerId,
+        createdAt: now,
+        lastUsedAt: now,
+        expiresAt: new Date(now.getTime() + MCP_TOKEN_SLIDING_TTL_MS),
+        absoluteExpiresAt: new Date(now.getTime() + MCP_TOKEN_ABSOLUTE_TTL_MS),
+      });
+      return true;
+    });
+
+    if (!issued) {
+      // Lost the race to a sibling poll. The other poller got the token; we
+      // return 'expired' so the CLI knows to bail rather than retry forever.
+      return reply.status(410).send({ status: 'expired' });
+    }
+
+    return { status: 'approved', token, player_id: playerId };
   });
 
   // GET /api/auth/mcp/me — bearer-auth identity + permissions for the MCP server.
-  // Mirrors /api/auth/me's payload (minus avatar/discordId, since those aren't
-  // useful to the LLM client).
   fastify.get('/api/auth/mcp/me', { preHandler: requireMcpToken }, async (request: FastifyRequest) => {
     const player = request.player!;
     const permissions = await aggregatePermissionsForPlayer(fastify.db, player.id);
@@ -338,7 +420,7 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
   fastify.post('/api/auth/mcp/revoke', { preHandler: requireMcpToken }, async (request: FastifyRequest) => {
     const authHeader = request.headers.authorization!;
     const token = authHeader.slice('Bearer '.length).trim();
-    await fastify.db.delete(mcpTokens).where(eq(mcpTokens.token, token));
+    await fastify.db.delete(mcpTokens).where(eq(mcpTokens.tokenHash, sha256Hex(token)));
     return { success: true };
   });
 }, { name: 'auth' });
@@ -362,46 +444,58 @@ function pageShell(title: string, body: string): string {
   .codeblock { display: inline-block; font-size: 1.4rem; letter-spacing: 0.1em; padding: 0.6rem 1rem; margin: 0.5rem 0 1.5rem; }
   button { font-family: inherit; font-size: 1rem; padding: 0.6rem 1.4rem; background: #b94a48; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
   button:hover { background: #a23f3d; }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
   .muted { color: #7a6f63; font-size: 0.9rem; }
+  .warn { background: #fdf2dc; border-left: 3px solid #d4a72c; padding: 0.6rem 0.9rem; margin: 1rem 0; font-size: 0.95rem; }
 </style>
 </head><body><div class="card">${body}</div></body></html>`;
 }
 
 function renderConfirmPage(userCode: string, username: string): string {
+  // userCode has already been validated against USER_CODE_REGEX by the
+  // GET handler, so it's safe to interpolate; we still escape defensively.
   const safeCode = escapeHtml(userCode);
   return pageShell('Approve MCP access', `
     <h1>Approve Hansard MCP access</h1>
-    <p>An external LLM client is asking to act on your behalf as <strong>${escapeHtml(username)}</strong>. The pairing code shown by the CLI is:</p>
+    <p>Logged in as <strong>${escapeHtml(username)}</strong>. The pairing code on this page should match the one printed by your CLI:</p>
     <p class="code codeblock">${safeCode}</p>
-    <p>Approving will grant a 90-day token that can call read-only Hansard tools as you. You can revoke it any time with <code>hansard-mcp logout</code>.</p>
+    <div class="warn">
+      <strong>Only approve if you ran <code>hansard-mcp login</code> yourself</strong> and the codes match.
+      Anyone with this token can read Hansard data as you for up to 90 days.
+    </div>
     <button id="approve-btn" type="button">Approve</button>
     <p id="status" class="muted" style="margin-top:1.5rem"></p>
-    <p class="muted" style="margin-top:2rem">If you didn't start this, just close this tab — the CLI will time out and nothing happens.</p>
     <script>
-      const btn = document.getElementById('approve-btn');
-      const status = document.getElementById('status');
-      btn.addEventListener('click', async () => {
-        btn.disabled = true;
-        status.textContent = 'Approving…';
-        try {
-          const res = await fetch('/api/auth/device', {
+      (function () {
+        var btn = document.getElementById('approve-btn');
+        var status = document.getElementById('status');
+        btn.addEventListener('click', function () {
+          btn.disabled = true;
+          status.textContent = 'Approving…';
+          fetch('/api/auth/device', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Hansard-Device-Approve': '1'
+            },
             credentials: 'same-origin',
-            body: JSON.stringify({ user_code: ${JSON.stringify(userCode)} }),
-          });
-          const data = await res.json();
-          if (res.ok && data.success) {
-            document.querySelector('.card').innerHTML = '<h1>Approved</h1><p>Approved as <strong>' + (data.username || '') + '</strong>. You can close this tab — the CLI will pick up automatically.</p>';
-          } else {
-            status.textContent = data.error || 'Something went wrong.';
+            body: '{}'
+          }).then(function (res) {
+            return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+          }).then(function (r) {
+            if (r.ok && r.data.success) {
+              document.querySelector('.card').innerHTML =
+                '<h1>Approved</h1><p>The CLI will pick up automatically. You can close this tab.</p>';
+            } else {
+              status.textContent = (r.data && r.data.error) || 'Something went wrong.';
+              btn.disabled = false;
+            }
+          }).catch(function (err) {
+            status.textContent = 'Network error: ' + (err && err.message ? err.message : err);
             btn.disabled = false;
-          }
-        } catch (err) {
-          status.textContent = 'Network error: ' + err.message;
-          btn.disabled = false;
-        }
-      });
+          });
+        });
+      })();
     </script>
   `);
 }

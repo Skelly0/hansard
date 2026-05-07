@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { getBill, getBillByNumber, listBills, searchBills } from '@hansard/api/services/billService';
-import { jsonResult, errorResult, type RegisterToolsFn } from './types.js';
+import { BillStatus } from '@hansard/shared';
+import { jsonResult, errorResult, safeHandler, type RegisterToolsFn } from './types.js';
+
+const BILL_STATUS_VALUES = Object.values(BillStatus) as [string, ...string[]];
 
 export const registerBillTools: RegisterToolsFn = (server, ctx) => {
   server.registerTool(
@@ -8,7 +11,9 @@ export const registerBillTools: RegisterToolsFn = (server, ctx) => {
     {
       description: 'List bills with optional filters by status, author, policy area, or tags. Newest first.',
       inputSchema: {
-        status: z.string().optional().describe('e.g. "draft", "submitted", "voting", "passed", "enacted", "repealed".'),
+        status: z.enum(BILL_STATUS_VALUES).optional().describe(
+          'One of: ' + BILL_STATUS_VALUES.join(', '),
+        ),
         authorId: z.string().uuid().optional(),
         policyArea: z.string().optional(),
         tags: z.array(z.string()).optional(),
@@ -16,10 +21,10 @@ export const registerBillTools: RegisterToolsFn = (server, ctx) => {
         offset: z.number().int().min(0).optional(),
       },
     },
-    async (args) => {
-      const result = await listBills(ctx.db, args);
+    safeHandler(async (args) => {
+      const result = await listBills(ctx.db, args as Parameters<typeof listBills>[1]);
       return jsonResult(result);
-    },
+    }),
   );
 
   server.registerTool(
@@ -31,7 +36,7 @@ export const registerBillTools: RegisterToolsFn = (server, ctx) => {
         billNumber: z.number().int().positive().optional(),
       },
     },
-    async ({ slug, billNumber }) => {
+    safeHandler(async ({ slug, billNumber }) => {
       if (!slug && billNumber == null) {
         return errorResult('Provide either `slug` or `billNumber`.');
       }
@@ -40,7 +45,7 @@ export const registerBillTools: RegisterToolsFn = (server, ctx) => {
         : await getBillByNumber(ctx.db, billNumber!);
       if (!bill) return errorResult('Bill not found.');
       return jsonResult(bill);
-    },
+    }),
   );
 
   server.registerTool(
@@ -53,9 +58,9 @@ export const registerBillTools: RegisterToolsFn = (server, ctx) => {
         offset: z.number().int().min(0).optional(),
       },
     },
-    async ({ query, limit, offset }) => {
+    safeHandler(async ({ query, limit, offset }) => {
       const result = await searchBills(ctx.db, query, limit, offset);
       return jsonResult(result);
-    },
+    }),
   );
 };

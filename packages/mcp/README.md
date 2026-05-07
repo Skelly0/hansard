@@ -111,5 +111,16 @@ webapp and bot.
 - **Permission freshness is 5 minutes.** Office changes (new appointments etc.)
   take up to one cache cycle to propagate to the MCP server. Restart the
   server (or wait) if you need an immediate update.
-- **Tokens last 90 days, sliding.** Every authenticated call refreshes the
-  expiry. Stale tokens are auto-cleaned on the next failed call.
+- **Tokens** last 90 days sliding (refreshed on use) with a hard 1-year cap.
+  They're stored as a sha-256 hash on the server, so a DB read leak doesn't
+  expose live bearers.
+
+## Server-side env (production)
+
+The API needs `PUBLIC_API_URL` set in production so device-flow links don't
+trust the `Host` header (which a `trustProxy: true` Fastify will otherwise
+reflect). Example:
+
+```
+PUBLIC_API_URL=https://api.hansard.example
+```

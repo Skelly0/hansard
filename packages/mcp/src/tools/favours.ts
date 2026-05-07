@@ -5,7 +5,7 @@ import {
   getLeaderboard,
   getHistory,
 } from '@hansard/api/services/favourService';
-import { jsonResult, type RegisterToolsFn } from './types.js';
+import { jsonResult, safeHandler, type RegisterToolsFn } from './types.js';
 
 export const registerFavourTools: RegisterToolsFn = (server, ctx) => {
   server.registerTool(
@@ -14,10 +14,10 @@ export const registerFavourTools: RegisterToolsFn = (server, ctx) => {
       description: 'List the configured favour categories (e.g. political capital, social capital).',
       inputSchema: {},
     },
-    async () => {
+    safeHandler(async () => {
       const categories = await getCategories(ctx.db);
       return jsonResult({ count: categories.length, categories });
-    },
+    }),
   );
 
   server.registerTool(
@@ -28,12 +28,12 @@ export const registerFavourTools: RegisterToolsFn = (server, ctx) => {
         historyLimit: z.number().int().min(0).max(200).optional().describe('How many recent transactions to include. Default 20.'),
       },
     },
-    async ({ historyLimit }) => {
+    safeHandler(async ({ historyLimit }) => {
       const session = await ctx.session.get();
       const balances = await getPlayerBalances(ctx.db, session.playerId);
       const history = await getHistory(ctx.db, session.playerId, { limit: historyLimit ?? 20 });
       return jsonResult({ playerId: session.playerId, balances, history });
-    },
+    }),
   );
 
   server.registerTool(
@@ -45,9 +45,9 @@ export const registerFavourTools: RegisterToolsFn = (server, ctx) => {
         limit: z.number().int().min(1).max(50).optional().describe('Default 20.'),
       },
     },
-    async ({ categoryId, limit }) => {
+    safeHandler(async ({ categoryId, limit }) => {
       const rows = await getLeaderboard(ctx.db, categoryId, limit);
       return jsonResult({ count: rows.length, leaderboard: rows });
-    },
+    }),
   );
 };

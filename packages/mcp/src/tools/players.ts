@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { getPlayer, listPlayers } from '@hansard/api/services/playerService';
-import { jsonResult, errorResult, type RegisterToolsFn } from './types.js';
+import { jsonResult, errorResult, safeHandler, type RegisterToolsFn } from './types.js';
 
 export const registerPlayerTools: RegisterToolsFn = (server, ctx) => {
   server.registerTool(
@@ -9,12 +9,12 @@ export const registerPlayerTools: RegisterToolsFn = (server, ctx) => {
       description: 'Get the authenticated user\'s own player profile (character info, party, faction, age, health, staff status).',
       inputSchema: {},
     },
-    async () => {
+    safeHandler(async () => {
       const session = await ctx.session.get();
       const player = await getPlayer(ctx.db, session.playerId);
       if (!player) return errorResult('Your player record was not found.');
       return jsonResult(player);
-    },
+    }),
   );
 
   server.registerTool(
@@ -25,11 +25,11 @@ export const registerPlayerTools: RegisterToolsFn = (server, ctx) => {
         id: z.string().uuid().describe('Internal player UUID (not Discord snowflake).'),
       },
     },
-    async ({ id }) => {
+    safeHandler(async ({ id }) => {
       const player = await getPlayer(ctx.db, id);
       if (!player) return errorResult(`No player found with id ${id}.`);
       return jsonResult(player);
-    },
+    }),
   );
 
   server.registerTool(
@@ -47,9 +47,9 @@ export const registerPlayerTools: RegisterToolsFn = (server, ctx) => {
         offset: z.number().int().min(0).optional(),
       },
     },
-    async (args) => {
+    safeHandler(async (args) => {
       const players = await listPlayers(ctx.db, args);
       return jsonResult({ count: players.length, players });
-    },
+    }),
   );
 };

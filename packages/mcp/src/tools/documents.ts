@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { getDocument, listDocuments, searchDocuments } from '@hansard/api/services/documentService';
-import { jsonResult, errorResult, type RegisterToolsFn } from './types.js';
+import { jsonResult, errorResult, safeHandler, type RegisterToolsFn } from './types.js';
 
 export const registerDocumentTools: RegisterToolsFn = (server, ctx) => {
   server.registerTool(
@@ -16,10 +16,10 @@ export const registerDocumentTools: RegisterToolsFn = (server, ctx) => {
         offset: z.number().int().min(0).optional(),
       },
     },
-    async (args) => {
-      const result = await listDocuments(ctx.db, args);
+    safeHandler(async (args) => {
+      const result = await listDocuments(ctx.db, args as Parameters<typeof listDocuments>[1]);
       return jsonResult(result);
-    },
+    }),
   );
 
   server.registerTool(
@@ -28,11 +28,11 @@ export const registerDocumentTools: RegisterToolsFn = (server, ctx) => {
       description: 'Fetch a single document by slug, including its full current content.',
       inputSchema: { slug: z.string().min(1) },
     },
-    async ({ slug }) => {
+    safeHandler(async ({ slug }) => {
       const doc = await getDocument(ctx.db, slug);
       if (!doc) return errorResult(`No document with slug "${slug}".`);
       return jsonResult(doc);
-    },
+    }),
   );
 
   server.registerTool(
@@ -46,9 +46,9 @@ export const registerDocumentTools: RegisterToolsFn = (server, ctx) => {
         offset: z.number().int().min(0).optional(),
       },
     },
-    async ({ query, collectionId, limit, offset }) => {
+    safeHandler(async ({ query, collectionId, limit, offset }) => {
       const result = await searchDocuments(ctx.db, query, collectionId, limit, offset);
       return jsonResult(result);
-    },
+    }),
   );
 };

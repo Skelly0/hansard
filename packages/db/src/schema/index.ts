@@ -5,3 +5,4 @@ export * from './laws';
 export * from './voting';
 export * from './moderation';
 export * from './favours';
+export * from './mcpAuth';

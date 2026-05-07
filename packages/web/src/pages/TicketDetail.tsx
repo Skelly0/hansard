@@ -20,7 +20,7 @@ type Priority = (typeof PRIORITIES)[number];
 export function TicketDetail() {
   const { id } = useParams({ strict: false }) as { id: string };
   const { user, isStaff } = useAuth();
-  const { data: ticket, isLoading } = useTicket(id);
+  const { data: ticket, isLoading, isError } = useTicket(id);
   const addMessage = useAddTicketMessage();
   const updateTicket = useUpdateTicket();
   const closeTicket = useCloseTicket();
@@ -28,7 +28,24 @@ export function TicketDetail() {
   const [newMessage, setNewMessage] = useState('');
   const [isInternal, setIsInternal] = useState(false);
 
-  if (isLoading || !ticket) return <PageSkeleton />;
+  if (isLoading) return <PageSkeleton />;
+  if (isError || !ticket) {
+    return (
+      <div className="p-8 max-w-4xl">
+        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
+          <Link to="/tickets" className="hover:text-accent-primary transition-colors">Tickets</Link>
+          <span>/</span>
+          <span className="font-mono">{id}</span>
+        </div>
+        <div className="card border-l-status-rejected">
+          <h1 className="text-heading-1 text-text-primary mb-2">Ticket not found</h1>
+          <p className="text-body text-text-secondary">
+            We couldn&rsquo;t load this ticket. It may have been removed, closed to you, or the link may be wrong.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const isCreator = ticket.createdById === user?.id;
   const canClose = isStaff || isCreator;

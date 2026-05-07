@@ -53,11 +53,28 @@ function formatDate(iso?: string): string {
 
 export function CharacterDossier() {
   const { id } = useParams({ strict: false }) as { id: string };
-  const { data: player, isLoading } = usePlayer(id);
+  const { data: player, isLoading, isError } = usePlayer(id);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [bioExpanded, setBioExpanded] = useState(false);
 
-  if (isLoading || !player) return <PageSkeleton />;
+  if (isLoading) return <PageSkeleton />;
+  if (isError || !player) {
+    return (
+      <div className="p-8">
+        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
+          <Link to="/players" className="hover:text-accent-primary transition-colors">Players</Link>
+          <span>/</span>
+          <span className="font-mono">{id}</span>
+        </div>
+        <div className="card border-l-status-rejected">
+          <h1 className="text-heading-1 text-text-primary mb-2">Character not found</h1>
+          <p className="text-body text-text-secondary">
+            We couldn&rsquo;t load this dossier. The character may have been removed, or the link may be wrong.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const displayName = player.characterName || player.discordUsername;
   const isDeceased = !player.isAlive;

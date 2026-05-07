@@ -74,12 +74,29 @@ const methodLabel: Record<string, string> = {
 export function ElectionDetail() {
   const { id } = useParams({ strict: false }) as { id: string };
   const { isStaff } = useAuth();
-  const { data: election, isLoading } = useElection(id);
+  const { data: election, isLoading, isError } = useElection(id);
   const { data: results } = useElectionResults(id);
   const { data: rounds } = useElectionRounds(id);
   const { data: turnout } = useElectionTurnout(id);
 
-  if (isLoading || !election) return <PageSkeleton />;
+  if (isLoading) return <PageSkeleton />;
+  if (isError || !election) {
+    return (
+      <div className="p-8">
+        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
+          <Link to="/voting" className="hover:text-accent-primary transition-colors">Voting</Link>
+          <span>/</span>
+          <span className="font-mono">{id}</span>
+        </div>
+        <div className="card border-l-status-rejected">
+          <h1 className="text-heading-1 text-text-primary mb-2">Election not found</h1>
+          <p className="text-body text-text-secondary">
+            We couldn&rsquo;t load this election. It may have been removed, or the link may be wrong.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const stageIndex = getElectionStageIndex(election.status);
   const isYeaNay = election.method === 'yea_nay_abstain';

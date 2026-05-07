@@ -16,6 +16,7 @@ import {
 } from '../api/hooks/useVoting';
 import { useAuth } from '../api/hooks/useAuth';
 import { useSearchPlayers } from '../api/hooks/usePlayers';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { StatusTimeline } from '../components/shared/StatusTimeline';
 import { ResultsBars, MultiRoundBars } from '../components/shared/ResultsBars';
@@ -74,12 +75,29 @@ const methodLabel: Record<string, string> = {
 export function ElectionDetail() {
   const { id } = useParams({ strict: false }) as { id: string };
   const { isStaff } = useAuth();
-  const { data: election, isLoading } = useElection(id);
+  const { data: election, isLoading, isError } = useElection(id);
   const { data: results } = useElectionResults(id);
   const { data: rounds } = useElectionRounds(id);
   const { data: turnout } = useElectionTurnout(id);
 
-  if (isLoading || !election) return <PageSkeleton />;
+  if (isLoading) return <PageSkeleton />;
+  if (isError || !election) {
+    return (
+      <div className="p-8">
+        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
+          <Link to="/voting" className="hover:text-accent-primary transition-colors">Voting</Link>
+          <span>/</span>
+          <span className="font-mono">{id}</span>
+        </div>
+        <div className="card border-l-status-rejected">
+          <h1 className="text-heading-1 text-text-primary mb-2">Election not found</h1>
+          <p className="text-body text-text-secondary">
+            We couldn&rsquo;t load this election. It may have been removed, or the link may be wrong.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const stageIndex = getElectionStageIndex(election.status);
   const isYeaNay = election.method === 'yea_nay_abstain';
@@ -414,19 +432,17 @@ export function ElectionDetail() {
             </div>
           )}
 
-          {/* Related bill */}
+          {/* Related bill — relatedBillId is a UUID, not a slug; until the API
+              returns a slug we can't link reliably, so show the id as text. */}
           {election.relatedBillId && (
             <div>
               <h3 className="text-heading-2 text-text-secondary mb-3">Related Bill</h3>
-              <Link
-                to="/bills/$slug"
-                params={{ slug: election.relatedBillId }}
-                className="card border-l-accent-bills block hover:border-border transition-colors"
-              >
-                <span className="text-body-sm text-accent-primary hover:underline">
-                  View related bill &rarr;
-                </span>
-              </Link>
+              <div className="card border-l-accent-bills">
+                <p className="text-body-sm text-text-secondary">Linked bill</p>
+                <p className="font-mono text-xs text-text-tertiary mt-1 break-all">
+                  {election.relatedBillId}
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -681,7 +697,8 @@ function AddCandidateButton({ electionId }: { electionId: string }) {
   const [statement, setStatement] = useState('');
   const [error, setError] = useState<string | null>(null);
   const register = useRegisterCandidate();
-  const { data: searchResults } = useSearchPlayers(search);
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const { data: searchResults } = useSearchPlayers(debouncedSearch);
 
   const submit = async () => {
     setError(null);

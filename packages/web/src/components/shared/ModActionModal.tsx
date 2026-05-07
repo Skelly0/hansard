@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchPlayers } from '../../api/hooks/usePlayers';
 import { useCreateModAction } from '../../api/hooks/useModeration';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { PlayerAvatar } from './PlayerAvatar';
 
 type ModType = 'warn' | 'mute' | 'suspend';
@@ -60,7 +61,8 @@ export function ModActionModal({ type, onClose }: ModActionModalProps) {
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  const { data: searchResults } = useSearchPlayers(search);
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const { data: searchResults } = useSearchPlayers(debouncedSearch);
   const createAction = useCreateModAction();
 
   useEffect(() => {

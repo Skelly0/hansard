@@ -130,7 +130,7 @@ export interface DocumentDiff {
   toContent: string;
 }
 
-/** Fetch a diff between two versions of a document */
+/** Fetch a diff between two versions of a document. `to` omitted means latest. */
 export function useDocumentDiff(slug?: string, from?: number, to?: number) {
   const params = new URLSearchParams();
   if (from !== undefined) params.set('from', String(from));
@@ -139,7 +139,7 @@ export function useDocumentDiff(slug?: string, from?: number, to?: number) {
   return useQuery({
     queryKey: ['documents', slug, 'diff', from, to],
     queryFn: () => api.get<DocumentDiff>(`/documents/${slug}/diff${qs ? `?${qs}` : ''}`),
-    enabled: !!slug && from !== undefined && to !== undefined,
+    enabled: !!slug && from !== undefined,
   });
 }
 

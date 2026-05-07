@@ -95,12 +95,10 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<v
     return;
   }
 
-  // Unhandled modal — acknowledge gracefully
+  // Unhandled modal — log and bow out. Any command using `awaitModalSubmit`
+  // also receives this event; replying here would race the awaiter and
+  // cause its `deferReply()` to fail with `Unknown interaction` (10062).
   console.log(`Unhandled modal submission: ${interaction.customId}`);
-  await interaction.reply({
-    embeds: [errorEmbed('This modal is not yet implemented.')],
-    ephemeral: true,
-  });
 }
 
 async function handleSelectMenu(interaction: StringSelectMenuInteraction): Promise<void> {

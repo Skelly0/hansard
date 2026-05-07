@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, integer, boolean, timestamp, jsonb, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, integer, boolean, timestamp, jsonb, uniqueIndex, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { players, offices, parties } from './players';
 
 export const elections = pgTable('elections', {
@@ -134,7 +134,7 @@ export const elections = pgTable('elections', {
   discordChannelId: varchar('discord_channel_id', { length: 20 }),
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
 export const candidates = pgTable('candidates', {
@@ -166,7 +166,6 @@ export const ballots = pgTable('ballots', {
   >().notNull(),
 
   castAt: timestamp('cast_at').defaultNow().notNull(),
-
-  // Ensure one vote per person per election
-  // unique index on (electionId, voterId)
-});
+}, (table) => ({
+  electionVoterUnique: uniqueIndex('ballots_election_voter_unique').on(table.electionId, table.voterId),
+}));

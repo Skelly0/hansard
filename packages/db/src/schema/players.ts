@@ -12,8 +12,8 @@ export const players = pgTable('players', {
   characterPortraitUrl: varchar('character_portrait_url', { length: 512 }),
   // Player uploads an image to Discord or provides a URL. Stored for display in webapp/embeds.
 
-  factionId: uuid('faction_id').references((): AnyPgColumn => factions.id),
-  partyId: uuid('party_id').references((): AnyPgColumn => parties.id),
+  factionId: uuid('faction_id').references((): AnyPgColumn => factions.id, { onDelete: 'set null' }),
+  partyId: uuid('party_id').references((): AnyPgColumn => parties.id, { onDelete: 'set null' }),
 
   // === AGING & LIFECYCLE ===
   birthDate: varchar('birth_date', { length: 32 }),     // in-sim date
@@ -147,7 +147,7 @@ export const offices = pgTable('offices', {
 
 export const officeHolders = pgTable('office_holders', {
   id: uuid('id').primaryKey().defaultRandom(),
-  officeId: uuid('office_id').references(() => offices.id).notNull(),
+  officeId: uuid('office_id').references(() => offices.id, { onDelete: 'cascade' }).notNull(),
   playerId: uuid('player_id').references(() => players.id).notNull(),
   startDate: timestamp('start_date').defaultNow().notNull(),
   endDate: timestamp('end_date'),

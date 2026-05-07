@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, integer, boolean, timestamp, serial, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, integer, boolean, timestamp, serial, jsonb, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { players } from './players';
 
 export const ticketCategories = pgTable('ticket_categories', {
@@ -54,7 +54,7 @@ export const tickets = pgTable('tickets', {
   priority: varchar('priority', { length: 16 }).default('normal').notNull(),  // low, normal, high, urgent
 
   // Relationships
-  parentTicketId: uuid('parent_ticket_id').references((): any => tickets.id),
+  parentTicketId: uuid('parent_ticket_id').references((): AnyPgColumn => tickets.id, { onDelete: 'set null' }),
   linkedTicketIds: jsonb('linked_ticket_ids').$type<string[]>().default([]),
 
   // Discord
@@ -63,7 +63,7 @@ export const tickets = pgTable('tickets', {
 
   // Timestamps
   createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
   firstResponseAt: timestamp('first_response_at'),
   resolvedAt: timestamp('resolved_at'),
   closedAt: timestamp('closed_at'),

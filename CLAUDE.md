@@ -45,7 +45,7 @@ Node.js 20+, TypeScript, pnpm workspaces, PostgreSQL 16, Drizzle ORM, discord.js
 
 ## Bot Command Surface (recent additions)
 
-Document admin (`/document-create`, `/document-edit`, `/document-restore`), bulk favour grants (`/favour-grant-bulk` filtered by party or office), global event timeline (`/sim-events`), moderation appeal review (`/mod appeal-list`, `/mod appeal-review`), staff player administration (`/player-admin character-create`, `/player-admin change-party`), and faction administration (`/faction-create`, `/faction-list`, `/faction-info`, `/faction-edit`, `/faction-dissolve`).
+Document admin (`/document-create`, `/document-edit`, `/document-restore`), bulk favour grants (`/favour-grant-bulk` filtered by party or office), global event timeline (`/sim-events`), moderation appeal review (`/mod appeal-list`, `/mod appeal-review`), staff player administration (`/player-admin character-create`, `/player-admin change-party`), and faction administration (`/faction create|list|info|edit|dissolve`).
 
 ## Full Spec
 

@@ -98,7 +98,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
   // ----------------------------------------------------------
   fastify.post<{ Body: CreateCharacterInput }>(
     '/api/players/create',
-    { preHandler: [requireAuth] },
+    { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
       const body = request.body;
 
@@ -151,6 +151,11 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { id } = request.params;
       const body = request.body;
+      const user = request.session.user!;
+
+      if (id !== user.id && !user.isStaff) {
+        return reply.status(403).send({ error: 'Cannot edit another player’s character' });
+      }
 
       if (!body.characterBio && !body.characterPortraitUrl && !body.characterName) {
         return reply.status(400).send({
@@ -182,7 +187,15 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth] },
     async (request, reply) => {
       const { id } = request.params;
-      const { partyId, triggeredById } = request.body;
+      const { partyId } = request.body;
+      const user = request.session.user!;
+
+      if (id !== user.id && !user.isStaff) {
+        return reply.status(403).send({ error: 'Cannot change another player’s party' });
+      }
+
+      // Always derive triggeredById from session — never trust the client.
+      const triggeredById = user.id;
 
       if (!partyId) {
         // If no partyId provided, treat as leaving party

@@ -54,43 +54,48 @@ export interface OfficeDetail extends OfficeWithHolder {
 
 /**
  * List all offices with their current holders.
+ *
+ * Single LEFT JOIN query — collect rows, then group in JS to avoid an N+1
+ * fetch over offices.
  */
 export async function listOffices(db: Database): Promise<OfficeWithHolder[]> {
-  const allOffices = await db
-    .select()
+  const rows = await db
+    .select({
+      office: offices,
+      holder: officeHolders,
+      playerName: players.characterName,
+      discordUsername: players.discordUsername,
+    })
     .from(offices)
+    .leftJoin(
+      officeHolders,
+      and(
+        eq(officeHolders.officeId, offices.id),
+        isNull(officeHolders.endDate),
+      ),
+    )
+    .leftJoin(players, eq(officeHolders.playerId, players.id))
     .where(eq(offices.isActive, true))
     .orderBy(asc(offices.sortOrder), asc(offices.name));
 
-  const result: OfficeWithHolder[] = [];
+  const byOfficeId = new Map<string, OfficeWithHolder>();
 
-  for (const office of allOffices) {
-    const holders = await db
-      .select({
-        holder: officeHolders,
-        playerName: players.characterName,
-        discordUsername: players.discordUsername,
-      })
-      .from(officeHolders)
-      .innerJoin(players, eq(officeHolders.playerId, players.id))
-      .where(
-        and(
-          eq(officeHolders.officeId, office.id),
-          isNull(officeHolders.endDate),
-        ),
-      );
-
-    result.push({
-      ...toOffice(office),
-      currentHolders: holders.map((h) => ({
-        ...toOfficeHolder(h.holder),
-        playerName: h.playerName,
-        discordUsername: h.discordUsername,
-      })),
-    });
+  for (const row of rows) {
+    let entry = byOfficeId.get(row.office.id);
+    if (!entry) {
+      entry = { ...toOffice(row.office), currentHolders: [] };
+      byOfficeId.set(row.office.id, entry);
+    }
+    if (row.holder && row.discordUsername !== null) {
+      entry.currentHolders.push({
+        ...toOfficeHolder(row.holder),
+        playerName: row.playerName,
+        discordUsername: row.discordUsername,
+      });
+    }
   }
 
-  return result;
+  return Array.from(byOfficeId.values());
 }
 
 /**

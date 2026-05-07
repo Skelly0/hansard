@@ -136,7 +136,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
   // ------------------------------------------------------------------
   fastify.post(
     '/api/elections/:id/open',
-    { preHandler: [requireAuth] },
+    { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
       const service = getService();
       const { id } = request.params as { id: string };
@@ -153,7 +153,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
   // ------------------------------------------------------------------
   fastify.post(
     '/api/elections/:id/close',
-    { preHandler: [requireAuth] },
+    { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
       const service = getService();
       const { id } = request.params as { id: string };
@@ -170,7 +170,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
   // ------------------------------------------------------------------
   fastify.post(
     '/api/elections/:id/tally',
-    { preHandler: [requireAuth] },
+    { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
       const service = getService();
       const { id } = request.params as { id: string };
@@ -213,13 +213,22 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const body = request.body as any;
 
+      // Self-registration only, unless staff is nominating someone else.
+      const targetPlayerId = body.playerId ?? user.id;
+      if (targetPlayerId !== user.id && !user.isStaff) {
+        return reply.status(403).send({
+          error: 'Only staff can nominate other players',
+        });
+      }
+
       try {
         const candidate = await service.registerCandidate({
           electionId: id,
-          playerId: body.playerId ?? user.id,
+          playerId: targetPlayerId,
           partyId: body.partyId,
           statement: body.statement,
-          nominatedById: body.nominatedById,
+          // Always derive from session — never trust the client.
+          nominatedById: user.id,
         });
         return reply.status(201).send(candidate);
       } catch (err: any) {
@@ -362,7 +371,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
   // ------------------------------------------------------------------
   fastify.post(
     '/api/elections/:id/create-runoff',
-    { preHandler: [requireAuth] },
+    { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
       const service = getService();
       const { id } = request.params as { id: string };

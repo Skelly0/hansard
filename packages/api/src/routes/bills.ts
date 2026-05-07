@@ -268,6 +268,16 @@ export default async function billRoutes(fastify: FastifyInstance) {
     '/api/bills/:slug',
     { preHandler: [requireAuth] },
     async (request, reply) => {
+      const bill = await getBill(db, request.params.slug);
+      if (!bill) {
+        return reply.status(404).send({ error: 'Bill not found' });
+      }
+
+      const user = request.session.user!;
+      if (bill.authorId !== user.id && !user.isStaff) {
+        return reply.status(403).send({ error: 'Only the bill author or staff can update this bill' });
+      }
+
       const updated = await updateBill(db, request.params.slug, request.body);
       if (!updated) {
         return reply.status(404).send({ error: 'Bill not found' });

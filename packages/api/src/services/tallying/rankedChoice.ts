@@ -82,10 +82,11 @@ export class RankedChoiceStrategy implements TallyStrategy {
         eliminated: eliminatedCandidate,
       });
 
-      // Safety: if we've eliminated everyone but one, break
-      const totalCandidates = new Set(activeBallots.flat());
-      const remaining = [...totalCandidates].filter((c) => !eliminated.has(c));
-      if (remaining.length <= 1) break;
+      // Safety: if only one (or zero) candidate is still receiving votes, break.
+      // Using Object.keys(tallies) avoids picking up already-eliminated
+      // candidates from later preferences in activeBallots.flat().
+      const stillReceivingVotes = Object.keys(tallies).filter((c) => !eliminated.has(c));
+      if (stillReceivingVotes.length <= 1) break;
     }
 
     // Determine final tallies and winner from last round

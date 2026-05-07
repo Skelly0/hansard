@@ -47,6 +47,17 @@ Node.js 20+, TypeScript, pnpm workspaces, PostgreSQL 16, Drizzle ORM, discord.js
 
 Document admin (`/document-create`, `/document-edit`, `/document-restore`), bulk favour grants (`/favour-grant-bulk` filtered by party or office), global event timeline (`/sim-events`), moderation appeal review (`/mod appeal-list`, `/mod appeal-review`), staff player administration (`/player-admin character-create`, `/player-admin change-party`), and faction administration (`/faction create|list|info|edit|dissolve`).
 
+## Bot Persistence Patterns
+
+- **Vote/election writes are direct DB.** `/vote create` modal handler, `/elect`, and the `vote-confirm:*` button handler all write directly via `db.insert(elections|ballots)`. No API hop.
+- **Favour balance mutations are atomic.** `grant.ts` and `spend.ts` use `db.transaction` with `sql\`balance ± ${amount}\`` UPDATE-then-INSERT-fallback. Spend uses a conditional UPDATE (`gte(balance, amount)`) to enforce sufficient funds in a single statement. Mirrors `grantBulk.ts`.
+- **No unique constraint on `favour_balances(playerId, categoryId)` yet** — schema comments it as a TODO. Atomicity relies on the conditional UPDATE returning a row; if the row is missing, INSERT fallback runs inside the transaction.
+- **`ballots(electionId, voterId)` uniqueness** is also a schema TODO. Bot does a SELECT pre-check inside the same transaction-style flow and surfaces "already voted" if the row exists or a Postgres `23505` is raised.
+- **Faction `dissolve` is transactional.** All five ops (member select, null player factionId, event-log insert per member, null parties.factionId, set factions.isActive=false) wrap in `db.transaction`.
+- **Character name uniqueness is checked twice** — early UX hint, plus a re-check immediately before insert plus a `23505` catch in the persist block (modal flow has minutes between the two).
+- **Pagination collector `end` handler uses `interaction.editReply`** — works for ephemeral messages too. `message.edit` would 404 on ephemeral.
+- **Modal handlers re-check permissions for restricted election types** (`legislative_vote`, `position_election`, `appointment_confirmation`). Slash command perms don't carry through to modal submits.
+
 ## Full Spec
 
 See `dps-scaffold.md` for the complete architecture document with all schemas, routes, commands, and design guidelines.

@@ -1,4 +1,4 @@
-import { eq, desc, and, ilike, or, sql, count, type SQL } from 'drizzle-orm';
+import { eq, desc, and, ilike, or, sql, count, inArray, type SQL } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import {
   bills,
@@ -90,7 +90,12 @@ async function ensureUniqueSlug(db: Database, baseSlug: string): Promise<string>
 // Mappers
 // ============================================================
 
-function toBill(row: typeof bills.$inferSelect): Bill {
+interface LinkedSlugs {
+  amendsBillSlug?: string | null;
+  amendsDocumentSlug?: string | null;
+}
+
+function toBill(row: typeof bills.$inferSelect, linked: LinkedSlugs = {}): Bill {
   return {
     id: row.id,
     title: row.title,
@@ -119,7 +124,9 @@ function toBill(row: typeof bills.$inferSelect): Bill {
     collectionId: row.collectionId,
     parentDocumentId: row.parentDocumentId,
     amendsBillId: row.amendsBillId,
+    amendsBillSlug: linked.amendsBillSlug ?? null,
     amendsDocumentId: row.amendsDocumentId,
+    amendsDocumentSlug: linked.amendsDocumentSlug ?? null,
     tags: (row.tags ?? []) as string[],
     policyAreas: (row.policyAreas ?? []) as string[],
     crossReferences: (row.crossReferences ?? []) as string[],
@@ -127,6 +134,51 @@ function toBill(row: typeof bills.$inferSelect): Bill {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+async function toBillsEnriched(
+  db: Database,
+  rows: (typeof bills.$inferSelect)[],
+): Promise<Bill[]> {
+  const slugs = await lookupLinkedSlugs(db, rows);
+  return rows.map((r) => toBill(r, slugs.get(r.id)));
+}
+
+async function toBillEnriched(
+  db: Database,
+  row: typeof bills.$inferSelect,
+): Promise<Bill> {
+  const [enriched] = await toBillsEnriched(db, [row]);
+  return enriched;
+}
+
+async function lookupLinkedSlugs(
+  db: Database,
+  rows: (typeof bills.$inferSelect)[],
+): Promise<Map<string, LinkedSlugs>> {
+  const billIds = [...new Set(rows.map((r) => r.amendsBillId).filter((x): x is string => !!x))];
+  const docIds = [...new Set(rows.map((r) => r.amendsDocumentId).filter((x): x is string => !!x))];
+
+  const [billRows, docRows] = await Promise.all([
+    billIds.length
+      ? db.select({ id: bills.id, slug: bills.slug }).from(bills).where(inArray(bills.id, billIds))
+      : Promise.resolve([] as { id: string; slug: string }[]),
+    docIds.length
+      ? db.select({ id: documents.id, slug: documents.slug }).from(documents).where(inArray(documents.id, docIds))
+      : Promise.resolve([] as { id: string; slug: string }[]),
+  ]);
+
+  const billSlugMap = new Map(billRows.map((b) => [b.id, b.slug]));
+  const docSlugMap = new Map(docRows.map((d) => [d.id, d.slug]));
+
+  const out = new Map<string, LinkedSlugs>();
+  for (const row of rows) {
+    out.set(row.id, {
+      amendsBillSlug: row.amendsBillId ? billSlugMap.get(row.amendsBillId) ?? null : null,
+      amendsDocumentSlug: row.amendsDocumentId ? docSlugMap.get(row.amendsDocumentId) ?? null : null,
+    });
+  }
+  return out;
 }
 
 function toStatusLogEntry(row: typeof billStatusLog.$inferSelect): BillStatusLogEntry {
@@ -214,7 +266,7 @@ export async function submitBillFor(
     }
   }
 
-  return toBill(bill);
+  return toBillEnriched(db, bill);
 }
 
 /**
@@ -231,7 +283,7 @@ export async function getBill(
     .limit(1);
 
   if (!bill) return null;
-  return toBill(bill);
+  return toBillEnriched(db, bill);
 }
 
 /**
@@ -248,7 +300,7 @@ export async function getBillByNumber(
     .limit(1);
 
   if (!bill) return null;
-  return toBill(bill);
+  return toBillEnriched(db, bill);
 }
 
 /**
@@ -299,7 +351,7 @@ export async function listBills(
     .where(whereClause);
 
   return {
-    bills: rows.map(toBill),
+    bills: await toBillsEnriched(db, rows),
     total,
   };
 }
@@ -335,7 +387,7 @@ export async function searchBills(
     .where(whereClause);
 
   return {
-    bills: rows.map(toBill),
+    bills: await toBillsEnriched(db, rows),
     total,
   };
 }
@@ -372,7 +424,7 @@ export async function updateBill(
     .where(eq(bills.slug, slug))
     .returning();
 
-  return toBill(updated);
+  return toBillEnriched(db, updated);
 }
 
 /**
@@ -393,7 +445,7 @@ export async function updateEffects(
     .returning();
 
   if (!updated) return null;
-  return toBill(updated);
+  return toBillEnriched(db, updated);
 }
 
 /**
@@ -466,7 +518,7 @@ export async function createVoteOnBill(
     notes: `Legislature vote created (election ${election.id})`,
   });
 
-  return { bill: toBill(updated), electionId: election.id };
+  return { bill: await toBillEnriched(db, updated), electionId: election.id };
 }
 
 /**
@@ -521,7 +573,7 @@ export async function enterNpcVote(
     notes: `NPC house vote: ${tally.yea} yea / ${tally.nay} nay / ${tally.abstain} abstain${notes ? ` — ${notes}` : ''}`,
   });
 
-  return toBill(updated);
+  return toBillEnriched(db, updated);
 }
 
 /**
@@ -657,7 +709,7 @@ export async function enactBill(
     await applyAmendment(db, enacted);
   }
 
-  return toBill(updated);
+  return toBillEnriched(db, updated);
 }
 
 /**
@@ -701,7 +753,7 @@ export async function repealBill(
     notes: `Repealed by bill ${repealingBillId}`,
   });
 
-  return toBill(updated);
+  return toBillEnriched(db, updated);
 }
 
 /**

@@ -38,7 +38,9 @@ export interface Bill {
   repealedAt?: string;
   collectionId?: string;
   amendsBillId?: string | null;
+  amendsBillSlug?: string | null;
   amendsDocumentId?: string | null;
+  amendsDocumentSlug?: string | null;
   tags: string[];
   policyAreas: string[];
   estimatedEffects?: {

@@ -7,7 +7,7 @@
  */
 import { eq, and, desc, inArray } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
-import { elections, candidates, ballots } from '@hansard/db';
+import { elections, candidates, ballots, bills } from '@hansard/db';
 import type {
   ElectionConfig,
   BallotVote,
@@ -128,12 +128,40 @@ export class VoteService {
 
     if (!election) return null;
 
-    const electionCandidates = await this.db
-      .select()
-      .from(candidates)
-      .where(eq(candidates.electionId, id));
+    const [electionCandidates, relatedBillSlug] = await Promise.all([
+      this.db.select().from(candidates).where(eq(candidates.electionId, id)),
+      this.lookupRelatedBillSlug(election.relatedBillId),
+    ]);
 
-    return { ...election, candidates: electionCandidates };
+    return { ...election, candidates: electionCandidates, relatedBillSlug };
+  }
+
+  private async lookupRelatedBillSlug(billId: string | null): Promise<string | null> {
+    if (!billId) return null;
+    const [row] = await this.db
+      .select({ slug: bills.slug })
+      .from(bills)
+      .where(eq(bills.id, billId))
+      .limit(1);
+    return row?.slug ?? null;
+  }
+
+  private async enrichElectionsWithSlugs<T extends { id: string; relatedBillId: string | null }>(
+    rows: T[],
+  ): Promise<(T & { relatedBillSlug: string | null })[]> {
+    const billIds = [...new Set(rows.map((r) => r.relatedBillId).filter((x): x is string => !!x))];
+    if (!billIds.length) {
+      return rows.map((r) => ({ ...r, relatedBillSlug: null }));
+    }
+    const billRows = await this.db
+      .select({ id: bills.id, slug: bills.slug })
+      .from(bills)
+      .where(inArray(bills.id, billIds));
+    const slugMap = new Map(billRows.map((b) => [b.id, b.slug]));
+    return rows.map((r) => ({
+      ...r,
+      relatedBillSlug: r.relatedBillId ? slugMap.get(r.relatedBillId) ?? null : null,
+    }));
   }
 
   async listElections(filters: ListElectionsFilter = {}) {
@@ -155,18 +183,18 @@ export class VoteService {
       conditions.push(eq(elections.createdById, filters.createdById));
     }
 
-    const query = this.db
+    const baseQuery = this.db
       .select()
       .from(elections)
       .orderBy(desc(elections.createdAt))
       .limit(filters.limit ?? 50)
       .offset(filters.offset ?? 0);
 
-    if (conditions.length > 0) {
-      return query.where(and(...conditions));
-    }
+    const rows = conditions.length > 0
+      ? await baseQuery.where(and(...conditions))
+      : await baseQuery;
 
-    return query;
+    return this.enrichElectionsWithSlugs(rows);
   }
 
   async getElectionResults(id: string) {

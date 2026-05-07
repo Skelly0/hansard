@@ -432,16 +432,26 @@ export function ElectionDetail() {
             </div>
           )}
 
-          {/* Related bill — relatedBillId is a UUID, not a slug; until the API
-              returns a slug we can't link reliably, so show the id as text. */}
           {election.relatedBillId && (
             <div>
               <h3 className="text-heading-2 text-text-secondary mb-3">Related Bill</h3>
               <div className="card border-l-accent-bills">
-                <p className="text-body-sm text-text-secondary">Linked bill</p>
-                <p className="font-mono text-xs text-text-tertiary mt-1 break-all">
-                  {election.relatedBillId}
-                </p>
+                {election.relatedBillSlug ? (
+                  <Link
+                    to="/bills/$slug"
+                    params={{ slug: election.relatedBillSlug }}
+                    className="text-body-sm text-accent-primary hover:underline"
+                  >
+                    View linked bill →
+                  </Link>
+                ) : (
+                  <>
+                    <p className="text-body-sm text-text-secondary">Linked bill</p>
+                    <p className="font-mono text-xs text-text-tertiary mt-1 break-all">
+                      {election.relatedBillId}
+                    </p>
+                  </>
+                )}
               </div>
             </div>
           )}

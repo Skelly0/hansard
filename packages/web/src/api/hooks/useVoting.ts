@@ -52,6 +52,7 @@ export interface Election {
   status: string;
   results?: ElectionResults;
   relatedBillId?: string;
+  relatedBillSlug?: string | null;
   createdById: string;
   createdBy?: { id: string; characterName: string };
   candidates?: Candidate[];

@@ -61,7 +61,7 @@ export function BillDetail() {
   // Fetch diff when the redline viewer is opened and this bill amends a document.
   // `to` omitted -> server returns latest version.
   const { data: diffData } = useDocumentDiff(
-    redlineOpen && bill?.amendsDocumentId ? bill.amendsDocumentId : undefined,
+    redlineOpen && bill?.amendsDocumentSlug ? bill.amendsDocumentSlug : undefined,
     redlineOpen ? 1 : undefined,
     undefined,
   );
@@ -219,9 +219,19 @@ export function BillDetail() {
         {bill.amendsBillId && (
           <div>
             <span className="text-label-ui text-text-tertiary mr-1">Amends</span>
-            <span className="font-mono text-xs text-text-secondary" title={bill.amendsBillId}>
-              Parent Bill
-            </span>
+            {bill.amendsBillSlug ? (
+              <Link
+                to="/bills/$slug"
+                params={{ slug: bill.amendsBillSlug }}
+                className="hover:text-accent-primary transition-colors font-mono text-xs"
+              >
+                Parent Bill
+              </Link>
+            ) : (
+              <span className="font-mono text-xs text-text-secondary" title={bill.amendsBillId}>
+                Parent Bill
+              </span>
+            )}
           </div>
         )}
         {bill.amendsDocumentId && (
@@ -230,8 +240,9 @@ export function BillDetail() {
             <Link
               to="/documents"
               className="hover:text-accent-primary transition-colors font-mono text-xs"
+              title={bill.amendsDocumentSlug ?? undefined}
             >
-              View Document
+              {bill.amendsDocumentSlug ?? 'View Document'}
             </Link>
           </div>
         )}

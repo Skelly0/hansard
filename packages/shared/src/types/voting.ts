@@ -152,6 +152,7 @@ export interface Election {
   status: ElectionStatus;
   results: ElectionResults | null;
   relatedBillId: string | null;
+  relatedBillSlug: string | null;
   createdById: string;
   discordMessageId: string | null;
   discordChannelId: string | null;

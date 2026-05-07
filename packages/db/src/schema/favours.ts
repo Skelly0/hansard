@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, integer, boolean, timestamp, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, integer, boolean, timestamp, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
 import { players } from './players';
 
 // === FAVOUR CATEGORIES ===
@@ -30,8 +30,9 @@ export const favourBalances = pgTable('favour_balances', {
   categoryId: uuid('category_id').references(() => favourCategories.id).notNull(),
   balance: integer('balance').default(0).notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-  // unique index on (playerId, categoryId)
-});
+}, (table) => ({
+  playerCategoryUnique: uniqueIndex('favour_balances_player_category_unique').on(table.playerId, table.categoryId),
+}));
 
 // === FAVOUR TRANSACTION LOG ===
 // Every grant, spend, and removal is logged.

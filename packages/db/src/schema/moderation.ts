@@ -28,7 +28,7 @@ export const modActions = pgTable('mod_actions', {
   ticketId: uuid('ticket_id').references(() => tickets.id),
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
 export const modNotes = pgTable('mod_notes', {

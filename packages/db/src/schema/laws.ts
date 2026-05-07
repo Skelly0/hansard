@@ -12,6 +12,38 @@ export const documentCollections = pgTable('document_collections', {
   isPublic: boolean('is_public').default(true).notNull(),
 });
 
+// === STATIC DOCUMENTS (non-legislative) ===
+// Worldbuilding docs, reference material, the constitution (as a living doc), etc.
+// These aren't bills -- they don't go through the legislative pipeline.
+export const documents = pgTable('documents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  collectionId: uuid('collection_id').references(() => documentCollections.id).notNull(),
+
+  title: varchar('title', { length: 256 }).notNull(),
+  slug: varchar('slug', { length: 256 }).notNull().unique(),
+
+  // Content can be inline or linked to a Google Doc (or both)
+  content: text('content'),                                 // Markdown, for docs authored in the system
+  googleDocUrl: varchar('google_doc_url', { length: 512 }), // optional Google Doc link
+  cachedContent: text('cached_content'),                    // if linked to Google Doc, cached snapshot
+  cachedAt: timestamp('cached_at'),
+
+  // Hierarchy (for nested docs like constitution articles/sections)
+  parentDocumentId: uuid('parent_document_id').references((): AnyPgColumn => documents.id),
+  hierarchyLevel: integer('hierarchy_level').default(0).notNull(),
+
+  // Versioning
+  currentVersion: integer('current_version').default(1).notNull(),
+
+  // Metadata
+  authorId: uuid('author_id').references(() => players.id),
+  accessLevel: varchar('access_level', { length: 16 }).default('public').notNull(),
+  tags: jsonb('tags').$type<string[]>().default([]),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 // === BILLS ===
 // Players write bills in Google Docs and submit the link via command.
 // The Chancellor (or any player with legislative_leader permission) can also submit on behalf of others.
@@ -79,7 +111,7 @@ export const bills = pgTable('bills', {
 
   // === COLLECTION & HIERARCHY ===
   collectionId: uuid('collection_id').references(() => documentCollections.id),
-  parentDocumentId: uuid('parent_document_id').references((): AnyPgColumn => documents.id),
+  parentDocumentId: uuid('parent_document_id').references(() => documents.id),
   amendsBillId: uuid('amends_bill_id').references((): AnyPgColumn => bills.id),
   amendsDocumentId: uuid('amends_document_id'), // references documents.id — no FK to avoid circular imports
 
@@ -110,7 +142,7 @@ export const bills = pgTable('bills', {
   // searchVector: tsvector -- handled by migration-level trigger
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
 // === BILL STATUS LOG ===
@@ -129,38 +161,6 @@ export const billStatusLog = pgTable('bill_status_log', {
   simDate: varchar('sim_date', { length: 32 }),
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
-
-// === STATIC DOCUMENTS (non-legislative) ===
-// Worldbuilding docs, reference material, the constitution (as a living doc), etc.
-// These aren't bills -- they don't go through the legislative pipeline.
-export const documents = pgTable('documents', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  collectionId: uuid('collection_id').references(() => documentCollections.id).notNull(),
-
-  title: varchar('title', { length: 256 }).notNull(),
-  slug: varchar('slug', { length: 256 }).notNull().unique(),
-
-  // Content can be inline or linked to a Google Doc (or both)
-  content: text('content'),                                 // Markdown, for docs authored in the system
-  googleDocUrl: varchar('google_doc_url', { length: 512 }), // optional Google Doc link
-  cachedContent: text('cached_content'),                    // if linked to Google Doc, cached snapshot
-  cachedAt: timestamp('cached_at'),
-
-  // Hierarchy (for nested docs like constitution articles/sections)
-  parentDocumentId: uuid('parent_document_id').references((): AnyPgColumn => documents.id),
-  hierarchyLevel: integer('hierarchy_level').default(0).notNull(),
-
-  // Versioning
-  currentVersion: integer('current_version').default(1).notNull(),
-
-  // Metadata
-  authorId: uuid('author_id').references(() => players.id),
-  accessLevel: varchar('access_level', { length: 16 }).default('public').notNull(),
-  tags: jsonb('tags').$type<string[]>().default([]),
-
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
 export const documentVersions = pgTable('document_versions', {

@@ -130,7 +130,10 @@ export function useOpenVoting() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/elections/${id}/open`),
-    onSuccess: (_d, id) => { qc.invalidateQueries({ queryKey: ['elections', id] }); },
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ['elections'] });
+      qc.invalidateQueries({ queryKey: ['elections', id] });
+    },
   });
 }
 
@@ -138,7 +141,10 @@ export function useCloseVoting() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/elections/${id}/close`),
-    onSuccess: (_d, id) => { qc.invalidateQueries({ queryKey: ['elections', id] }); },
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ['elections'] });
+      qc.invalidateQueries({ queryKey: ['elections', id] });
+    },
   });
 }
 

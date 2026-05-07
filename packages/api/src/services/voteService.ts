@@ -413,32 +413,26 @@ export class VoteService {
       throw new Error('Invalid ballot format for this voting method');
     }
 
-    // Ensure one vote per person per election
-    const existing = await this.db
-      .select()
-      .from(ballots)
-      .where(
-        and(
-          eq(ballots.electionId, input.electionId),
-          eq(ballots.voterId, input.voterId),
-        ),
-      )
-      .limit(1);
+    // Atomic insert — relies on UNIQUE(election_id, voter_id) to enforce
+    // one vote per person per election. Catch 23505 unique_violation and
+    // translate to a friendly error.
+    try {
+      const [ballot] = await this.db
+        .insert(ballots)
+        .values({
+          electionId: input.electionId,
+          voterId: input.voterId,
+          vote: input.vote,
+        })
+        .returning();
 
-    if (existing.length > 0) {
-      throw new Error('You have already voted in this election');
+      return ballot;
+    } catch (err: any) {
+      if (err?.code === '23505') {
+        throw new Error('You have already voted in this election');
+      }
+      throw err;
     }
-
-    const [ballot] = await this.db
-      .insert(ballots)
-      .values({
-        electionId: input.electionId,
-        voterId: input.voterId,
-        vote: input.vote,
-      })
-      .returning();
-
-    return ballot;
   }
 
   // ----------------------------------------------------------

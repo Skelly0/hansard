@@ -1,4 +1,4 @@
-import { eq, and, desc, asc, type SQL } from 'drizzle-orm';
+import { eq, and, desc, asc, sql, type SQL } from 'drizzle-orm';
 import {
   favourCategories,
   favourBalances,
@@ -250,43 +250,40 @@ async function applyTransaction(
     throw new Error(`Favour category "${category.name}" is not active`);
   }
 
-  // Get or create the balance row
-  let [balanceRow] = await db
-    .select()
-    .from(favourBalances)
-    .where(
-      and(
-        eq(favourBalances.playerId, playerId),
-        eq(favourBalances.categoryId, categoryId),
-      ),
-    )
-    .limit(1);
-
-  if (!balanceRow) {
-    [balanceRow] = await db.insert(favourBalances).values({
+  // Atomic insert-or-update on (playerId, categoryId).
+  // Relies on UNIQUE(player_id, category_id) being present.
+  const [updatedRow] = await db
+    .insert(favourBalances)
+    .values({
       playerId,
       categoryId,
-      balance: 0,
-    }).returning();
-  }
+      balance: amount,
+    })
+    .onConflictDoUpdate({
+      target: [favourBalances.playerId, favourBalances.categoryId],
+      set: {
+        balance: sql`${favourBalances.balance} + ${amount}`,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
 
-  const newBalance = balanceRow.balance + amount;
+  const newBalance = updatedRow.balance;
 
-  // For spend/remove, check we don't go negative
+  // For spend/remove, the atomic UPDATE may have driven the balance negative.
+  // Roll the change back and surface a clear error.
   if (amount < 0 && newBalance < 0) {
+    await db
+      .update(favourBalances)
+      .set({
+        balance: sql`${favourBalances.balance} - ${amount}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(favourBalances.id, updatedRow.id));
     throw new Error(
-      `Insufficient favours: ${player.characterName ?? player.discordUsername} has ${balanceRow.balance} in ${category.name}, cannot deduct ${Math.abs(amount)}`,
+      `Insufficient favours: ${player.characterName ?? player.discordUsername} has ${newBalance - amount} in ${category.name}, cannot deduct ${Math.abs(amount)}`,
     );
   }
-
-  // Update the balance
-  await db
-    .update(favourBalances)
-    .set({
-      balance: newBalance,
-      updatedAt: new Date(),
-    })
-    .where(eq(favourBalances.id, balanceRow.id));
 
   // Log the transaction
   const [transaction] = await db.insert(favourTransactions).values({

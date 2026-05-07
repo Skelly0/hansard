@@ -160,7 +160,7 @@ export const ballots = pgTable('ballots', {
     | { type: 'fptp'; candidateId: string }
     | { type: 'ranked'; ranking: string[] }                    // ranked_choice / STV
     | { type: 'approval'; approved: string[] }
-    | { type: 'yea_nay'; choice: 'yea' | 'nay' | 'abstain' }
+    | { type: 'yea_nay_abstain'; choice: 'yea' | 'nay' | 'abstain' }
     | { type: 'two_round'; candidateId: string }               // same as fptp per round
     | { type: 'exhaustive'; candidateId: string }              // same as fptp per round
   >().notNull(),

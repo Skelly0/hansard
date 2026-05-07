@@ -17,7 +17,7 @@ export class YeaNayStrategy implements TallyStrategy {
     let abstain = 0;
 
     for (const ballot of ballots) {
-      if (ballot.vote.type !== 'yea_nay') continue;
+      if (ballot.vote.type !== 'yea_nay_abstain') continue;
       switch (ballot.vote.choice) {
         case 'yea':     yea++;     break;
         case 'nay':     nay++;     break;
@@ -44,7 +44,7 @@ export class YeaNayStrategy implements TallyStrategy {
   }
 
   validate(ballot: BallotVote, _config: ElectionConfig): boolean {
-    if (ballot.type !== 'yea_nay') return false;
+    if (ballot.type !== 'yea_nay_abstain') return false;
     return ['yea', 'nay', 'abstain'].includes(ballot.choice);
   }
 

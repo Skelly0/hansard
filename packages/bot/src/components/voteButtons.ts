@@ -135,7 +135,7 @@ async function handleConfirmVote(
 
   if (choiceData === 'yea' || choiceData === 'nay' || choiceData === 'abstain') {
     voteDescription = choiceData.toUpperCase();
-    votePayload = { type: 'yea_nay', choice: choiceData };
+    votePayload = { type: 'yea_nay_abstain', choice: choiceData };
   } else if (choiceData.startsWith('candidate:')) {
     const candidateId = choiceData.replace('candidate:', '');
     voteDescription = `Candidate \`${candidateId}\``;

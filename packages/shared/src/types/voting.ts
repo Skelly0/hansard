@@ -13,7 +13,7 @@ export type BallotVote =
   | { type: 'fptp'; candidateId: string }
   | { type: 'ranked'; ranking: string[] }
   | { type: 'approval'; approved: string[] }
-  | { type: 'yea_nay'; choice: 'yea' | 'nay' | 'abstain' }
+  | { type: 'yea_nay_abstain'; choice: 'yea' | 'nay' | 'abstain' }
   | { type: 'two_round'; candidateId: string }
   | { type: 'exhaustive'; candidateId: string };
 

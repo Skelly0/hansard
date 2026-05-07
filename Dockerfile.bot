@@ -10,6 +10,7 @@ COPY packages/bot/package.json packages/bot/
 RUN pnpm install --frozen-lockfile
 
 # Copy source
+ARG CACHEBUST=2026-05-07-faction
 COPY tsconfig.base.json ./
 COPY packages/db/ packages/db/
 COPY packages/shared/ packages/shared/

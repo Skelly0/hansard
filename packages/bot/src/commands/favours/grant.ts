@@ -2,7 +2,7 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, sql } from 'drizzle-orm';
 import { favourBalances, favourCategories, favourTransactions, players } from '@hansard/db';
 import { FavourTransactionType } from '@hansard/shared';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
@@ -92,44 +92,43 @@ const command: Command = {
       return;
     }
 
+    let newBalance = 0;
     try {
-      // Get or create balance row
-      let [balanceRow] = await db
-        .select()
-        .from(favourBalances)
-        .where(
-          and(
-            eq(favourBalances.playerId, targetPlayer.id),
-            eq(favourBalances.categoryId, category.id),
-          ),
-        )
-        .limit(1);
+      await db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(favourBalances)
+          .set({ balance: sql`${favourBalances.balance} + ${amount}`, updatedAt: new Date() })
+          .where(
+            and(
+              eq(favourBalances.playerId, targetPlayer.id),
+              eq(favourBalances.categoryId, category.id),
+            ),
+          )
+          .returning({ balance: favourBalances.balance });
 
-      if (!balanceRow) {
-        [balanceRow] = await db.insert(favourBalances).values({
+        if (updated) {
+          newBalance = updated.balance;
+        } else {
+          const [inserted] = await tx
+            .insert(favourBalances)
+            .values({
+              playerId: targetPlayer.id,
+              categoryId: category.id,
+              balance: amount,
+            })
+            .returning({ balance: favourBalances.balance });
+          newBalance = inserted.balance;
+        }
+
+        await tx.insert(favourTransactions).values({
           playerId: targetPlayer.id,
           categoryId: category.id,
-          balance: 0,
-        }).returning();
-      }
-
-      const newBalance = balanceRow.balance + amount;
-
-      // Update balance
-      await db
-        .update(favourBalances)
-        .set({ balance: newBalance, updatedAt: new Date() })
-        .where(eq(favourBalances.id, balanceRow.id));
-
-      // Log transaction
-      await db.insert(favourTransactions).values({
-        playerId: targetPlayer.id,
-        categoryId: category.id,
-        amount,
-        balanceAfter: newBalance,
-        type: FavourTransactionType.GRANT,
-        reason,
-        grantedById: staffPlayer.id,
+          amount,
+          balanceAfter: newBalance,
+          type: FavourTransactionType.GRANT,
+          reason,
+          grantedById: staffPlayer.id,
+        });
       });
 
       const playerName = targetPlayer.characterName ?? targetUser.username;

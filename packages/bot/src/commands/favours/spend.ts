@@ -2,7 +2,7 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, gte, sql } from 'drizzle-orm';
 import { favourBalances, favourCategories, favourTransactions, players } from '@hansard/db';
 import { FavourTransactionType } from '@hansard/shared';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
@@ -92,57 +92,59 @@ const command: Command = {
       return;
     }
 
+    let newBalance = 0;
     try {
-      // Get balance row
-      const [balanceRow] = await db
-        .select()
-        .from(favourBalances)
-        .where(
-          and(
-            eq(favourBalances.playerId, targetPlayer.id),
-            eq(favourBalances.categoryId, category.id),
-          ),
-        )
-        .limit(1);
+      const result = await db.transaction(async (tx) => {
+        // Atomic conditional decrement — only succeeds if balance >= amount.
+        const [updated] = await tx
+          .update(favourBalances)
+          .set({ balance: sql`${favourBalances.balance} - ${amount}`, updatedAt: new Date() })
+          .where(
+            and(
+              eq(favourBalances.playerId, targetPlayer.id),
+              eq(favourBalances.categoryId, category.id),
+              gte(favourBalances.balance, amount),
+            ),
+          )
+          .returning({ balance: favourBalances.balance });
 
-      const currentBalance = balanceRow?.balance ?? 0;
+        if (!updated) {
+          // Either no row or insufficient balance — read current balance for the error message.
+          const [row] = await tx
+            .select({ balance: favourBalances.balance })
+            .from(favourBalances)
+            .where(
+              and(
+                eq(favourBalances.playerId, targetPlayer.id),
+                eq(favourBalances.categoryId, category.id),
+              ),
+            )
+            .limit(1);
+          return { ok: false as const, currentBalance: row?.balance ?? 0 };
+        }
 
-      if (currentBalance < amount) {
+        await tx.insert(favourTransactions).values({
+          playerId: targetPlayer.id,
+          categoryId: category.id,
+          amount: -amount,
+          balanceAfter: updated.balance,
+          type: FavourTransactionType.SPEND,
+          reason,
+          grantedById: staffPlayer.id,
+        });
+        return { ok: true as const, balance: updated.balance };
+      });
+
+      if (!result.ok) {
         const playerName = targetPlayer.characterName ?? targetUser.username;
         await interaction.editReply({
           embeds: [errorEmbed(
-            `Insufficient favours: **${playerName}** has \`${currentBalance}\` in ${category.name}, cannot spend \`${amount}\`.`,
+            `Insufficient favours: **${playerName}** has \`${result.currentBalance}\` in ${category.name}, cannot spend \`${amount}\`.`,
           )],
         });
         return;
       }
-
-      const newBalance = currentBalance - amount;
-
-      if (balanceRow) {
-        await db
-          .update(favourBalances)
-          .set({ balance: newBalance, updatedAt: new Date() })
-          .where(eq(favourBalances.id, balanceRow.id));
-      } else {
-        // Should not normally happen (balance would be 0), but handle gracefully
-        await db.insert(favourBalances).values({
-          playerId: targetPlayer.id,
-          categoryId: category.id,
-          balance: newBalance,
-        });
-      }
-
-      // Log transaction
-      await db.insert(favourTransactions).values({
-        playerId: targetPlayer.id,
-        categoryId: category.id,
-        amount: -amount,
-        balanceAfter: newBalance,
-        type: FavourTransactionType.SPEND,
-        reason,
-        grantedById: staffPlayer.id,
-      });
+      newBalance = result.balance;
 
       const playerName = targetPlayer.characterName ?? targetUser.username;
       const emoji = category.emoji ? `${category.emoji} ` : '';

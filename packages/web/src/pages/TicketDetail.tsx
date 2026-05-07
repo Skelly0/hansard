@@ -163,25 +163,27 @@ export function TicketDetail() {
             </div>
           ) : (
             ticket.messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`card ${msg.isInternal ? 'border-l-accent-moderation bg-accent-primary-light/30' : 'border-l-accent-tickets'}`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-body-sm font-medium text-text-primary">
-                    {msg.author?.characterName || msg.author?.discordUsername || 'Unknown'}
-                  </span>
-                  {msg.isInternal && (
-                    <Tag color="moderation">Internal</Tag>
-                  )}
-                  <span className="font-mono text-xs text-text-tertiary ml-auto">
-                    {new Date(msg.createdAt).toLocaleDateString('en-GB', {
-                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                    })}
-                  </span>
+              (isStaff || !msg.isInternal) && (
+                <div
+                  key={msg.id}
+                  className={`card ${msg.isInternal ? 'border-l-accent-moderation bg-accent-primary-light/30' : 'border-l-accent-tickets'}`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-body-sm font-medium text-text-primary">
+                      {msg.author?.characterName || msg.author?.discordUsername || 'Unknown'}
+                    </span>
+                    {msg.isInternal && (
+                      <Tag color="moderation">Internal</Tag>
+                    )}
+                    <span className="font-mono text-xs text-text-tertiary ml-auto">
+                      {new Date(msg.createdAt).toLocaleDateString('en-GB', {
+                        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  <p className="text-body text-text-primary whitespace-pre-wrap">{msg.content}</p>
                 </div>
-                <p className="text-body text-text-primary whitespace-pre-wrap">{msg.content}</p>
-              </div>
+              )
             ))
           )}
         </div>
@@ -197,15 +199,17 @@ export function TicketDetail() {
               className="w-full bg-card border border-border-subtle rounded-card px-4 py-3 text-body font-body text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-primary resize-y"
             />
             <div className="flex items-center justify-between mt-2">
-              <label className="flex items-center gap-2 text-body-sm text-text-secondary cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isInternal}
-                  onChange={(e) => setIsInternal(e.target.checked)}
-                  className="rounded border-border accent-accent-primary"
-                />
-                Internal note (staff only)
-              </label>
+              {isStaff ? (
+                <label className="flex items-center gap-2 text-body-sm text-text-secondary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isInternal}
+                    onChange={(e) => setIsInternal(e.target.checked)}
+                    className="rounded border-border accent-accent-primary"
+                  />
+                  Internal note (staff only)
+                </label>
+              ) : <span />}
               <button
                 onClick={handleSendMessage}
                 disabled={!newMessage.trim() || addMessage.isPending}

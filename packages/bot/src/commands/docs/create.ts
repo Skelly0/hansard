@@ -117,23 +117,43 @@ const command: Command = {
       await interaction.editReply({ embeds: [errorEmbed('Generated slug is empty — provide a different title or slug.')] });
       return;
     }
-    const slug = await ensureUniqueSlug(baseSlug);
 
     try {
-      const [doc] = await db
-        .insert(documents)
-        .values({
-          collectionId: collection.id,
-          title,
-          slug,
-          content,
-          googleDocUrl,
-          currentVersion: 1,
-          authorId: staffPlayer.id,
-          accessLevel,
-          tags,
-        })
-        .returning();
+      let slug = await ensureUniqueSlug(baseSlug);
+      let doc: typeof documents.$inferSelect | undefined;
+      const MAX_RETRIES = 5;
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          [doc] = await db
+            .insert(documents)
+            .values({
+              collectionId: collection.id,
+              title,
+              slug,
+              content,
+              googleDocUrl,
+              currentVersion: 1,
+              authorId: staffPlayer.id,
+              accessLevel,
+              tags,
+            })
+            .returning();
+          break;
+        } catch (err) {
+          lastError = err;
+          const code = (err as { code?: string } | null)?.code;
+          const msg = err instanceof Error ? err.message : '';
+          const isUnique = code === '23505' || /unique|duplicate/i.test(msg);
+          if (!isUnique) throw err;
+          slug = await ensureUniqueSlug(`${baseSlug}-${attempt + 2}`);
+        }
+      }
+      if (!doc) {
+        const m = lastError instanceof Error ? lastError.message : 'slug collision could not be resolved';
+        await interaction.editReply({ embeds: [errorEmbed(m)] });
+        return;
+      }
 
       if (content) {
         await db.insert(documentVersions).values({
@@ -150,7 +170,7 @@ const command: Command = {
           'Document Created',
           [
             `**${title}**`,
-            `Slug: \`${slug}\``,
+            `Slug: \`${doc.slug}\``,
             `Collection: **${collection.name}**`,
             `Access: \`${accessLevel}\``,
             tags.length > 0 ? `Tags: ${tags.map((t) => `\`${t}\``).join(', ')}` : '',

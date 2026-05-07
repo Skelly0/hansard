@@ -112,9 +112,12 @@ export async function createPaginatedEmbed(
     nextButton.setDisabled(true);
 
     try {
-      await message.edit({ components: [row] });
+      await interaction.editReply({
+        embeds: [pages[currentPage]],
+        components: [row],
+      });
     } catch {
-      // Message may have been deleted — ignore
+      // Token may have expired or message was deleted — ignore
     }
   });
 }

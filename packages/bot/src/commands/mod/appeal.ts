@@ -120,6 +120,14 @@ const command: Command = {
       return;
     }
 
+    if (action.appealStatus === 'accepted' || action.appealStatus === 'denied') {
+      const prior = action.appealStatus === 'accepted' ? 'approved' : 'denied';
+      await interaction.editReply({
+        embeds: [errorEmbed(`This appeal has already been decided (previously ${prior}).`)],
+      });
+      return;
+    }
+
     // If the appeal is approved (accepted), deactivate the underlying action.
     const setValues: Record<string, unknown> = {
       appealStatus,

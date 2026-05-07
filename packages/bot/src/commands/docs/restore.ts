@@ -71,6 +71,13 @@ const command: Command = {
       return;
     }
 
+    if (!target.content) {
+      await interaction.editReply({
+        embeds: [errorEmbed(`Version v${toVersion} has no inline content to restore (it may be a Google Docs version).`)],
+      });
+      return;
+    }
+
     const newVersion = doc.currentVersion + 1;
 
     try {

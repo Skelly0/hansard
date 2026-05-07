@@ -440,6 +440,23 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   // ─── Persist to database ───────────────────────────────────────────────
 
   try {
+    // Re-check uniqueness immediately before insert (early check minutes ago is stale).
+    const stillUnique = await db
+      .select({ id: players.id, discordId: players.discordId })
+      .from(players)
+      .where(eq(players.characterName, characterName))
+      .limit(1);
+
+    if (stillUnique.length > 0 && stillUnique[0].discordId !== interaction.user.id) {
+      await modalSubmit.editReply({
+        embeds: [errorEmbed(
+          `The character name **${characterName}** was just taken by another player. Run \`/character create\` again with a different name.`,
+        )],
+        components: [],
+      });
+      return;
+    }
+
     const existingPlayer = await db
       .select({ id: players.id })
       .from(players)
@@ -541,6 +558,17 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     await modalSubmit.editReply({ embeds: [result], components: [] });
   } catch (error) {
     console.error('Failed to create character:', error);
+    const code = (error as { code?: string } | null)?.code;
+    const message = error instanceof Error ? error.message : '';
+    if (code === '23505' || /unique|duplicate/i.test(message)) {
+      await modalSubmit.editReply({
+        embeds: [errorEmbed(
+          `The character name **${characterName}** is already taken. Run \`/character create\` again with a different name.`,
+        )],
+        components: [],
+      });
+      return;
+    }
     await modalSubmit.editReply({
       embeds: [errorEmbed('Failed to create character due to a database error. Please try again or contact staff.')],
       components: [],

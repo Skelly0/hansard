@@ -1,7 +1,30 @@
 #!/usr/bin/env node
-import 'dotenv/config';
+import { config as loadDotenv } from 'dotenv';
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runServer } from './server.js';
 import { runLogin, runLogout } from './cli.js';
+
+// Walk up from this file looking for a .env. Claude Desktop / Claude Code
+// spawn the server with cwd=packages/mcp/, so the bare `dotenv/config` would
+// miss the workspace-root .env. Falling back to cwd preserves the old
+// behaviour for direct shell invocation.
+{
+  const here = dirname(fileURLToPath(import.meta.url));
+  let dir = here;
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, '.env');
+    if (existsSync(candidate)) {
+      loadDotenv({ path: candidate });
+      break;
+    }
+    const parent = resolve(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (!process.env.DATABASE_URL) loadDotenv();
+}
 
 const HELP = `hansard-mcp — Model Context Protocol server for the Hansard DPS
 

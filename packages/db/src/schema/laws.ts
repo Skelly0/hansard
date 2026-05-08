@@ -26,7 +26,7 @@ export const documents = pgTable('documents', {
   content: text('content'),                                 // Markdown, for docs authored in the system
   googleDocUrl: varchar('google_doc_url', { length: 512 }), // optional Google Doc link
   cachedContent: text('cached_content'),                    // if linked to Google Doc, cached snapshot
-  cachedAt: timestamp('cached_at'),
+  cachedAt: timestamp('cached_at', { withTimezone: true, mode: 'date' }),
 
   // Hierarchy (for nested docs like constitution articles/sections)
   parentDocumentId: uuid('parent_document_id').references((): AnyPgColumn => documents.id),
@@ -40,8 +40,8 @@ export const documents = pgTable('documents', {
   accessLevel: varchar('access_level', { length: 16 }).default('public').notNull(),
   tags: jsonb('tags').$type<string[]>().default([]),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
 // === BILLS ===
@@ -65,7 +65,7 @@ export const bills = pgTable('bills', {
   // Snapshot of the Google Doc content for search/display/archival.
   // Google Doc remains the source of truth.
   cachedContent: text('cached_content'),
-  cachedAt: timestamp('cached_at'),
+  cachedAt: timestamp('cached_at', { withTimezone: true, mode: 'date' }),
   summary: text('summary'),                                // player or staff TL;DR
 
   // === AUTHORSHIP ===
@@ -80,12 +80,12 @@ export const bills = pgTable('bills', {
   //   -> enacted -> active -> amended -> repealed
   // (No queue/scheduled stages -- Chancellor puts bills to vote at their discretion)
   status: varchar('status', { length: 32 }).default('submitted').notNull(),
-  submittedAt: timestamp('submitted_at').defaultNow().notNull(),
+  submittedAt: timestamp('submitted_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 
   // Player house vote
   playerVoteId: uuid('player_vote_id'), // references elections.id — linked at query time to avoid circular import
   playerVoteResult: varchar('player_vote_result', { length: 16 }),  // 'passed' | 'rejected'
-  playerVoteAt: timestamp('player_vote_at'),
+  playerVoteAt: timestamp('player_vote_at', { withTimezone: true, mode: 'date' }),
 
   // NPC house vote (entered manually by staff)
   npcVoteRequired: boolean('npc_vote_required').default(true).notNull(),
@@ -104,9 +104,9 @@ export const bills = pgTable('bills', {
   }>(),
 
   // Final outcome
-  enactedAt: timestamp('enacted_at'),
-  effectiveAt: timestamp('effective_at'),
-  repealedAt: timestamp('repealed_at'),
+  enactedAt: timestamp('enacted_at', { withTimezone: true, mode: 'date' }),
+  effectiveAt: timestamp('effective_at', { withTimezone: true, mode: 'date' }),
+  repealedAt: timestamp('repealed_at', { withTimezone: true, mode: 'date' }),
   repealedByBillId: uuid('repealed_by_bill_id').references((): AnyPgColumn => bills.id),
 
   // === COLLECTION & HIERARCHY ===
@@ -141,8 +141,8 @@ export const bills = pgTable('bills', {
   // Full-text search (on cached content + title + summary)
   // searchVector: tsvector -- handled by migration-level trigger
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
 // === BILL STATUS LOG ===
@@ -160,7 +160,7 @@ export const billStatusLog = pgTable('bill_status_log', {
   simTick: integer('sim_tick'),
   simDate: varchar('sim_date', { length: 32 }),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
 export const documentVersions = pgTable('document_versions', {
@@ -175,5 +175,5 @@ export const documentVersions = pgTable('document_versions', {
   // If changed by an enacted bill (amendment)
   amendmentBillId: uuid('amendment_bill_id').references(() => bills.id),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });

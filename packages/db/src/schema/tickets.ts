@@ -62,11 +62,11 @@ export const tickets = pgTable('tickets', {
   discordThreadId: varchar('discord_thread_id', { length: 20 }),
 
   // Timestamps
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
-  firstResponseAt: timestamp('first_response_at'),
-  resolvedAt: timestamp('resolved_at'),
-  closedAt: timestamp('closed_at'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
+  firstResponseAt: timestamp('first_response_at', { withTimezone: true, mode: 'date' }),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'date' }),
+  closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }),
 
   // Tags for filtering
   tags: jsonb('tags').$type<string[]>().default([]),
@@ -83,8 +83,8 @@ export const ticketMessages = pgTable('ticket_messages', {
   // If synced from Discord
   discordMessageId: varchar('discord_message_id', { length: 20 }),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  editedAt: timestamp('edited_at'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  editedAt: timestamp('edited_at', { withTimezone: true, mode: 'date' }),
 });
 
 export const ticketAuditLog = pgTable('ticket_audit_log', {
@@ -98,5 +98,5 @@ export const ticketAuditLog = pgTable('ticket_audit_log', {
   oldValue: jsonb('old_value'),
   newValue: jsonb('new_value'),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });

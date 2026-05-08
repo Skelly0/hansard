@@ -19,7 +19,7 @@ export const favourCategories = pgTable('favour_categories', {
 
   isActive: boolean('is_active').default(true).notNull(),
   sortOrder: integer('sort_order').default(0).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
 // === PLAYER FAVOUR BALANCES ===
@@ -29,7 +29,7 @@ export const favourBalances = pgTable('favour_balances', {
   playerId: uuid('player_id').references(() => players.id).notNull(),
   categoryId: uuid('category_id').references(() => favourCategories.id).notNull(),
   balance: integer('balance').default(0).notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   playerCategoryUnique: uniqueIndex('favour_balances_player_category_unique').on(table.playerId, table.categoryId),
 }));
@@ -60,5 +60,5 @@ export const favourTransactions = pgTable('favour_transactions', {
   simTick: integer('sim_tick'),
   simDate: varchar('sim_date', { length: 32 }),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });

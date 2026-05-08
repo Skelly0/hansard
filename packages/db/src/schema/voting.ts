@@ -97,10 +97,10 @@ export const elections = pgTable('elections', {
   roundNumber: integer('round_number').default(1).notNull(),
 
   // Timing
-  nominationsOpenAt: timestamp('nominations_open_at', { withTimezone: true, mode: 'date' }),
-  nominationsCloseAt: timestamp('nominations_close_at', { withTimezone: true, mode: 'date' }),
-  votingOpensAt: timestamp('voting_opens_at', { withTimezone: true, mode: 'date' }).notNull(),
-  votingClosesAt: timestamp('voting_closes_at', { withTimezone: true, mode: 'date' }).notNull(),
+  nominationsOpenAt: timestamp('nominations_open_at'),
+  nominationsCloseAt: timestamp('nominations_close_at'),
+  votingOpensAt: timestamp('voting_opens_at').notNull(),
+  votingClosesAt: timestamp('voting_closes_at').notNull(),
 
   // Status
   status: varchar('status', { length: 32 }).default('draft').notNull(),
@@ -133,8 +133,8 @@ export const elections = pgTable('elections', {
   discordMessageId: varchar('discord_message_id', { length: 20 }),
   discordChannelId: varchar('discord_channel_id', { length: 20 }),
 
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
 export const candidates = pgTable('candidates', {
@@ -147,7 +147,7 @@ export const candidates = pgTable('candidates', {
   nominatedById: uuid('nominated_by_id').references(() => players.id),
 
   isWithdrawn: boolean('is_withdrawn').default(false).notNull(),
-  registeredAt: timestamp('registered_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  registeredAt: timestamp('registered_at').defaultNow().notNull(),
 });
 
 export const ballots = pgTable('ballots', {
@@ -165,7 +165,7 @@ export const ballots = pgTable('ballots', {
     | { type: 'exhaustive'; candidateId: string }              // same as fptp per round
   >().notNull(),
 
-  castAt: timestamp('cast_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  castAt: timestamp('cast_at').defaultNow().notNull(),
 }, (table) => ({
   electionVoterUnique: uniqueIndex('ballots_election_voter_unique').on(table.electionId, table.voterId),
 }));

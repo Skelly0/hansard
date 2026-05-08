@@ -15,7 +15,7 @@ export const modActions = pgTable('mod_actions', {
   internalNotes: text('internal_notes'),       // staff-only context
 
   // For timed actions
-  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }),
+  expiresAt: timestamp('expires_at'),
   isActive: boolean('is_active').default(true).notNull(),
 
   // If appealed
@@ -27,8 +27,8 @@ export const modActions = pgTable('mod_actions', {
   // Related ticket (if the mod action came from a ticket)
   ticketId: uuid('ticket_id').references(() => tickets.id),
 
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
 export const modNotes = pgTable('mod_notes', {
@@ -36,5 +36,5 @@ export const modNotes = pgTable('mod_notes', {
   targetPlayerId: uuid('target_player_id').references(() => players.id).notNull(),
   authorId: uuid('author_id').references(() => players.id).notNull(),
   content: text('content').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 });

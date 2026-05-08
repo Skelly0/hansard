@@ -25,5 +25,8 @@ declare module '@fastify/session' {
 declare module 'fastify' {
   interface FastifyRequest {
     player?: Player;
+    // sha-256 hex of the bearer token, set by requireMcpToken so downstream
+    // handlers (e.g. revoke) don't have to re-parse the Authorization header.
+    mcpTokenHash?: string;
   }
 }

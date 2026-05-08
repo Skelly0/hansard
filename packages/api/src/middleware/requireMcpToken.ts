@@ -75,4 +75,5 @@ export async function requireMcpToken(request: FastifyRequest, reply: FastifyRep
     .where(eq(mcpTokens.tokenHash, tokenHash));
 
   request.player = player;
+  request.mcpTokenHash = tokenHash;
 }

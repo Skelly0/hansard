@@ -188,28 +188,36 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
   // POST /api/auth/device/init — CLI calls this first; returns a pending pairing.
   fastify.post('/api/auth/device/init', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
-  }, async (request: FastifyRequest, _reply: FastifyReply) => {
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     const deviceCode = generateOpaqueToken(32);
     const deviceCodeHash = sha256Hex(deviceCode);
-    let userCode = generateUserCode();
-    // Vanishingly rare collision retry — user_code has ~32^8 = 1.1e12 combos.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const existing = await fastify.db
-        .select({ deviceCodeHash: deviceCodes.deviceCodeHash })
-        .from(deviceCodes)
-        .where(eq(deviceCodes.userCode, userCode))
-        .limit(1);
-      if (existing.length === 0) break;
-      userCode = generateUserCode();
-    }
-
     const expiresAt = new Date(Date.now() + DEVICE_CODE_TTL_MS);
-    await fastify.db.insert(deviceCodes).values({
-      deviceCodeHash,
-      userCode,
-      interval: DEVICE_POLL_INTERVAL_S,
-      expiresAt,
-    });
+
+    // Vanishingly rare collision retry — user_code has ~32^8 = 1.1e12 combos.
+    // We catch Postgres 23505 on the unique-constraint INSERT to close the
+    // SELECT-then-INSERT race; the prior pre-check is gone.
+    let userCode: string | null = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = generateUserCode();
+      try {
+        await fastify.db.insert(deviceCodes).values({
+          deviceCodeHash,
+          userCode: candidate,
+          interval: DEVICE_POLL_INTERVAL_S,
+          expiresAt,
+        });
+        userCode = candidate;
+        break;
+      } catch (err: unknown) {
+        if ((err as { code?: string })?.code === '23505') continue;
+        throw err;
+      }
+    }
+    if (!userCode) {
+      // 5 collisions in a row is statistically impossible without contention
+      // pathology; surface as 503 so the CLI can retry rather than wedge.
+      return reply.status(503).send({ error: 'Could not allocate pairing code' });
+    }
 
     const apiBase = publicApiUrl(request);
     const verificationUri = `${apiBase}/api/auth/device`;
@@ -254,16 +262,19 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
       .limit(1);
 
     if (!pairing) {
+      request.session.pendingDeviceUserCode = undefined;
       return reply.status(404).type('text/html').send(renderErrorPage(
         'That code is invalid or has already been used. Re-run <code>hansard-mcp login</code> to start over.',
       ));
     }
     if (pairing.expiresAt.getTime() < Date.now()) {
+      request.session.pendingDeviceUserCode = undefined;
       return reply.status(410).type('text/html').send(renderErrorPage(
         'That code has expired. Re-run <code>hansard-mcp login</code> to start over.',
       ));
     }
     if (pairing.approved) {
+      request.session.pendingDeviceUserCode = undefined;
       return reply.type('text/html').send(renderSuccessPage('Already approved — you can close this tab.'));
     }
 
@@ -417,10 +428,11 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
   });
 
   // POST /api/auth/mcp/revoke — bearer-auth; deletes the calling token.
+  // requireMcpToken stashes the resolved tokenHash on request so we don't
+  // re-parse the Authorization header here.
   fastify.post('/api/auth/mcp/revoke', { preHandler: requireMcpToken }, async (request: FastifyRequest) => {
-    const authHeader = request.headers.authorization!;
-    const token = authHeader.slice('Bearer '.length).trim();
-    await fastify.db.delete(mcpTokens).where(eq(mcpTokens.tokenHash, sha256Hex(token)));
+    const tokenHash = request.mcpTokenHash!;
+    await fastify.db.delete(mcpTokens).where(eq(mcpTokens.tokenHash, tokenHash));
     return { success: true };
   });
 }, { name: 'auth' });

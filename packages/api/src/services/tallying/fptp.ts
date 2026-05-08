@@ -48,8 +48,9 @@ export class FPTPStrategy implements TallyStrategy {
     if (result.totalVotes === 0) return false;
     const threshold = config.runoffThreshold ?? 0.5;
     const maxVotes = Math.max(0, ...Object.values(result.finalTallies));
-    // Runoff needed if no candidate exceeds the threshold
-    return maxVotes / result.totalVotes <= threshold;
+    // Aligned with two-round runoff (`> threshold` wins outright):
+    // runoff triggers when no candidate strictly exceeds the threshold.
+    return maxVotes / result.totalVotes < threshold;
   }
 
   private checkQuorum(totalVotes: number, config: ElectionConfig): boolean | undefined {

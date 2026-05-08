@@ -1,4 +1,4 @@
-import { eq, and, desc, isNull, ilike, or, type SQL } from 'drizzle-orm';
+import { eq, and, desc, isNull, ilike, or, inArray, type SQL } from 'drizzle-orm';
 import {
   players,
   playerEventLog,
@@ -366,35 +366,31 @@ export async function getPlayerHealth(
   const player = await getPlayer(db, playerId);
   if (!player) return null;
 
-  // Get health-related events
+  const healthEventTypes = [
+    PlayerEventType.AILMENT_ACQUIRED,
+    PlayerEventType.AILMENT_RECOVERED,
+    PlayerEventType.HEALTH_CHANGED,
+    PlayerEventType.DEATH,
+  ];
+
+  // Filter to health-related event types in SQL so the LIMIT 50 actually
+  // returns up to 50 health events (not 50 events of any type).
   const healthEvents = await db
     .select()
     .from(playerEventLog)
     .where(
       and(
         eq(playerEventLog.playerId, playerId),
-        // We fetch all health-related event types
+        inArray(playerEventLog.eventType, healthEventTypes),
       ),
     )
     .orderBy(desc(playerEventLog.createdAt))
     .limit(50);
 
-  // Filter to health-related events in JS (simpler than building an OR chain)
-  const healthEventTypes = new Set([
-    PlayerEventType.AILMENT_ACQUIRED,
-    PlayerEventType.AILMENT_RECOVERED,
-    PlayerEventType.HEALTH_CHANGED,
-    PlayerEventType.DEATH,
-  ]);
-
-  const filteredEvents = healthEvents
-    .filter((e) => healthEventTypes.has(e.eventType as PlayerEvent['eventType']))
-    .map(toPlayerEvent);
-
   return {
     healthStatus: player.healthStatus,
     ailments: player.ailments,
-    events: filteredEvents,
+    events: healthEvents.map(toPlayerEvent),
   };
 }
 
@@ -466,15 +462,17 @@ export interface FindOrCreateResult {
  * Uses ON CONFLICT to be safe under concurrent OAuth callbacks (two tabs).
  *
  * On fresh insert, also writes a playerEventLog row (eventType='registration').
+ * The "fresh insert" check uses the row's createdAt vs updatedAt-style heuristic:
+ * if the row was inserted just now (within the last few seconds AND the username
+ * was already up to date), treat it as the creating call. We avoid the
+ * SELECT-then-INSERT pattern entirely so two concurrent OAuth callbacks can't
+ * both think they are the creator.
  */
 export async function findOrCreatePlayerByDiscordId(
   db: Database,
   input: { discordId: string; discordUsername: string },
 ): Promise<FindOrCreateResult> {
-  const existing = await db.select().from(players).where(eq(players.discordId, input.discordId)).limit(1);
-  if (existing.length > 0) {
-    return { player: existing[0], wasCreated: false };
-  }
+  const before = Date.now();
 
   const inserted = await db
     .insert(players)
@@ -489,18 +487,27 @@ export async function findOrCreatePlayerByDiscordId(
     .returning();
 
   const player = inserted[0];
+  // If registeredAt is at-or-after the moment we entered this call, this row
+  // was created by THIS call (vs. updated by ON CONFLICT). Allow a small skew
+  // for clock drift between app and DB.
+  const registeredMs = player.registeredAt instanceof Date
+    ? player.registeredAt.getTime()
+    : new Date(player.registeredAt as unknown as string).getTime();
+  const wasCreated = registeredMs >= before - 1000;
 
-  try {
-    await db.insert(playerEventLog).values({
-      playerId: player.id,
-      eventType: 'registration',
-      description: `Player auto-registered via Discord OAuth (@${input.discordUsername})`,
-    });
-  } catch (err) {
-    console.warn('Failed to write registration event log for player', player.id, err);
+  if (wasCreated) {
+    try {
+      await db.insert(playerEventLog).values({
+        playerId: player.id,
+        eventType: 'registration',
+        description: `Player auto-registered via Discord OAuth (@${input.discordUsername})`,
+      });
+    } catch (err) {
+      console.warn('Failed to write registration event log for player', player.id, err);
+    }
   }
 
-  return { player, wasCreated: true };
+  return { player, wasCreated };
 }
 
 /**

@@ -112,8 +112,8 @@ export class STVStrategy implements TallyStrategy {
           if (surplus > 0) {
             const transferValue = surplus / (tallies[candidateId] ?? 1);
             for (const b of workingBallots) {
-              const top = getTopChoice(b);
-              if (top === candidateId) {
+              // Peek by reading directly — do NOT call getTopChoice (mutator).
+              if (b.ranking[b.currentIndex] === candidateId) {
                 b.weight *= transferValue;
                 b.currentIndex++;
               }
@@ -121,8 +121,7 @@ export class STVStrategy implements TallyStrategy {
           } else {
             // No surplus — mark ballots as used
             for (const b of workingBallots) {
-              const top = getTopChoice(b);
-              if (top === candidateId) {
+              if (b.ranking[b.currentIndex] === candidateId) {
                 b.weight = 0;
                 b.currentIndex++;
               }
@@ -137,10 +136,10 @@ export class STVStrategy implements TallyStrategy {
         const eliminatedCandidate = sorted[0];
         eliminated.add(eliminatedCandidate);
 
-        // Transfer eliminated candidate's ballots at their current weight
+        // Transfer eliminated candidate's ballots at their current weight.
+        // Peek by reading directly — do NOT call getTopChoice (mutator).
         for (const b of workingBallots) {
-          const top = getTopChoice(b);
-          if (top === eliminatedCandidate) {
+          if (b.ranking[b.currentIndex] === eliminatedCandidate) {
             b.currentIndex++; // move to next preference
           }
         }

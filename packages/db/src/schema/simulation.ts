@@ -20,8 +20,8 @@ export const simulationClock = pgTable('simulation_clock', {
   seasonName: varchar('season_name', { length: 128 }).notNull(),
   isPaused: boolean('is_paused').default(false).notNull(),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
 // Log of every time advancement -- what happened each tick
@@ -44,5 +44,5 @@ export const timeAdvanceLog = pgTable('time_advance_log', {
   }>(),
 
   notes: text('notes'),         // staff can add context
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });

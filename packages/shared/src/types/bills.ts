@@ -88,7 +88,9 @@ export interface Bill {
   collectionId: string | null;
   parentDocumentId: string | null;
   amendsBillId: string | null;
+  amendsBillSlug: string | null;
   amendsDocumentId: string | null;
+  amendsDocumentSlug: string | null;
 
   // Classification
   tags: string[];

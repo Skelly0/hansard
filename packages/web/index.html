@@ -10,6 +10,23 @@
       href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;500;600&family=JetBrains+Mono:wght@400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap"
       rel="stylesheet"
     />
+    <script>
+      // Apply theme before React hydrates to avoid a flash of light content.
+      (function () {
+        try {
+          var stored = localStorage.getItem('hansard-theme');
+          var resolved =
+            stored === 'light' || stored === 'dark'
+              ? stored
+              : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+          document.documentElement.dataset.theme = resolved;
+        } catch (_) {
+          /* localStorage unavailable — fall through to default light */
+        }
+      })();
+    </script>
   </head>
   <body class="bg-page text-text-primary font-body">
     <div id="root"></div>

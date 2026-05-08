@@ -12,8 +12,8 @@ export const players = pgTable('players', {
   characterPortraitUrl: varchar('character_portrait_url', { length: 512 }),
   // Player uploads an image to Discord or provides a URL. Stored for display in webapp/embeds.
 
-  factionId: uuid('faction_id').references((): AnyPgColumn => factions.id),
-  partyId: uuid('party_id').references((): AnyPgColumn => parties.id),
+  factionId: uuid('faction_id').references((): AnyPgColumn => factions.id, { onDelete: 'set null' }),
+  partyId: uuid('party_id').references((): AnyPgColumn => parties.id, { onDelete: 'set null' }),
 
   // === AGING & LIFECYCLE ===
   birthDate: varchar('birth_date', { length: 32 }),     // in-sim date
@@ -44,8 +44,8 @@ export const players = pgTable('players', {
   staffRole: varchar('staff_role', { length: 64 }),
 
   // Metadata
-  registeredAt: timestamp('registered_at').defaultNow().notNull(),
-  lastActiveAt: timestamp('last_active_at'),
+  registeredAt: timestamp('registered_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  lastActiveAt: timestamp('last_active_at', { withTimezone: true, mode: 'date' }),
   profileData: jsonb('profile_data').$type<{
     timezone?: string;
     pronouns?: string;
@@ -76,7 +76,7 @@ export const playerEventLog = pgTable('player_event_log', {
   triggeredById: uuid('triggered_by_id').references(() => players.id),  // who/what caused it (self, staff, system)
   isAutomatic: boolean('is_automatic').default(false).notNull(),        // true if caused by time advance
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
 export const factions = pgTable('factions', {
@@ -87,7 +87,7 @@ export const factions = pgTable('factions', {
   colour: varchar('colour', { length: 7 }),  // hex colour for embeds
   discordRoleId: varchar('discord_role_id', { length: 20 }),
   isActive: boolean('is_active').default(true).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
 export const parties = pgTable('parties', {
@@ -100,8 +100,8 @@ export const parties = pgTable('parties', {
   colour: varchar('colour', { length: 7 }),
   discordRoleId: varchar('discord_role_id', { length: 20 }),  // mapped Discord role for auto-sync
   isActive: boolean('is_active').default(true).notNull(),
-  foundedAt: timestamp('founded_at').defaultNow().notNull(),
-  dissolvedAt: timestamp('dissolved_at'),
+  foundedAt: timestamp('founded_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  dissolvedAt: timestamp('dissolved_at', { withTimezone: true, mode: 'date' }),
 });
 
 export const offices = pgTable('offices', {
@@ -147,10 +147,10 @@ export const offices = pgTable('offices', {
 
 export const officeHolders = pgTable('office_holders', {
   id: uuid('id').primaryKey().defaultRandom(),
-  officeId: uuid('office_id').references(() => offices.id).notNull(),
+  officeId: uuid('office_id').references(() => offices.id, { onDelete: 'cascade' }).notNull(),
   playerId: uuid('player_id').references(() => players.id).notNull(),
-  startDate: timestamp('start_date').defaultNow().notNull(),
-  endDate: timestamp('end_date'),
+  startDate: timestamp('start_date', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  endDate: timestamp('end_date', { withTimezone: true, mode: 'date' }),
 
   // How they got here
   appointedBy: uuid('appointed_by').references(() => players.id),

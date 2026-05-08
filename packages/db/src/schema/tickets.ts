@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, integer, boolean, timestamp, serial, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, integer, boolean, timestamp, serial, jsonb, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { players } from './players';
 
 export const ticketCategories = pgTable('ticket_categories', {
@@ -54,7 +54,7 @@ export const tickets = pgTable('tickets', {
   priority: varchar('priority', { length: 16 }).default('normal').notNull(),  // low, normal, high, urgent
 
   // Relationships
-  parentTicketId: uuid('parent_ticket_id').references((): any => tickets.id),
+  parentTicketId: uuid('parent_ticket_id').references((): AnyPgColumn => tickets.id, { onDelete: 'set null' }),
   linkedTicketIds: jsonb('linked_ticket_ids').$type<string[]>().default([]),
 
   // Discord
@@ -62,11 +62,11 @@ export const tickets = pgTable('tickets', {
   discordThreadId: varchar('discord_thread_id', { length: 20 }),
 
   // Timestamps
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-  firstResponseAt: timestamp('first_response_at'),
-  resolvedAt: timestamp('resolved_at'),
-  closedAt: timestamp('closed_at'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
+  firstResponseAt: timestamp('first_response_at', { withTimezone: true, mode: 'date' }),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'date' }),
+  closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }),
 
   // Tags for filtering
   tags: jsonb('tags').$type<string[]>().default([]),
@@ -83,8 +83,8 @@ export const ticketMessages = pgTable('ticket_messages', {
   // If synced from Discord
   discordMessageId: varchar('discord_message_id', { length: 20 }),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  editedAt: timestamp('edited_at'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  editedAt: timestamp('edited_at', { withTimezone: true, mode: 'date' }),
 });
 
 export const ticketAuditLog = pgTable('ticket_audit_log', {
@@ -98,5 +98,5 @@ export const ticketAuditLog = pgTable('ticket_audit_log', {
   oldValue: jsonb('old_value'),
   newValue: jsonb('new_value'),
 
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });

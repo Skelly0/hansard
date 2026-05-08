@@ -4,7 +4,10 @@ import {
   ButtonBuilder,
   ButtonStyle,
 } from 'discord.js';
+import { and, eq } from 'drizzle-orm';
+import { ballots, players } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../utils/embeds.js';
+import { db } from '../db.js';
 
 /**
  * Handle vote button interactions.
@@ -127,19 +130,68 @@ async function handleConfirmVote(
   electionId: string,
   choiceData: string,
 ): Promise<void> {
-  // TODO: Call the API to cast the ballot
-  // POST /api/elections/:id/vote
-  // Body depends on the election method
-
   let voteDescription: string;
+  let votePayload: typeof ballots.$inferInsert.vote;
 
-  if (['yea', 'nay', 'abstain'].includes(choiceData)) {
+  if (choiceData === 'yea' || choiceData === 'nay' || choiceData === 'abstain') {
     voteDescription = choiceData.toUpperCase();
+    votePayload = { type: 'yea_nay_abstain', choice: choiceData };
   } else if (choiceData.startsWith('candidate:')) {
     const candidateId = choiceData.replace('candidate:', '');
     voteDescription = `Candidate \`${candidateId}\``;
+    votePayload = { type: 'fptp', candidateId };
   } else {
-    voteDescription = choiceData;
+    await interaction.reply({
+      embeds: [errorEmbed(`Unknown vote choice: \`${choiceData}\`.`)],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const [voter] = await db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.discordId, interaction.user.id))
+    .limit(1);
+
+  if (!voter) {
+    await interaction.reply({
+      embeds: [errorEmbed('You are not registered as a player. Run `/character create` first.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  try {
+    const [existing] = await db
+      .select({ id: ballots.id })
+      .from(ballots)
+      .where(and(eq(ballots.electionId, electionId), eq(ballots.voterId, voter.id)))
+      .limit(1);
+
+    if (existing) {
+      await interaction.reply({
+        embeds: [errorEmbed('You have already voted in this election.')],
+        ephemeral: true,
+      });
+      return;
+    }
+
+    await db.insert(ballots).values({
+      electionId,
+      voterId: voter.id,
+      vote: votePayload,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to record vote';
+    const friendly = /unique|duplicate/i.test(message)
+      ? 'You have already voted in this election.'
+      : message;
+    await interaction.reply({
+      embeds: [errorEmbed(friendly)],
+      ephemeral: true,
+    });
+    return;
   }
 
   const embed = successEmbed(
@@ -149,7 +201,7 @@ async function handleConfirmVote(
 
   await interaction.update({
     embeds: [embed],
-    components: [], // remove buttons after voting
+    components: [],
   });
 }
 

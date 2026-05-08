@@ -52,6 +52,7 @@ export interface Election {
   status: string;
   results?: ElectionResults;
   relatedBillId?: string;
+  relatedBillSlug?: string | null;
   createdById: string;
   createdBy?: { id: string; characterName: string };
   candidates?: Candidate[];
@@ -130,7 +131,10 @@ export function useOpenVoting() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/elections/${id}/open`),
-    onSuccess: (_d, id) => { qc.invalidateQueries({ queryKey: ['elections', id] }); },
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ['elections'] });
+      qc.invalidateQueries({ queryKey: ['elections', id] });
+    },
   });
 }
 
@@ -138,7 +142,10 @@ export function useCloseVoting() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/elections/${id}/close`),
-    onSuccess: (_d, id) => { qc.invalidateQueries({ queryKey: ['elections', id] }); },
+    onSuccess: (_d, id) => {
+      qc.invalidateQueries({ queryKey: ['elections'] });
+      qc.invalidateQueries({ queryKey: ['elections', id] });
+    },
   });
 }
 

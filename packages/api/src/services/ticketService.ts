@@ -1,4 +1,4 @@
-import { eq, desc, and, ilike, sql, count, avg } from 'drizzle-orm';
+import { eq, desc, and, ilike, sql, count, avg, inArray } from 'drizzle-orm';
 import {
   tickets,
   ticketCategories,
@@ -219,6 +219,19 @@ export class TicketService {
       tickets: rows as unknown as Ticket[],
       total,
     };
+  }
+
+  // ----------------------------------------------------------
+  // getTicketsByIds — batch lookup, used for resolving linked-ticket IDs
+  // ----------------------------------------------------------
+
+  async getTicketsByIds(ids: string[]): Promise<Ticket[]> {
+    if (!ids.length) return [];
+    const rows = await this.db
+      .select()
+      .from(tickets)
+      .where(inArray(tickets.id, ids));
+    return rows as unknown as Ticket[];
   }
 
   // ----------------------------------------------------------

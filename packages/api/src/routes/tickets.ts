@@ -81,6 +81,21 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
   );
 
   // ============================================================
+  // GET /api/tickets/by-ids?ids=a,b,c — Batch lookup by ID
+  // ============================================================
+
+  fastify.get<{ Querystring: { ids?: string } }>(
+    '/api/tickets/by-ids',
+    { preHandler: [requireAuth] },
+    async (request) => {
+      const raw = request.query.ids ?? '';
+      const ids = raw.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 100);
+      const results = await ticketService.getTicketsByIds(ids);
+      return { tickets: results };
+    },
+  );
+
+  // ============================================================
   // GET /api/tickets/:id — Get ticket with messages + audit log
   // ============================================================
 
@@ -153,9 +168,40 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth] },
     async (request, reply) => {
       const user = request.session.user!;
+      const body = request.body;
+
+      const ticket = await ticketService.getTicket(request.params.id);
+      if (!ticket) {
+        return reply.status(404).send({ error: 'Ticket not found' });
+      }
+
+      const isStaff = user.isStaff;
+      const isCreator = ticket.createdById === user.id;
+
+      // status / priority / assignedToId are staff-only
+      const wantsStaffOnly =
+        body.status !== undefined ||
+        body.priority !== undefined ||
+        body.assignedToId !== undefined ||
+        body.tags !== undefined;
+      if (wantsStaffOnly && !isStaff) {
+        return reply.status(403).send({
+          error: 'Only staff can change status, priority, assignee, or tags',
+        });
+      }
+
+      // title / description editable by creator or staff
+      const wantsContentEdit =
+        body.title !== undefined || body.description !== undefined;
+      if (wantsContentEdit && !isCreator && !isStaff) {
+        return reply.status(403).send({
+          error: 'Only the ticket creator or staff can edit title/description',
+        });
+      }
+
       const updated = await ticketService.updateTicket(
         request.params.id,
-        request.body,
+        body,
         user.id,
       );
 
@@ -249,6 +295,21 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const user = request.session.user!;
       const { resolution } = request.body ?? {};
+
+      const ticket = await ticketService.getTicket(request.params.id);
+      if (!ticket) {
+        return reply.status(404).send({ error: 'Ticket not found' });
+      }
+
+      const allowed =
+        ticket.createdById === user.id ||
+        ticket.assignedToId === user.id ||
+        user.isStaff;
+      if (!allowed) {
+        return reply.status(403).send({
+          error: 'Only the creator, assignee, or staff can close this ticket',
+        });
+      }
 
       const updated = await ticketService.closeTicket(
         request.params.id,

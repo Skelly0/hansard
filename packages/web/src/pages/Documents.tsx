@@ -330,7 +330,7 @@ export function Documents() {
           <input
             type="text"
             value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); setExpandedDocId(null); }}
             placeholder="Search documents..."
             className="w-full bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-primary"
           />
@@ -341,7 +341,7 @@ export function Documents() {
           <label className="text-label-ui text-text-tertiary">Collection</label>
           <select
             value={collection}
-            onChange={(e) => { setCollection(e.target.value); setPage(1); }}
+            onChange={(e) => { setCollection(e.target.value); setPage(1); setExpandedDocId(null); }}
             className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
           >
             <option value="all">All Collections</option>
@@ -358,7 +358,7 @@ export function Documents() {
           {collections.map((col) => (
             <button
               key={col.id}
-              onClick={() => { setCollection(col.id); setPage(1); }}
+              onClick={() => { setCollection(col.id); setPage(1); setExpandedDocId(null); }}
               className="card border-l-accent-bills text-left hover:border-border transition-colors"
             >
               <h3 className="text-heading-2 text-text-primary mb-1">{col.name}</h3>

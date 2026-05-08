@@ -90,7 +90,7 @@ export function Moderation() {
     limit,
   });
 
-  const isLoading = statsLoading && actionsLoading;
+  const isLoading = statsLoading || actionsLoading;
   if (isLoading) return <PageSkeleton />;
 
   const actions = actionsData?.data ?? [];

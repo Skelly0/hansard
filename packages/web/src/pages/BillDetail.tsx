@@ -47,7 +47,7 @@ function getStageIndex(status: string): number {
 export function BillDetail() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const { isStaff } = useAuth();
-  const { data: bill, isLoading } = useBill(slug);
+  const { data: bill, isLoading, isError } = useBill(slug);
   const { data: voters } = useBillVoters(slug);
   const [voteExpanded, setVoteExpanded] = useState(false);
   const [redlineOpen, setRedlineOpen] = useState(false);
@@ -58,14 +58,32 @@ export function BillDetail() {
   const { data: amendmentsData } = useBillAmendments(bill?.id);
   const amendments = amendmentsData?.data ?? [];
 
-  // Fetch diff when the redline viewer is opened and this bill amends a document
+  // Fetch diff when the redline viewer is opened and this bill amends a document.
+  // `to` omitted -> server returns latest version.
   const { data: diffData } = useDocumentDiff(
-    redlineOpen && bill?.amendsDocumentId ? bill.amendsDocumentId : undefined,
+    redlineOpen && bill?.amendsDocumentSlug ? bill.amendsDocumentSlug : undefined,
     redlineOpen ? 1 : undefined,
-    redlineOpen ? undefined : undefined,
+    undefined,
   );
 
-  if (isLoading || !bill) return <PageSkeleton />;
+  if (isLoading) return <PageSkeleton />;
+  if (isError || !bill) {
+    return (
+      <div className="p-8">
+        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
+          <Link to="/bills" className="hover:text-accent-primary transition-colors">Bills</Link>
+          <span>/</span>
+          <span className="font-mono">{slug}</span>
+        </div>
+        <div className="card border-l-status-rejected">
+          <h1 className="text-heading-1 text-text-primary mb-2">Bill not found</h1>
+          <p className="text-body text-text-secondary">
+            We couldn&rsquo;t load this bill. It may have been removed, or the link may be wrong.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Build simple diff hunks from the raw content returned by the API
   const redlineHunks: DiffHunk[] = [];
@@ -201,13 +219,19 @@ export function BillDetail() {
         {bill.amendsBillId && (
           <div>
             <span className="text-label-ui text-text-tertiary mr-1">Amends</span>
-            <Link
-              to="/bills/$slug"
-              params={{ slug: bill.amendsBillId }}
-              className="hover:text-accent-primary transition-colors font-mono text-xs"
-            >
-              Parent Bill
-            </Link>
+            {bill.amendsBillSlug ? (
+              <Link
+                to="/bills/$slug"
+                params={{ slug: bill.amendsBillSlug }}
+                className="hover:text-accent-primary transition-colors font-mono text-xs"
+              >
+                Parent Bill
+              </Link>
+            ) : (
+              <span className="font-mono text-xs text-text-secondary" title={bill.amendsBillId}>
+                Parent Bill
+              </span>
+            )}
           </div>
         )}
         {bill.amendsDocumentId && (
@@ -216,8 +240,9 @@ export function BillDetail() {
             <Link
               to="/documents"
               className="hover:text-accent-primary transition-colors font-mono text-xs"
+              title={bill.amendsDocumentSlug ?? undefined}
             >
-              View Document
+              {bill.amendsDocumentSlug ?? 'View Document'}
             </Link>
           </div>
         )}

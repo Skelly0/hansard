@@ -12,17 +12,6 @@ export interface AilmentPoolEntry {
   description?: string;
 }
 
-export interface StartingAgeFavourTier {
-  minAge: number;
-  totalFavours: number;
-  distributionMethod: 'player_choice' | 'random' | 'even';
-}
-
-export interface StartingAgeFavourBonus {
-  enabled: boolean;
-  tiers: StartingAgeFavourTier[];
-}
-
 export interface AgingConfig {
   // Ailment thresholds
   ailmentAgeThreshold: number;
@@ -42,9 +31,6 @@ export interface AgingConfig {
   minStartingAge: number;
   maxStartingAge: number;
   defaultStartingAge: number;
-
-  // Starting age favour bonus
-  startingAgeFavourBonus: StartingAgeFavourBonus;
 }
 
 // ============================================================

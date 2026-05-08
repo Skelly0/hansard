@@ -8,13 +8,19 @@ import {
   officeHolders,
   offices,
 } from '@hansard/db';
-import type { AgingConfig, AilmentPoolEntry, TimeAdvanceSummary } from '@hansard/shared';
+import {
+  advanceDateByTicks,
+  calculateAge,
+  type AgingConfig,
+  type AilmentPoolEntry,
+  type TimeAdvanceSummary,
+} from '@hansard/shared';
 
 // ============================================================
-// Default Aging Config
+// Default Aging Config — used when simulation_clock.aging_config is null.
 // ============================================================
 
-const DEFAULT_AGING_CONFIG: AgingConfig = {
+export const DEFAULT_AGING_CONFIG: AgingConfig = {
   ailmentAgeThreshold: 55,
   ailmentBaseChance: 0.05,
   ailmentAgeScaling: 0.02,
@@ -33,10 +39,6 @@ const DEFAULT_AGING_CONFIG: AgingConfig = {
   minStartingAge: 18,
   maxStartingAge: 70,
   defaultStartingAge: 30,
-  startingAgeFavourBonus: {
-    enabled: false,
-    tiers: [],
-  },
 };
 
 // ============================================================
@@ -72,77 +74,13 @@ interface AilmentDetail {
 // Helpers
 // ============================================================
 
-function getAgingConfig(): AgingConfig {
-  // Future: load from DB or config table. For now, use defaults.
-  return DEFAULT_AGING_CONFIG;
-}
-
 /**
- * Advance a date string by N ticks of the given unit.
- * Supports ISO-style dates (YYYY-MM-DD) and freeform "Year X, Month Y".
+ * Resolve the aging config for the current season. Reads from
+ * simulation_clock.aging_config if present; otherwise returns the defaults.
  */
-function advanceDateByTicks(dateStr: string, ticks: number, tickUnit: string): string {
-  // Try ISO date first
-  const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (isoMatch) {
-    const date = new Date(`${dateStr}T00:00:00Z`);
-    switch (tickUnit) {
-      case 'day':
-        date.setUTCDate(date.getUTCDate() + ticks);
-        break;
-      case 'week':
-        date.setUTCDate(date.getUTCDate() + ticks * 7);
-        break;
-      case 'month':
-        date.setUTCMonth(date.getUTCMonth() + ticks);
-        break;
-      case 'year':
-        date.setUTCFullYear(date.getUTCFullYear() + ticks);
-        break;
-    }
-    return date.toISOString().split('T')[0]!;
-  }
-
-  // Freeform: "Year X, Month Y" pattern
-  const freeformMatch = dateStr.match(/Year\s+(\d+),?\s*Month\s+(\d+)/i);
-  if (freeformMatch) {
-    let year = parseInt(freeformMatch[1]!, 10);
-    let month = parseInt(freeformMatch[2]!, 10);
-
-    switch (tickUnit) {
-      case 'month':
-        month += ticks;
-        while (month > 12) { month -= 12; year++; }
-        while (month < 1) { month += 12; year--; }
-        break;
-      case 'year':
-        year += ticks;
-        break;
-      case 'day':
-      case 'week':
-        // For freeform dates, approximate: treat as months
-        month += ticks;
-        while (month > 12) { month -= 12; year++; }
-        break;
-    }
-    return `Year ${year}, Month ${month}`;
-  }
-
-  // Fallback: just append tick info
-  return `${dateStr} +${ticks} ${tickUnit}s`;
-}
-
-/**
- * Calculate how many years a player ages per tick.
- */
-function ageIncrementPerTick(tickUnit: string): number {
-  switch (tickUnit) {
-    case 'year': return 1;
-    case 'month': return 1 / 12;
-    case 'week': return 1 / 52;
-    case 'day': return 1 / 365;
-    default: return 1;
-  }
+export async function getAgingConfig(db: Database): Promise<AgingConfig> {
+  const clock = await getClock(db);
+  return clock?.agingConfig ?? DEFAULT_AGING_CONFIG;
 }
 
 /**
@@ -161,6 +99,95 @@ function rollAilment(config: AgingConfig, playerAge: number): AilmentPoolEntry |
   }
 
   return eligible[eligible.length - 1]!;
+}
+
+// ============================================================
+// Per-tick roll engine — shared between advance / preview.
+// Mutates `state` in place; returns nothing. The caller decides
+// whether to persist the resulting deaths and ailments.
+// ============================================================
+
+interface PlayerTickState {
+  id: string;
+  characterName: string | null;
+  birthDate: string | null;
+  ailments: AilmentEntry[];
+  isAlive: boolean;
+}
+
+interface AilmentEntry {
+  condition: string;
+  severity: 'minor' | 'major' | 'critical';
+  acquiredAtTick: number;
+  acquiredAtAge: number;
+  notes?: string;
+}
+
+interface TickRoll {
+  newAilment?: AilmentEntry;
+  death?: { cause: string };
+}
+
+/**
+ * Run one tick's worth of ailment + death rolls for a single player at
+ * a known age. Pure of side effects beyond Math.random().
+ */
+function rollSingleTick(
+  config: AgingConfig,
+  age: number,
+  ailments: AilmentEntry[],
+  tick: number,
+): TickRoll {
+  const result: TickRoll = {};
+  let currentAilments = ailments;
+
+  // --- Ailment roll ---
+  if (age >= config.ailmentAgeThreshold) {
+    const ailmentChance =
+      config.ailmentBaseChance + (age - config.ailmentAgeThreshold) * config.ailmentAgeScaling;
+    if (Math.random() < ailmentChance) {
+      const ailment = rollAilment(config, age);
+      if (ailment && !currentAilments.some(a => a.condition === ailment.name)) {
+        const newAilment: AilmentEntry = {
+          condition: ailment.name,
+          severity: ailment.severity,
+          acquiredAtTick: tick,
+          acquiredAtAge: age,
+        };
+        result.newAilment = newAilment;
+        currentAilments = [...currentAilments, newAilment];
+      }
+    }
+  }
+
+  // --- Death roll ---
+  let deathChance = 0;
+  let causeOfDeath: string | null = null;
+
+  const criticalAilments = currentAilments.filter(a => a.severity === 'critical');
+  if (criticalAilments.length > 0) {
+    deathChance += config.criticalAilmentDeathChance * criticalAilments.length;
+    causeOfDeath = criticalAilments[0]!.condition;
+  }
+
+  const majorAilments = currentAilments.filter(a => a.severity === 'major');
+  if (majorAilments.length >= 2) {
+    deathChance += 0.05 * majorAilments.length;
+    if (!causeOfDeath) causeOfDeath = 'complications from multiple ailments';
+  }
+
+  if (age >= config.deathAgeThreshold) {
+    const ageDeathChance =
+      config.deathBaseChance + (age - config.deathAgeThreshold) * config.deathAgeScaling;
+    if (ageDeathChance > deathChance) causeOfDeath = 'natural causes';
+    deathChance = Math.max(deathChance, ageDeathChance);
+  }
+
+  if (deathChance > 0 && Math.random() < deathChance) {
+    result.death = { cause: causeOfDeath ?? 'unknown causes' };
+  }
+
+  return result;
 }
 
 // ============================================================
@@ -188,6 +215,91 @@ export async function getClock(db: Database) {
  * 7. Create timeAdvanceLog entry
  * 8. Return summary
  */
+/**
+ * Walk a player through `ticks` sequential ticks of aging, ailment rolls
+ * and death rolls. Returns final state plus collected events.
+ *
+ * Pure of DB side effects — caller persists the result. Mutates the
+ * passed-in `state` object as it iterates so each tick sees the latest
+ * ailments / age.
+ */
+function simulatePlayerTicks(
+  state: PlayerTickState,
+  config: AgingConfig,
+  fromTick: number,
+  ticks: number,
+  perTickDates: string[],
+): {
+  finalAge: number | null;
+  ageChanged: boolean;
+  newAilments: { ailment: AilmentEntry; tick: number; date: string }[];
+  death: { cause: string; tick: number; date: string; age: number } | null;
+} {
+  const startAge = calculateAge(state.birthDate, perTickDates[0] ?? null);
+  if (startAge == null) {
+    return { finalAge: null, ageChanged: false, newAilments: [], death: null };
+  }
+
+  let lastAge = startAge;
+  const newAilments: { ailment: AilmentEntry; tick: number; date: string }[] = [];
+
+  for (let i = 0; i < ticks; i++) {
+    if (!state.isAlive) break;
+    const tickNum = fromTick + i + 1;
+    const tickDate = perTickDates[i + 1]!;
+    const ageThisTick = calculateAge(state.birthDate, tickDate) ?? lastAge;
+    lastAge = ageThisTick;
+
+    const roll = rollSingleTick(config, ageThisTick, state.ailments, tickNum);
+
+    if (roll.newAilment) {
+      state.ailments = [...state.ailments, roll.newAilment];
+      newAilments.push({ ailment: roll.newAilment, tick: tickNum, date: tickDate });
+    }
+
+    if (roll.death) {
+      state.isAlive = false;
+      return {
+        finalAge: ageThisTick,
+        ageChanged: ageThisTick !== startAge,
+        newAilments,
+        death: { cause: roll.death.cause, tick: tickNum, date: tickDate, age: ageThisTick },
+      };
+    }
+  }
+
+  return {
+    finalAge: lastAge,
+    ageChanged: lastAge !== startAge,
+    newAilments,
+    death: null,
+  };
+}
+
+function getWorstSeverity(ailments: { severity: 'minor' | 'major' | 'critical' }[]): string {
+  if (ailments.some(a => a.severity === 'critical')) return 'critical';
+  if (ailments.some(a => a.severity === 'major')) return 'major';
+  if (ailments.some(a => a.severity === 'minor')) return 'minor';
+  return 'healthy';
+}
+
+/**
+ * Build the per-tick date sequence from a starting date. Index 0 is the
+ * start; index N is the date after N ticks. Throws on freeform + day/week.
+ */
+function buildPerTickDates(fromDate: string, ticks: number, tickUnit: string): string[] {
+  const dates: string[] = [fromDate];
+  let current = fromDate;
+  for (let i = 0; i < ticks; i++) {
+    current = advanceDateByTicks(current, 1, tickUnit);
+    dates.push(current);
+  }
+  return dates;
+}
+
+/**
+ * Advance time by N ticks. Per-tick rolls; transactional persistence.
+ */
 export async function advanceTime(
   db: Database,
   ticks: number,
@@ -197,183 +309,102 @@ export async function advanceTime(
   if (!clock) throw new Error('No simulation clock found. Create one first.');
   if (clock.isPaused) throw new Error('Simulation clock is paused. Unpause before advancing.');
 
-  const config = getAgingConfig();
+  const config = clock.agingConfig ?? DEFAULT_AGING_CONFIG;
   const fromTick = clock.currentTick;
   const toTick = fromTick + ticks;
   const fromDate = clock.currentDate;
-  const toDate = advanceDateByTicks(fromDate, ticks, clock.tickUnit);
-  const ageIncrement = ageIncrementPerTick(clock.tickUnit) * ticks;
+  const perTickDates = buildPerTickDates(fromDate, ticks, clock.tickUnit);
+  const toDate = perTickDates[perTickDates.length - 1]!;
 
-  // Fetch all living players with a character
-  const livingPlayers = await db
-    .select()
-    .from(players)
-    .where(eq(players.isAlive, true));
+  const livingPlayers = await db.select().from(players).where(eq(players.isAlive, true));
 
   const deathDetails: DeathDetail[] = [];
   const ailmentDetails: AilmentDetail[] = [];
   let agedCount = 0;
 
-  for (const player of livingPlayers) {
-    if (player.currentAge == null) continue;
-
-    // --- Step 3: Age the player ---
-    const newAge = Math.floor(player.currentAge + ageIncrement);
-    const ageChanged = newAge !== player.currentAge;
-
-    await db
-      .update(players)
-      .set({ currentAge: newAge })
-      .where(eq(players.id, player.id));
-
-    if (ageChanged) agedCount++;
-
-    // --- Step 4: Ailment rolls ---
-    if (newAge >= config.ailmentAgeThreshold) {
-      const ailmentChance =
-        config.ailmentBaseChance +
-        (newAge - config.ailmentAgeThreshold) * config.ailmentAgeScaling;
-
-      if (Math.random() < ailmentChance) {
-        const ailment = rollAilment(config, newAge);
-        if (ailment) {
-          const currentAilments = (player.ailments ?? []) as {
-            condition: string;
-            severity: 'minor' | 'major' | 'critical';
-            acquiredAtTick: number;
-            acquiredAtAge: number;
-            notes?: string;
-          }[];
-
-          // Don't duplicate the same condition
-          const alreadyHas = currentAilments.some(a => a.condition === ailment.name);
-          if (!alreadyHas) {
-            const newAilment = {
-              condition: ailment.name,
-              severity: ailment.severity,
-              acquiredAtTick: toTick,
-              acquiredAtAge: newAge,
-            };
-
-            const updatedAilments = [...currentAilments, newAilment];
-
-            // Determine overall health status from worst ailment
-            const worstSeverity = getWorstSeverity(updatedAilments);
-
-            await db
-              .update(players)
-              .set({
-                ailments: updatedAilments,
-                healthStatus: worstSeverity,
-              })
-              .where(eq(players.id, player.id));
-
-            // Log ailment event
-            await db.insert(playerEventLog).values({
-              playerId: player.id,
-              eventType: 'ailment_acquired',
-              description: `Acquired ${ailment.severity} ailment: ${ailment.name}`,
-              newValue: newAilment,
-              simTick: toTick,
-              simDate: toDate,
-              isAutomatic: true,
-            });
-
-            ailmentDetails.push({
-              playerId: player.id,
-              characterName: player.characterName,
-              condition: ailment.name,
-              severity: ailment.severity,
-            });
-
-            // Update local reference for death roll check
-            player.ailments = updatedAilments as typeof player.ailments;
-          }
-        }
-      }
-    }
-
-    // --- Step 5: Death rolls ---
-    const currentAilments = (player.ailments ?? []) as {
-      condition: string;
-      severity: 'minor' | 'major' | 'critical';
-      acquiredAtTick: number;
-      acquiredAtAge: number;
-    }[];
-
-    let deathChance = 0;
-    let causeOfDeath: string | null = null;
-
-    // Critical ailment death chance
-    const criticalAilments = currentAilments.filter(a => a.severity === 'critical');
-    if (criticalAilments.length > 0) {
-      deathChance += config.criticalAilmentDeathChance * criticalAilments.length;
-      causeOfDeath = criticalAilments[0]!.condition;
-    }
-
-    // Multiple major ailments compound risk
-    const majorAilments = currentAilments.filter(a => a.severity === 'major');
-    if (majorAilments.length >= 2) {
-      deathChance += 0.05 * majorAilments.length;
-      if (!causeOfDeath) causeOfDeath = 'complications from multiple ailments';
-    }
-
-    // Age-based natural death
-    if (newAge >= config.deathAgeThreshold) {
-      const ageDeathChance =
-        config.deathBaseChance +
-        (newAge - config.deathAgeThreshold) * config.deathAgeScaling;
-      if (ageDeathChance > deathChance) {
-        causeOfDeath = 'natural causes';
-      }
-      deathChance = Math.max(deathChance, ageDeathChance);
-    }
-
-    if (deathChance > 0 && Math.random() < deathChance) {
-      // --- Step 6: Process death ---
-      await processPlayerDeath(
-        db,
-        player.id,
-        causeOfDeath ?? 'unknown causes',
-        toDate,
-        toTick,
-        null, // system-triggered
-        true,
-      );
-
-      deathDetails.push({
-        playerId: player.id,
+  await db.transaction(async (tx) => {
+    for (const player of livingPlayers) {
+      const state: PlayerTickState = {
+        id: player.id,
         characterName: player.characterName,
-        age: newAge,
-        cause: causeOfDeath ?? 'unknown causes',
-      });
+        birthDate: player.birthDate,
+        ailments: ((player.ailments ?? []) as AilmentEntry[]).slice(),
+        isAlive: true,
+      };
+
+      const result = simulatePlayerTicks(state, config, fromTick, ticks, perTickDates);
+      if (result.finalAge == null) continue;
+
+      if (result.ageChanged) agedCount++;
+
+      // Persist new ailments + final age + health status
+      if (result.newAilments.length > 0 || result.ageChanged) {
+        await tx
+          .update(players)
+          .set({
+            currentAge: result.finalAge,
+            ailments: state.ailments,
+            healthStatus: getWorstSeverity(state.ailments),
+          })
+          .where(eq(players.id, player.id));
+      }
+
+      for (const { ailment, tick, date } of result.newAilments) {
+        await tx.insert(playerEventLog).values({
+          playerId: player.id,
+          eventType: 'ailment_acquired',
+          description: `Acquired ${ailment.severity} ailment: ${ailment.condition}`,
+          newValue: ailment,
+          simTick: tick,
+          simDate: date,
+          isAutomatic: true,
+        });
+        ailmentDetails.push({
+          playerId: player.id,
+          characterName: player.characterName,
+          condition: ailment.condition,
+          severity: ailment.severity,
+        });
+      }
+
+      if (result.death) {
+        await processPlayerDeath(
+          tx,
+          player.id,
+          result.death.cause,
+          result.death.date,
+          result.death.tick,
+          null,
+          true,
+        );
+        deathDetails.push({
+          playerId: player.id,
+          characterName: player.characterName,
+          age: result.death.age,
+          cause: result.death.cause,
+        });
+      }
     }
-  }
 
-  // --- Step 7: Update clock ---
-  await db
-    .update(simulationClock)
-    .set({
-      currentTick: toTick,
-      currentDate: toDate,
-      updatedAt: new Date(),
-    })
-    .where(eq(simulationClock.id, clock.id));
+    await tx
+      .update(simulationClock)
+      .set({ currentTick: toTick, currentDate: toDate, updatedAt: new Date() })
+      .where(eq(simulationClock.id, clock.id));
 
-  // --- Step 8: Create log entry ---
-  const summary: TimeAdvanceSummary = {
-    deaths: deathDetails.map(d => d.playerId),
-    ailments: ailmentDetails.map(a => a.playerId),
-    aged: agedCount,
-  };
+    const summary: TimeAdvanceSummary = {
+      deaths: deathDetails.map(d => d.playerId),
+      ailments: ailmentDetails.map(a => a.playerId),
+      aged: agedCount,
+    };
 
-  await db.insert(timeAdvanceLog).values({
-    fromTick,
-    toTick,
-    fromDate,
-    toDate,
-    advancedById,
-    summary,
+    await tx.insert(timeAdvanceLog).values({
+      fromTick,
+      toTick,
+      fromDate,
+      toDate,
+      advancedById,
+      summary,
+    });
   });
 
   return {
@@ -381,7 +412,11 @@ export async function advanceTime(
     toTick,
     fromDate,
     toDate,
-    summary,
+    summary: {
+      deaths: deathDetails.map(d => d.playerId),
+      ailments: ailmentDetails.map(a => a.playerId),
+      aged: agedCount,
+    },
     deathDetails,
     ailmentDetails,
     aged: agedCount,
@@ -389,8 +424,7 @@ export async function advanceTime(
 }
 
 /**
- * Dry run of advanceTime -- same logic, but doesn't commit anything.
- * Runs the RNG so the preview shows *potential* outcomes, not guaranteed ones.
+ * Dry run of advanceTime — same logic, no writes.
  */
 export async function previewAdvance(
   db: Database,
@@ -399,85 +433,47 @@ export async function previewAdvance(
   const clock = await getClock(db);
   if (!clock) throw new Error('No simulation clock found.');
 
-  const config = getAgingConfig();
+  const config = clock.agingConfig ?? DEFAULT_AGING_CONFIG;
   const fromTick = clock.currentTick;
   const toTick = fromTick + ticks;
   const fromDate = clock.currentDate;
-  const toDate = advanceDateByTicks(fromDate, ticks, clock.tickUnit);
-  const ageIncrement = ageIncrementPerTick(clock.tickUnit) * ticks;
+  const perTickDates = buildPerTickDates(fromDate, ticks, clock.tickUnit);
+  const toDate = perTickDates[perTickDates.length - 1]!;
 
-  const livingPlayers = await db
-    .select()
-    .from(players)
-    .where(eq(players.isAlive, true));
+  const livingPlayers = await db.select().from(players).where(eq(players.isAlive, true));
 
   const deathDetails: DeathDetail[] = [];
   const ailmentDetails: AilmentDetail[] = [];
   let agedCount = 0;
 
   for (const player of livingPlayers) {
-    if (player.currentAge == null) continue;
+    const state: PlayerTickState = {
+      id: player.id,
+      characterName: player.characterName,
+      birthDate: player.birthDate,
+      ailments: ((player.ailments ?? []) as AilmentEntry[]).slice(),
+      isAlive: true,
+    };
 
-    const newAge = Math.floor(player.currentAge + ageIncrement);
-    if (newAge !== player.currentAge) agedCount++;
+    const result = simulatePlayerTicks(state, config, fromTick, ticks, perTickDates);
+    if (result.finalAge == null) continue;
+    if (result.ageChanged) agedCount++;
 
-    // Ailment check (simulated)
-    if (newAge >= config.ailmentAgeThreshold) {
-      const ailmentChance =
-        config.ailmentBaseChance +
-        (newAge - config.ailmentAgeThreshold) * config.ailmentAgeScaling;
-
-      if (Math.random() < ailmentChance) {
-        const ailment = rollAilment(config, newAge);
-        if (ailment) {
-          const currentAilments = (player.ailments ?? []) as { condition: string }[];
-          if (!currentAilments.some(a => a.condition === ailment.name)) {
-            ailmentDetails.push({
-              playerId: player.id,
-              characterName: player.characterName,
-              condition: ailment.name,
-              severity: ailment.severity,
-            });
-          }
-        }
-      }
+    for (const { ailment } of result.newAilments) {
+      ailmentDetails.push({
+        playerId: player.id,
+        characterName: player.characterName,
+        condition: ailment.condition,
+        severity: ailment.severity,
+      });
     }
 
-    // Death check (simulated)
-    const currentAilments = (player.ailments ?? []) as {
-      condition: string;
-      severity: 'minor' | 'major' | 'critical';
-    }[];
-
-    let deathChance = 0;
-    let causeOfDeath: string | null = null;
-
-    const criticalAilments = currentAilments.filter(a => a.severity === 'critical');
-    if (criticalAilments.length > 0) {
-      deathChance += config.criticalAilmentDeathChance * criticalAilments.length;
-      causeOfDeath = criticalAilments[0]!.condition;
-    }
-
-    const majorAilments = currentAilments.filter(a => a.severity === 'major');
-    if (majorAilments.length >= 2) {
-      deathChance += 0.05 * majorAilments.length;
-      if (!causeOfDeath) causeOfDeath = 'complications from multiple ailments';
-    }
-
-    if (newAge >= config.deathAgeThreshold) {
-      const ageDeathChance =
-        config.deathBaseChance +
-        (newAge - config.deathAgeThreshold) * config.deathAgeScaling;
-      if (ageDeathChance > deathChance) causeOfDeath = 'natural causes';
-      deathChance = Math.max(deathChance, ageDeathChance);
-    }
-
-    if (deathChance > 0 && Math.random() < deathChance) {
+    if (result.death) {
       deathDetails.push({
         playerId: player.id,
         characterName: player.characterName,
-        age: newAge,
-        cause: causeOfDeath ?? 'unknown causes',
+        age: result.death.age,
+        cause: result.death.cause,
       });
     }
   }
@@ -676,10 +672,13 @@ export async function generateObituary(db: Database, playerId: string) {
   const name = player.characterName ?? 'Unknown';
   const narrativeParts: string[] = [];
 
-  if (player.startingAge != null && player.currentAge != null) {
-    narrativeParts.push(
-      `${name} lived to the age of ${player.currentAge}.`,
-    );
+  // Prefer the age computed from birthDate vs deathDate when both are present;
+  // fall back to the cached currentAge otherwise.
+  const ageAtDeath =
+    calculateAge(player.birthDate, player.deathDate) ?? player.currentAge;
+
+  if (ageAtDeath != null) {
+    narrativeParts.push(`${name} lived to the age of ${ageAtDeath}.`);
   }
 
   if (partyChanges.length > 0) {
@@ -707,7 +706,7 @@ export async function generateObituary(db: Database, playerId: string) {
     characterName: player.characterName ?? 'Unknown',
     birthDate: player.birthDate ?? 'unknown',
     deathDate: player.deathDate ?? 'unknown',
-    age: player.currentAge,
+    age: ageAtDeath,
     causeOfDeath: player.causeOfDeath ?? 'unknown causes',
     partyHistory: partyChanges,
     officesHeld,
@@ -732,17 +731,7 @@ export async function getHistory(db: Database, limit = 20) {
 // Internal Helpers
 // ============================================================
 
-/**
- * Determine worst severity from an ailments array.
- */
-function getWorstSeverity(
-  ailments: { severity: 'minor' | 'major' | 'critical' }[],
-): string {
-  if (ailments.some(a => a.severity === 'critical')) return 'critical';
-  if (ailments.some(a => a.severity === 'major')) return 'major';
-  if (ailments.some(a => a.severity === 'minor')) return 'minor';
-  return 'healthy';
-}
+type DbOrTx = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
 
 /**
  * Process a player's death -- shared between advanceTime and manualDeath.
@@ -750,9 +739,11 @@ function getWorstSeverity(
  * - Marks player as dead
  * - Vacates all offices
  * - Logs death event and office-left events
+ *
+ * Accepts either a Database or a transaction handle.
  */
 async function processPlayerDeath(
-  db: Database,
+  db: DbOrTx,
   playerId: string,
   causeOfDeath: string,
   deathDate: string,

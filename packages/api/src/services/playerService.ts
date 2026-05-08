@@ -6,6 +6,7 @@ import {
   factions,
   officeHolders,
   offices,
+  simulationClock,
   type Database,
 } from '@hansard/db';
 import type {
@@ -13,7 +14,7 @@ import type {
   PlayerEvent,
   Ailment,
 } from '@hansard/shared';
-import { PlayerEventType } from '@hansard/shared';
+import { PlayerEventType, birthDateForAge } from '@hansard/shared';
 
 // ============================================================
 // Types for service inputs
@@ -91,10 +92,11 @@ export function calculateStartingAgeFavourBonus(age: number): number {
  * and logs a registration event.
  */
 export async function createCharacter(db: Database, data: CreateCharacterInput): Promise<PlayerProfile> {
-  // Calculate birth date from starting age (simple: current year minus age)
-  const currentYear = new Date().getFullYear();
-  const birthYear = currentYear - data.startingAge;
-  const birthDate = `${birthYear}-01-01`;
+  // Anchor birthDate to the simulation clock's current date, not wall-clock time.
+  // Falls back to wall-clock year if the sim clock isn't initialised.
+  const [clock] = await db.select().from(simulationClock).limit(1);
+  const simNow = clock?.currentDate ?? `${new Date().getUTCFullYear()}-01-01`;
+  const birthDate = birthDateForAge(simNow, data.startingAge);
 
   const favourBonus = calculateStartingAgeFavourBonus(data.startingAge);
 

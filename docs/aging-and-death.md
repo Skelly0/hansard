@@ -64,7 +64,7 @@ Older characters trade lifespan for political capital. From `playerService.ts`:
 60+  →  3
 ```
 
-Highest tier wins (so a 60-year-old gets 3, not 3+2+1). Granted once, recorded by setting `startingFavoursGranted = true` so it can never double-fire. Distribution across favour categories is handled by staff afterwards — the bot just records the entitlement.
+Highest tier wins (so a 60-year-old gets 3, not 3+2+1). On character creation, the bonus is applied automatically to the active favour category whose name or short name exactly matches the selected faction's name or short name. `startingFavoursGranted` is set to `true` only after that ledger transaction is written. If no matching category exists, creation still succeeds and staff can correct the ledger manually.
 
 ---
 
@@ -205,7 +205,7 @@ Returns a structured payload (used by webapp Graveyard / character dossier) plus
 - **Death short-circuits the per-player tick loop** but not the per-player outer loop. Other living players keep being rolled for the remaining ticks even after one player dies mid-advance.
 - **Same-tick ailment + death proc.** A character can acquire a critical ailment on tick `T` and trigger a death roll from it on the same tick — the death roll on tick `T` sees the ailment that was just added. The actual automatic death is still deferred to the next advance.
 - **`currentAge` is denormalized**, not authoritative. Anywhere correctness matters (obituary, dossier age display), prefer `calculateAge(birthDate, simNow)`. The cache exists for speed and for offline display when the clock is unreachable.
-- **`startingFavoursGranted` is sticky.** It's set once at creation and never unset, so re-running creation logic against an existing player won't double-grant. This is the only protection — there's no idempotency token on the favour transaction itself.
+- **`startingFavoursGranted` is sticky once true.** It flips to true only after the automatic ledger grant succeeds. The automatic grant uses the selected faction to find an active matching favour category by exact name/short-name match; there is no separate idempotency token on the favour transaction itself.
 - **No DB unique constraint on ailment condition per player.** Duplicate suppression is enforced in code (both manual and automatic paths). If two parallel `advanceTime` calls ever ran simultaneously (they shouldn't — there's no app-level lock), they could in theory race. The transactional wrapping limits but doesn't formally prevent this.
 - **Min/max starting age is hardcoded twice** — once in the modal validator (`MIN_STARTING_AGE`/`MAX_STARTING_AGE` constants in the bot) and once in the API route (`< 18 || > 70`). `AgingConfig.minStartingAge` / `maxStartingAge` exist in the type but aren't actually consulted at the validation step — they're hint metadata. If you change those config numbers, also update the route + modal constants.
 

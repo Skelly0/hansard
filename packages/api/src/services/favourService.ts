@@ -4,6 +4,7 @@ import {
   favourBalances,
   favourTransactions,
   players,
+  factions,
   type Database,
 } from '@hansard/db';
 import type { FavourCategory, FavourBalance, FavourTransaction } from '@hansard/shared';
@@ -51,6 +52,15 @@ export interface TransactionFilters {
   limit?: number;
   offset?: number;
 }
+
+export interface StartingFactionFavourGrant {
+  categoryId: string;
+  categoryName: string;
+  amount: number;
+  balanceAfter: number;
+}
+
+type DbOrTx = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
 
 // ============================================================
 // Category Functions
@@ -205,6 +215,98 @@ export async function getLeaderboard(
     .limit(limit);
 
   return rows;
+}
+
+// ============================================================
+// Starting Faction Favour Grants
+// ============================================================
+
+function normaliseLabel(value: string | null | undefined): string | null {
+  const cleaned = value?.trim().replace(/\s+/g, ' ').toLowerCase();
+  return cleaned ? cleaned : null;
+}
+
+function categoryMatchesFaction(
+  category: typeof favourCategories.$inferSelect,
+  faction: typeof factions.$inferSelect,
+): boolean {
+  const factionLabels = new Set(
+    [normaliseLabel(faction.name), normaliseLabel(faction.shortName)].filter((label): label is string => Boolean(label)),
+  );
+
+  return [normaliseLabel(category.name), normaliseLabel(category.shortName)]
+    .some((label) => label !== null && factionLabels.has(label));
+}
+
+/**
+ * Apply the starting-age favour bonus to the favour category that corresponds
+ * to the selected faction. The correspondence is intentionally conservative:
+ * an active category must exactly match the faction's name or short name.
+ */
+export async function grantStartingFactionFavours(
+  db: DbOrTx,
+  playerId: string,
+  factionId: string | null | undefined,
+  amount: number,
+): Promise<StartingFactionFavourGrant | null> {
+  if (amount <= 0 || !factionId) {
+    return null;
+  }
+
+  const [faction] = await db
+    .select()
+    .from(factions)
+    .where(eq(factions.id, factionId))
+    .limit(1);
+
+  if (!faction) {
+    return null;
+  }
+
+  const activeCategories = await db
+    .select()
+    .from(favourCategories)
+    .where(eq(favourCategories.isActive, true));
+
+  const category = activeCategories.find((candidate) => categoryMatchesFaction(candidate, faction));
+  if (!category) {
+    return null;
+  }
+
+  const [updatedRow] = await db
+    .insert(favourBalances)
+    .values({
+      playerId,
+      categoryId: category.id,
+      balance: amount,
+    })
+    .onConflictDoUpdate({
+      target: [favourBalances.playerId, favourBalances.categoryId],
+      set: {
+        balance: sql`${favourBalances.balance} + ${amount}`,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+
+  const balanceAfter = updatedRow.balance;
+
+  await db.insert(favourTransactions).values({
+    playerId,
+    categoryId: category.id,
+    amount,
+    balanceAfter,
+    type: FavourTransactionType.SYSTEM,
+    reason: `Starting age favour bonus for joining ${faction.name}`,
+    grantedById: null,
+  }).returning();
+
+  return {
+    categoryId: category.id,
+    categoryName: category.name,
+    amount,
+    balanceAfter,
+  };
 }
 
 // ============================================================

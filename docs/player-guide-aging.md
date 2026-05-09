@@ -12,6 +12,7 @@ Time only advances when staff run `/time advance`. Each advance ticks every livi
   - 45+ → 2 favours
   - 60+ → 3 favours
 - Highest tier wins (a 60-year-old gets 3, not 6).
+- Bonus favours are applied automatically to the favour category matching your selected faction, if staff have configured one.
 
 ## Ailments
 

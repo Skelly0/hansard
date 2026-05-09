@@ -1,10 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  createCharacter,
   findOrCreatePlayerByDiscordId,
   aggregatePermissionsForPlayer,
   listPlayers,
   getPlayerVotingRecord,
 } from './playerService';
+import { FavourTransactionType } from '@hansard/shared';
 
 // Mock drizzle db: handles
 //   - .insert(players).values().onConflictDoUpdate().returning() (returns inserted)
@@ -187,6 +189,191 @@ describe('listPlayers with search', () => {
     const results = await listPlayers(db, { isActive: true, limit: 10, offset: 0 });
 
     expect(results.map((player) => player.id)).toEqual(['created-character']);
+  });
+});
+
+describe('createCharacter starting favours', () => {
+  function makePlayerRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'player-new',
+      discordId: '123456',
+      discordUsername: 'alice',
+      characterName: 'Lady Alice',
+      characterBio: null,
+      characterPortraitUrl: null,
+      factionId: 'faction-crown',
+      partyId: null,
+      birthDate: '1865-01-01',
+      startingAge: 45,
+      currentAge: 45,
+      deathDate: null,
+      causeOfDeath: null,
+      isAlive: true,
+      healthStatus: 'healthy',
+      ailments: [],
+      startingFavoursGranted: true,
+      isActive: true,
+      isStaff: false,
+      staffRole: null,
+      registeredAt: new Date('2026-01-01T00:00:00.000Z'),
+      lastActiveAt: null,
+      profileData: null,
+      ...overrides,
+    };
+  }
+
+  function makeCreateCharacterDb({
+    categories = [{
+      id: 'category-crown',
+      name: 'Crown',
+      shortName: null,
+      isActive: true,
+    }],
+    insertedPlayer = makePlayerRow({ startingFavoursGranted: false }),
+    updatedPlayer = makePlayerRow({ startingFavoursGranted: true }),
+  }: {
+    categories?: any[];
+    insertedPlayer?: any;
+    updatedPlayer?: any;
+  } = {}) {
+    const playerValues = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([insertedPlayer]),
+    });
+    const eventValues = vi.fn().mockResolvedValue(undefined);
+
+    const balanceValues = vi.fn().mockReturnValue({
+      onConflictDoUpdate: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{
+          id: 'balance-1',
+          playerId: 'player-new',
+          categoryId: 'category-crown',
+          balance: 2,
+          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        }]),
+      }),
+    });
+
+    const transactionValues = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{
+        id: 'transaction-1',
+        playerId: 'player-new',
+        categoryId: 'category-crown',
+        amount: 2,
+        balanceAfter: 2,
+        type: FavourTransactionType.SYSTEM,
+        reason: 'Starting age favour bonus for joining Crown',
+        grantedById: null,
+        simTick: null,
+        simDate: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      }]),
+    });
+
+    const insert = vi.fn()
+      .mockReturnValueOnce({ values: playerValues })
+      .mockReturnValueOnce({ values: eventValues })
+      .mockReturnValueOnce({ values: balanceValues })
+      .mockReturnValueOnce({ values: transactionValues });
+
+    const select = vi.fn()
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ currentDate: '1910-01-01' }]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{
+              id: 'faction-crown',
+              name: 'Crown',
+              shortName: 'CRN',
+            }]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(categories),
+        }),
+      });
+
+    const updateSet = vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([updatedPlayer]),
+      }),
+    });
+    const update = vi.fn().mockReturnValue({ set: updateSet });
+
+    const db: any = {
+      select,
+      insert,
+      update,
+      transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)),
+      _balanceValues: balanceValues,
+      _transactionValues: transactionValues,
+      _playerValues: playerValues,
+      _updateSet: updateSet,
+    };
+
+    return db;
+  }
+
+  it('applies the starting age bonus to the favour category matching the selected faction', async () => {
+    const db = makeCreateCharacterDb();
+
+    const result = await createCharacter(db, {
+      discordId: '123456',
+      discordUsername: 'alice',
+      characterName: 'Lady Alice',
+      startingAge: 45,
+      factionId: 'faction-crown',
+    });
+
+    expect(result.startingFavoursGranted).toBe(true);
+    expect(db._playerValues).toHaveBeenCalledWith(expect.objectContaining({
+      startingFavoursGranted: false,
+    }));
+    expect(db._updateSet).toHaveBeenCalledWith({
+      startingFavoursGranted: true,
+    });
+    expect(db._balanceValues).toHaveBeenCalledWith(expect.objectContaining({
+      playerId: 'player-new',
+      categoryId: 'category-crown',
+      balance: 2,
+    }));
+    expect(db._transactionValues).toHaveBeenCalledWith(expect.objectContaining({
+      playerId: 'player-new',
+      categoryId: 'category-crown',
+      amount: 2,
+      balanceAfter: 2,
+      type: FavourTransactionType.SYSTEM,
+      reason: 'Starting age favour bonus for joining Crown',
+      grantedById: null,
+    }));
+  });
+
+  it('does not mark starting favours granted when no active category matches the selected faction', async () => {
+    const db = makeCreateCharacterDb({
+      categories: [],
+      insertedPlayer: makePlayerRow({ startingFavoursGranted: false }),
+    });
+
+    const result = await createCharacter(db, {
+      discordId: '123456',
+      discordUsername: 'alice',
+      characterName: 'Lady Alice',
+      startingAge: 45,
+      factionId: 'faction-crown',
+    });
+
+    expect(result.startingFavoursGranted).toBe(false);
+    expect(db._playerValues).toHaveBeenCalledWith(expect.objectContaining({
+      startingFavoursGranted: false,
+    }));
+    expect(db._updateSet).not.toHaveBeenCalled();
+    expect(db._balanceValues).not.toHaveBeenCalled();
+    expect(db._transactionValues).not.toHaveBeenCalled();
   });
 });
 

@@ -149,7 +149,7 @@ const command: Command = {
       const partyName = p.partyId ? partyMap.get(p.partyId) ?? 'Unknown' : 'Independent';
       const office = topOfficeMap.get(p.id);
       const officeText = office ? ` — *${office.name}*` : '';
-      return `**${p.characterName ?? '(unnamed)'}** (${partyName})${officeText}`;
+      return `**${p.characterName ?? '(unnamed)'}** <@${p.discordId}> (${partyName})${officeText}`;
     });
 
     // Discord embed description cap is 4096; chunk if needed

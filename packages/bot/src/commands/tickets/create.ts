@@ -38,9 +38,8 @@ import { buildTicketSummaryEmbed, buildTicketActionRow } from '../../components/
  *    initial ticketMessages + ticketAuditLog), then a Discord thread is
  *    opened (best-effort) and updated with the real thread id.
  *
- * Persistence is direct-Drizzle per CLAUDE.md ("vote/election writes are
- * direct DB. No API hop. Same pattern applies here."). The bot package
- * does NOT import @hansard/api.
+ * Persistence is direct-Drizzle per CLAUDE.md. This command does not call
+ * the API layer.
  */
 
 const TICKET_CHANNEL_ENV = 'TICKET_CHANNEL_ID';
@@ -188,8 +187,8 @@ const command: Command = {
     const description = modalInteraction.fields.getTextInputValue('ticket_description').trim();
 
     // Step 5: Resolve creator — auto-create on first contact (mirrors the
-    // OAuth callback's findOrCreatePlayerByDiscordId pattern). The bot
-    // doesn't import @hansard/api, so the upsert is inlined here.
+    // OAuth callback's findOrCreatePlayerByDiscordId pattern). This command
+    // keeps the upsert inlined instead of calling the API layer.
     let creator;
     try {
       const [upserted] = await db
@@ -262,6 +261,10 @@ const command: Command = {
     }
 
     const ticketNumber = inserted.number;
+    const memberDisplayName =
+      interaction.member && 'displayName' in interaction.member
+        ? interaction.member.displayName
+        : interaction.user.displayName || interaction.user.username;
 
     // Step 7: Build the data shape ticketButtons expects.
     const ticketData = {
@@ -276,10 +279,7 @@ const command: Command = {
       priority: inserted.priority,
       createdBy: {
         id: interaction.user.id,
-        displayName:
-          ('displayName' in (interaction.member ?? {}) && (interaction.member as { displayName?: string }).displayName) ||
-          interaction.user.displayName ||
-          interaction.user.username,
+        displayName: memberDisplayName,
       },
       assignedTo: null,
       createdAt: inserted.createdAt instanceof Date

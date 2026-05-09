@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "start": "tsx src/index.ts",
-    "login": "tsx src/index.ts login",
-    "logout": "tsx src/index.ts logout",
+    "dev": "tsx --conditions=development src/index.ts",
+    "start": "tsx --conditions=development src/index.ts",
+    "login": "tsx --conditions=development src/index.ts login",
+    "logout": "tsx --conditions=development src/index.ts logout",
     "build": "tsc"
   },
   "dependencies": {

@@ -153,7 +153,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       const body = request.body;
       const user = request.session.user!;
 
-      if (id !== user.id && !user.isStaff) {
+      if (id !== user.id && !request.player?.isStaff) {
         return reply.status(403).send({ error: 'Cannot edit another player’s character' });
       }
 
@@ -190,7 +190,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       const { partyId } = request.body;
       const user = request.session.user!;
 
-      if (id !== user.id && !user.isStaff) {
+      if (id !== user.id && !request.player?.isStaff) {
         return reply.status(403).send({ error: 'Cannot change another player’s party' });
       }
 

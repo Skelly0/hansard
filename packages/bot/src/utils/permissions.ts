@@ -5,6 +5,9 @@ import { GuildMember, type APIInteractionGuildMember } from 'discord.js';
  * This will be configurable via DB/env in the future.
  */
 const STAFF_ROLE_NAME = 'Staff';
+const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
+
+type InteractionMember = APIInteractionGuildMember | GuildMember | null | undefined;
 
 /**
  * Check whether a guild member is staff.
@@ -21,9 +24,7 @@ const STAFF_ROLE_NAME = 'Staff';
  * `GUILD_MEMBERS` intent so call sites always receive a real `GuildMember`;
  * the API-only branch is a safe fallback.
  */
-export async function isStaff(
-  member: GuildMember | APIInteractionGuildMember | null | undefined,
-): Promise<boolean> {
+export async function isStaff(member: InteractionMember): Promise<boolean> {
   if (!member) {
     return false;
   }
@@ -31,12 +32,16 @@ export async function isStaff(
   // Role-based check — only resolvable on a full GuildMember (cache has names).
   if (member instanceof GuildMember) {
     const hasStaffRole = member.roles.cache.some(
-      (role) => role.name === STAFF_ROLE_NAME,
+      (role) => role.name === STAFF_ROLE_NAME || role.id === STAFF_ROLE_ID,
     );
 
     if (hasStaffRole) {
       return true;
     }
+  }
+
+  if (STAFF_ROLE_ID && Array.isArray(member.roles) && member.roles.includes(STAFF_ROLE_ID)) {
+    return true;
   }
 
   // DB-based check — will query player record once DB integration is wired up.
@@ -73,7 +78,7 @@ export type Permission =
  * Staff members bypass all permission checks.
  */
 export async function hasPermission(
-  member: GuildMember | APIInteractionGuildMember | null | undefined,
+  member: InteractionMember,
   permission: Permission,
 ): Promise<boolean> {
   // Staff bypass — staff can do everything

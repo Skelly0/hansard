@@ -6,8 +6,7 @@ import '../types.js';
  * Returns 403 if the user is not staff. Assumes requireAuth has already run.
  */
 export async function requireStaff(request: FastifyRequest, reply: FastifyReply) {
-  const user = request.session.user;
-  if (!user?.isStaff) {
+  if (!request.player?.isStaff) {
     return reply.status(403).send({ error: 'Staff access required' });
   }
 }

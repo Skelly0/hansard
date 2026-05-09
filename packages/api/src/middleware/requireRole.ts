@@ -18,7 +18,7 @@ export function requireRole(permission: string): preHandlerAsyncHookHandler {
       return reply.status(401).send({ error: 'Authentication required' });
     }
 
-    if (user.isStaff) return;
+    if (request.player?.isStaff) return;
 
     const fastify = request.server as FastifyInstance;
     const livePermissions = await aggregatePermissionsForPlayer(fastify.db, user.id);

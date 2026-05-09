@@ -1,4 +1,4 @@
-import { eq, desc, and, ilike, or, sql, count, inArray, type SQL } from 'drizzle-orm';
+import { eq, desc, asc, and, ilike, or, sql, count, inArray, type SQL } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import {
   bills,
@@ -39,7 +39,10 @@ export interface ListBillsFilters {
   status?: string;
   authorId?: string;
   policyArea?: string;
+  search?: string;
   tags?: string[];
+  sort?: string;
+  amendsBillId?: string;
   limit?: number;
   offset?: number;
 }
@@ -324,6 +327,14 @@ export async function listBills(
       sql`${bills.policyAreas}::jsonb @> ${JSON.stringify([filters.policyArea])}::jsonb`,
     );
   }
+  if (filters.search) {
+    const pattern = `%${filters.search}%`;
+    conditions.push(or(
+      ilike(bills.title, pattern),
+      ilike(bills.summary, pattern),
+      ilike(bills.cachedContent, pattern),
+    )!);
+  }
   if (filters.tags && filters.tags.length > 0) {
     conditions.push(
       sql`${bills.tags}::jsonb ?| array[${sql.join(
@@ -332,16 +343,24 @@ export async function listBills(
       )}]`,
     );
   }
+  if (filters.amendsBillId) {
+    conditions.push(eq(bills.amendsBillId, filters.amendsBillId));
+  }
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
   const limit = filters.limit ?? 25;
   const offset = filters.offset ?? 0;
+  const orderBy =
+    filters.sort === 'oldest' ? asc(bills.submittedAt)
+    : filters.sort === 'number' ? asc(bills.billNumber)
+    : filters.sort === 'title' ? asc(bills.title)
+    : desc(bills.submittedAt);
 
   const rows = await db
     .select()
     .from(bills)
     .where(whereClause)
-    .orderBy(desc(bills.submittedAt))
+    .orderBy(orderBy)
     .limit(limit)
     .offset(offset);
 
@@ -787,7 +806,13 @@ export async function getVoters(
   db: Database,
   slug: string,
 ): Promise<{
-  playerVotes: { voterId: string; choice: string; castAt: string }[];
+  playerVotes: {
+    voterId: string;
+    playerId: string;
+    characterName: string;
+    choice: string;
+    castAt: string;
+  }[];
   npcVote: NpcVote | null;
 } | null> {
   const [bill] = await db
@@ -798,21 +823,35 @@ export async function getVoters(
 
   if (!bill) return null;
 
-  let playerVotes: { voterId: string; choice: string; castAt: string }[] = [];
+  let playerVotes: {
+    voterId: string;
+    playerId: string;
+    characterName: string;
+    choice: string;
+    castAt: string;
+  }[] = [];
 
   if (bill.playerVoteId) {
     const ballotRows = await db
-      .select()
+      .select({
+        ballot: ballots,
+        characterName: players.characterName,
+        discordUsername: players.discordUsername,
+      })
       .from(ballots)
+      .innerJoin(players, eq(ballots.voterId, players.id))
       .where(eq(ballots.electionId, bill.playerVoteId))
       .orderBy(ballots.castAt);
 
-    playerVotes = ballotRows.map((b) => {
-      const vote = b.vote as { type: string; choice?: string };
+    playerVotes = ballotRows.map((row) => {
+      const vote = row.ballot.vote as { type: string; choice?: string };
+      const displayName = row.characterName ?? row.discordUsername;
       return {
-        voterId: b.voterId,
+        voterId: row.ballot.voterId,
+        playerId: row.ballot.voterId,
+        characterName: displayName,
         choice: vote.choice ?? 'unknown',
-        castAt: b.castAt.toISOString(),
+        castAt: row.ballot.castAt.toISOString(),
       };
     });
   }

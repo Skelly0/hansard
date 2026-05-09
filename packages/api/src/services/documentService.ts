@@ -32,6 +32,7 @@ export interface ListDocumentsFilters {
   authorId?: string;
   tags?: string[];
   accessLevel?: string;
+  search?: string;
   limit?: number;
   offset?: number;
 }
@@ -198,6 +199,14 @@ export async function listDocuments(
   }
   if (filters.accessLevel) {
     conditions.push(eq(documents.accessLevel, filters.accessLevel));
+  }
+  if (filters.search) {
+    const pattern = `%${filters.search}%`;
+    conditions.push(or(
+      ilike(documents.title, pattern),
+      ilike(documents.content, pattern),
+      ilike(documents.cachedContent, pattern),
+    )!);
   }
   if (filters.tags && filters.tags.length > 0) {
     conditions.push(

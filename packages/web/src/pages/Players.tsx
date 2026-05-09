@@ -5,6 +5,7 @@ import { Tag } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { Skeleton, PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 import type { Player } from '../api/hooks/usePlayers';
 
 /** Health status to dot colour mapping */
@@ -42,7 +43,7 @@ export function Players() {
   const [page, setPage] = useState(1);
   const limit = 24;
 
-  const { data, isLoading } = usePlayers({
+  const { data, isLoading, isError, error } = usePlayers({
     search: search || undefined,
     faction: factionFilter || undefined,
     party: partyFilter || undefined,
@@ -72,6 +73,13 @@ export function Players() {
   }, [players]);
 
   if (isLoading && page === 1) return <PageSkeleton />;
+  if (isError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState title="Could not load players" error={error} />
+      </div>
+    );
+  }
 
   return (
     <div className="p-8">

@@ -58,12 +58,12 @@ interface DocumentFilters {
 
 export function useDocuments(filters?: DocumentFilters) {
   const params = new URLSearchParams();
-  if (filters?.collection) params.set('collection', filters.collection);
-  if (filters?.author) params.set('author', filters.author);
+  if (filters?.collection) params.set('collectionId', filters.collection);
+  if (filters?.author) params.set('authorId', filters.author);
   if (filters?.tags?.length) params.set('tags', filters.tags.join(','));
   if (filters?.search) params.set('search', filters.search);
-  if (filters?.page) params.set('page', String(filters.page));
   if (filters?.limit) params.set('limit', String(filters.limit));
+  if (filters?.page && filters?.limit) params.set('offset', String((filters.page - 1) * filters.limit));
   const qs = params.toString();
   return useQuery({
     queryKey: ['documents', filters],

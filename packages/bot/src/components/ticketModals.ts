@@ -1,5 +1,10 @@
 import type { ModalSubmitInteraction } from 'discord.js';
+import { eq } from 'drizzle-orm';
+import { players, ticketAuditLog, ticketMessages, tickets } from '@hansard/db';
+import { TicketStatus } from '@hansard/shared';
 import { successEmbed, errorEmbed, createEmbed } from '../utils/embeds.js';
+import { isStaff } from '../utils/permissions.js';
+import { db } from '../db.js';
 
 /**
  * Route a ticket-related modal submission to the correct handler.
@@ -31,9 +36,89 @@ async function handleCloseModal(interaction: ModalSubmitInteraction): Promise<vo
 
   await interaction.deferReply();
 
-  // TODO: Wire up to DB
-  // const ticket = await ticketService.getTicketByNumber(ticketNumber);
-  // await ticketService.closeTicket(ticket.id, reason, actorDbId);
+  const actor = await upsertPlayer(interaction.user.id, interaction.user.username);
+  if (!actor) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Could not resolve your player record. Please try again.')],
+    });
+    return;
+  }
+
+  const [ticket] = await db
+    .select()
+    .from(tickets)
+    .where(eq(tickets.number, ticketNumber))
+    .limit(1);
+
+  if (!ticket) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`Ticket \`#${ticketNumber}\` not found.`)],
+    });
+    return;
+  }
+
+  if (ticket.status === TicketStatus.CLOSED) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`Ticket \`#${ticketNumber}\` is already closed.`)],
+    });
+    return;
+  }
+
+  const member = interaction.member;
+  const actorIsStaff = !!member && (await isStaff(member as any));
+  const actorIsCreator = ticket.createdById === actor.id;
+  if (!actorIsStaff && !actorIsCreator) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Only the ticket creator or a staff member can close this ticket.')],
+    });
+    return;
+  }
+
+  const now = new Date();
+  const oldStatus = ticket.status;
+  try {
+    await db.transaction(async (tx) => {
+      await tx
+        .update(tickets)
+        .set({
+          status: TicketStatus.CLOSED,
+          closedAt: now,
+          resolvedAt: ticket.resolvedAt ?? now,
+          updatedAt: now,
+        })
+        .where(eq(tickets.id, ticket.id));
+
+      await tx.insert(ticketAuditLog).values({
+        ticketId: ticket.id,
+        actorId: actor.id,
+        action: 'closed',
+        oldValue: oldStatus,
+        newValue: TicketStatus.CLOSED,
+      });
+
+      if (reason) {
+        const [message] = await tx.insert(ticketMessages).values({
+          ticketId: ticket.id,
+          authorId: actor.id,
+          content: `**Resolution:** ${reason}`,
+          isInternal: false,
+        }).returning();
+
+        await tx.insert(ticketAuditLog).values({
+          ticketId: ticket.id,
+          actorId: actor.id,
+          action: 'commented',
+          newValue: { messageId: message.id },
+        });
+      }
+    });
+  } catch (err) {
+    console.error('Failed to close ticket from modal:', err);
+    await interaction.editReply({
+      embeds: [errorEmbed('Failed to close ticket. Please try again.')],
+    });
+    return;
+  }
 
   const description = [`**Ticket:** #${ticketNumber}`, `**Closed by:** ${interaction.user}`];
   if (reason) {
@@ -74,9 +159,67 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
 
   await interaction.deferReply({ ephemeral: true });
 
-  // TODO: Wire up to DB
-  // const ticket = await ticketService.getTicketByNumber(ticketNumber);
-  // await ticketService.addMessage(ticket.id, note, actorDbId, true);
+  const member = interaction.member;
+  if (!member || !(await isStaff(member as any))) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Only staff members can add internal notes.')],
+    });
+    return;
+  }
+
+  const actor = await upsertPlayer(interaction.user.id, interaction.user.username);
+  if (!actor) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Could not resolve your player record. Please try again.')],
+    });
+    return;
+  }
+
+  const [ticket] = await db
+    .select()
+    .from(tickets)
+    .where(eq(tickets.number, ticketNumber))
+    .limit(1);
+
+  if (!ticket) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`Ticket \`#${ticketNumber}\` not found.`)],
+    });
+    return;
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      const now = new Date();
+      await tx
+        .update(tickets)
+        .set({
+          firstResponseAt: ticket.firstResponseAt ?? now,
+          updatedAt: now,
+        })
+        .where(eq(tickets.id, ticket.id));
+
+      const [message] = await tx.insert(ticketMessages).values({
+        ticketId: ticket.id,
+        authorId: actor.id,
+        content: note,
+        isInternal: true,
+      }).returning();
+
+      await tx.insert(ticketAuditLog).values({
+        ticketId: ticket.id,
+        actorId: actor.id,
+        action: 'internal_note',
+        newValue: { messageId: message.id },
+      });
+    });
+  } catch (err) {
+    console.error('Failed to add ticket note from modal:', err);
+    await interaction.editReply({
+      embeds: [errorEmbed('Failed to add internal note. Please try again.')],
+    });
+    return;
+  }
 
   await interaction.editReply({
     embeds: [
@@ -125,4 +268,21 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
 function parseTicketNumber(customId: string): number {
   const parts = customId.split(':');
   return parseInt(parts[1], 10);
+}
+
+async function upsertPlayer(discordId: string, discordUsername: string) {
+  try {
+    const [player] = await db
+      .insert(players)
+      .values({ discordId, discordUsername })
+      .onConflictDoUpdate({
+        target: players.discordId,
+        set: { discordUsername },
+      })
+      .returning();
+    return player ?? null;
+  } catch (err) {
+    console.error('Failed to upsert player for ticket modal:', err);
+    return null;
+  }
 }

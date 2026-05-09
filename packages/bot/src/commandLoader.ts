@@ -36,6 +36,7 @@ export async function loadCommands(
   commands: Collection<string, Command>,
 ): Promise<void> {
   const commandFiles = collectCommandFiles(commandsDir);
+  const loadedCommandFiles = new Map<string, string>();
 
   for (const filePath of commandFiles) {
     const module = (await import(toCommandModuleSpecifier(filePath))) as { default: Command };
@@ -46,7 +47,16 @@ export async function loadCommands(
       continue;
     }
 
-    commands.set(command.data.name, command);
-    console.log(`Loaded command: /${command.data.name}`);
+    const commandName = command.data.name;
+    const existingFile = loadedCommandFiles.get(commandName);
+    if (existingFile) {
+      throw new Error(
+        `Duplicate command /${commandName} found in ${filePath}; already loaded from ${existingFile}.`,
+      );
+    }
+
+    commands.set(commandName, command);
+    loadedCommandFiles.set(commandName, filePath);
+    console.log(`Loaded command: /${commandName}`);
   }
 }

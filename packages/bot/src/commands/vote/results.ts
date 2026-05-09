@@ -2,7 +2,10 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
+import { eq } from 'drizzle-orm';
+import { candidates, elections, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { db } from '../../db.js';
 import type { Command } from '../../client.js';
 
 /**
@@ -27,18 +30,40 @@ const command: Command = {
 
     const electionId = interaction.options.getString('election_id', true);
 
-    // TODO: Fetch results from API
-    // const res = await fetch(`${API_URL}/api/elections/${electionId}/results`);
-    // const data = await res.json();
+    const [election] = await db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, electionId))
+      .limit(1);
 
-    // For now, show a placeholder
-    const embed = createEmbed({
-      title: 'Election Results',
-      description: `Results for election \`${electionId}\``,
-      system: 'voting',
-      fields: [
-        { name: 'Status', value: 'Awaiting API integration', inline: true },
-      ],
+    if (!election) {
+      await interaction.editReply({
+        embeds: [errorEmbed(`Election \`${electionId}\` not found.`)],
+      });
+      return;
+    }
+
+    const config = election.config as { sealedResults?: boolean };
+    if (config.sealedResults && election.status === 'voting_open') {
+      await interaction.editReply({
+        embeds: [
+          createEmbed({
+            title: election.title,
+            description: 'Results are sealed until voting closes.',
+            system: 'voting',
+            fields: [{ name: 'Status', value: `\`${election.status}\``, inline: true }],
+          }),
+        ],
+      });
+      return;
+    }
+
+    const candidateNames = await getCandidateNames(electionId);
+    const embed = buildResultsEmbed({
+      title: election.title,
+      method: election.method,
+      results: election.results,
+      candidateNames,
     });
 
     await interaction.editReply({ embeds: [embed] });
@@ -157,6 +182,25 @@ export function buildResultsEmbed(election: {
     colour,
     fields,
   });
+}
+
+async function getCandidateNames(electionId: string): Promise<Record<string, string>> {
+  const rows = await db
+    .select({
+      playerId: candidates.playerId,
+      characterName: players.characterName,
+      discordUsername: players.discordUsername,
+    })
+    .from(candidates)
+    .innerJoin(players, eq(candidates.playerId, players.id))
+    .where(eq(candidates.electionId, electionId));
+
+  return Object.fromEntries(
+    rows.map((row) => [
+      row.playerId,
+      row.characterName ?? row.discordUsername,
+    ]),
+  );
 }
 
 export default command;

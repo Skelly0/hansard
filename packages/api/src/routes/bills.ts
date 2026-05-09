@@ -70,25 +70,40 @@ export default async function billRoutes(fastify: FastifyInstance) {
     Querystring: {
       status?: string;
       authorId?: string;
+      author?: string;
       policyArea?: string;
       tags?: string;
+      search?: string;
+      sort?: string;
+      amendsBillId?: string;
       limit?: string;
       offset?: string;
+      page?: string;
     };
   }>(
     '/api/bills/browse',
     { preHandler: [requireAuth] },
     async (request) => {
-      const { status, authorId, policyArea, tags, limit, offset } = request.query;
+      const { status, authorId, author, policyArea, tags, search, sort, amendsBillId, limit, offset, page } = request.query;
+      const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+      const parsedOffset = offset
+        ? parseInt(offset, 10)
+        : page && parsedLimit
+          ? (Math.max(1, parseInt(page, 10)) - 1) * parsedLimit
+          : undefined;
 
-      return listBills(db, {
+      const result = await listBills(db, {
         status,
-        authorId,
+        authorId: authorId ?? author,
         policyArea,
         tags: tags ? tags.split(',') : undefined,
-        limit: limit ? parseInt(limit, 10) : undefined,
-        offset: offset ? parseInt(offset, 10) : undefined,
+        search,
+        sort,
+        amendsBillId,
+        limit: parsedLimit,
+        offset: parsedOffset,
       });
+      return { data: result.bills, total: result.total };
     },
   );
 
@@ -100,25 +115,40 @@ export default async function billRoutes(fastify: FastifyInstance) {
     Querystring: {
       status?: string;
       authorId?: string;
+      author?: string;
       policyArea?: string;
       tags?: string;
+      search?: string;
+      sort?: string;
+      amendsBillId?: string;
       limit?: string;
       offset?: string;
+      page?: string;
     };
   }>(
     '/api/bills',
     { preHandler: [requireAuth] },
     async (request) => {
-      const { status, authorId, policyArea, tags, limit, offset } = request.query;
+      const { status, authorId, author, policyArea, tags, search, sort, amendsBillId, limit, offset, page } = request.query;
+      const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+      const parsedOffset = offset
+        ? parseInt(offset, 10)
+        : page && parsedLimit
+          ? (Math.max(1, parseInt(page, 10)) - 1) * parsedLimit
+          : undefined;
 
-      return listBills(db, {
+      const result = await listBills(db, {
         status,
-        authorId,
+        authorId: authorId ?? author,
         policyArea,
         tags: tags ? tags.split(',') : undefined,
-        limit: limit ? parseInt(limit, 10) : undefined,
-        offset: offset ? parseInt(offset, 10) : undefined,
+        search,
+        sort,
+        amendsBillId,
+        limit: parsedLimit,
+        offset: parsedOffset,
       });
+      return { data: result.bills, total: result.total };
     },
   );
 

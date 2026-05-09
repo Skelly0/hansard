@@ -87,11 +87,19 @@ export async function createPaginatedEmbed(
 
   const collector = message.createMessageComponentCollector({
     componentType: ComponentType.Button,
-    filter: (i) => i.user.id === interaction.user.id,
+    filter: (i) => i.customId === 'pagination_prev' || i.customId === 'pagination_next',
     time: timeout,
   });
 
   collector.on('collect', async (buttonInteraction) => {
+    if (buttonInteraction.user.id !== interaction.user.id) {
+      await buttonInteraction.reply({
+        content: 'Only the command author can use these pagination controls.',
+        ephemeral: true,
+      });
+      return;
+    }
+
     if (buttonInteraction.customId === 'pagination_prev') {
       currentPage = Math.max(0, currentPage - 1);
     } else if (buttonInteraction.customId === 'pagination_next') {

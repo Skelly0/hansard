@@ -3,6 +3,7 @@ import { useOffices } from '../api/hooks/useOffices';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 const tierOrder = ['head_of_state', 'head_of_government', 'cabinet', 'legislature', 'regional'];
 const tierLabel: Record<string, string> = {
@@ -21,9 +22,16 @@ const filledByLabel: Record<string, string> = {
 };
 
 export function Offices() {
-  const { data: offices, isLoading } = useOffices();
+  const { data: offices, isLoading, isError, error } = useOffices();
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState title="Could not load offices" error={error} />
+      </div>
+    );
+  }
 
   // Group by tier
   const grouped = tierOrder

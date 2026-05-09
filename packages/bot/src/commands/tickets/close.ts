@@ -2,7 +2,12 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
+import { eq } from 'drizzle-orm';
+import { players, ticketAuditLog, ticketMessages, tickets } from '@hansard/db';
+import { TicketStatus } from '@hansard/shared';
 import { successEmbed, errorEmbed, createEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
+import { db } from '../../db.js';
 import type { Command } from '../../client.js';
 
 /**
@@ -37,9 +42,19 @@ const command: Command = {
 
     await interaction.deferReply();
 
-    // TODO: Replace with actual DB/API call
-    // const ticket = await ticketService.getTicketByNumber(ticketNumber);
-    const ticket = null as any;
+    const actorPlayer = await upsertPlayer(interaction.user.id, interaction.user.username);
+    if (!actorPlayer) {
+      await interaction.editReply({
+        embeds: [errorEmbed('Could not resolve your player record. Please try again.')],
+      });
+      return;
+    }
+
+    const [ticket] = await db
+      .select()
+      .from(tickets)
+      .where(eq(tickets.number, ticketNumber))
+      .limit(1);
 
     if (!ticket) {
       await interaction.editReply({
@@ -48,16 +63,70 @@ const command: Command = {
       return;
     }
 
-    if (ticket.status === 'closed') {
+    if (ticket.status === TicketStatus.CLOSED) {
       await interaction.editReply({
         embeds: [errorEmbed(`Ticket \`#${ticketNumber}\` is already closed.`)],
       });
       return;
     }
 
-    // TODO: Permission check — only creator or staff can close
-    // TODO: Actually close via service
-    // await ticketService.closeTicket(ticket.id, reason, actorDbId);
+    const member = interaction.member;
+    const actorIsStaff = !!member && (await isStaff(member as any));
+    const actorIsCreator = ticket.createdById === actorPlayer.id;
+
+    if (!actorIsStaff && !actorIsCreator) {
+      await interaction.editReply({
+        embeds: [errorEmbed('Only the ticket creator or a staff member can close this ticket.')],
+      });
+      return;
+    }
+
+    const oldStatus = ticket.status;
+    const now = new Date();
+
+    try {
+      await db.transaction(async (tx) => {
+        await tx
+          .update(tickets)
+          .set({
+            status: TicketStatus.CLOSED,
+            closedAt: now,
+            resolvedAt: ticket.resolvedAt ?? now,
+            updatedAt: now,
+          })
+          .where(eq(tickets.id, ticket.id));
+
+        await tx.insert(ticketAuditLog).values({
+          ticketId: ticket.id,
+          actorId: actorPlayer.id,
+          action: 'closed',
+          oldValue: oldStatus,
+          newValue: TicketStatus.CLOSED,
+        });
+
+        if (reason) {
+          const [message] = await tx.insert(ticketMessages).values({
+            ticketId: ticket.id,
+            authorId: actorPlayer.id,
+            content: `**Resolution:** ${reason}`,
+            isInternal: false,
+          }).returning();
+
+          await tx.insert(ticketAuditLog).values({
+            ticketId: ticket.id,
+            actorId: actorPlayer.id,
+            action: 'commented',
+            newValue: { messageId: message.id },
+          });
+        }
+      });
+    } catch (err) {
+      console.error('Failed to close ticket:', err);
+      await interaction.editReply({
+        embeds: [errorEmbed('Failed to close ticket. Please try again.')],
+      });
+      return;
+    }
 
     const description = [
       `**Ticket:** #${ticketNumber} — ${ticket.title}`,
@@ -98,5 +167,22 @@ const command: Command = {
     }
   },
 };
+
+async function upsertPlayer(discordId: string, discordUsername: string) {
+  try {
+    const [player] = await db
+      .insert(players)
+      .values({ discordId, discordUsername })
+      .onConflictDoUpdate({
+        target: players.discordId,
+        set: { discordUsername },
+      })
+      .returning();
+    return player ?? null;
+  } catch (err) {
+    console.error('Failed to upsert player for ticket close:', err);
+    return null;
+  }
+}
 
 export default command;

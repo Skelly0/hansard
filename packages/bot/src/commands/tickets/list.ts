@@ -2,8 +2,13 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { eq, inArray } from 'drizzle-orm';
+import { players } from '@hansard/db';
+import { TicketService } from '@hansard/api/services/ticketService';
+import { createEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
+import { formatTicketPlayer, getTicketViewer } from '../../utils/ticketAccess.js';
+import { db } from '../../db.js';
 import type { Command } from '../../client.js';
 
 /**
@@ -60,15 +65,46 @@ const command: Command = {
 
     await interaction.deferReply();
 
-    // TODO: Replace with actual DB/API query
-    // const { tickets, total } = await ticketService.listTickets({
-    //   status: statusFilter,
-    //   assignedToId: assigneeUser?.id,
-    // });
+    const { viewer } = await getTicketViewer(interaction);
+    if (!viewer) {
+      await interaction.editReply({
+        embeds: [
+          createEmbed({
+            title: 'No Tickets Found',
+            description: 'You do not have access to any tickets yet.',
+            system: 'tickets',
+          }),
+        ],
+      });
+      return;
+    }
 
-    // Placeholder: empty results until DB wired up
-    const ticketList: any[] = [];
-    const total = 0;
+    const filters: {
+      status?: any;
+      assignedToId?: string;
+      limit: number;
+    } = { limit: 100 };
+
+    if (statusFilter) {
+      filters.status = statusFilter;
+    }
+    if (assigneeUser) {
+      const [assigneePlayer] = await db
+        .select({ id: players.id })
+        .from(players)
+        .where(eq(players.discordId, assigneeUser.id))
+        .limit(1);
+
+      if (!assigneePlayer) {
+        filters.assignedToId = '00000000-0000-0000-0000-000000000000';
+      } else {
+        filters.assignedToId = assigneePlayer.id;
+      }
+    }
+
+    const result = await new TicketService(db).listTickets(filters, viewer);
+    const ticketList = result.tickets;
+    const total = result.total;
 
     if (ticketList.length === 0) {
       const filterDesc = [];
@@ -89,6 +125,22 @@ const command: Command = {
       return;
     }
 
+    const assigneeIds = [
+      ...new Set(ticketList.map((ticket: any) => ticket.assignedToId).filter(Boolean) as string[]),
+    ];
+    const assigneeRows = assigneeIds.length
+      ? await db
+        .select({
+          id: players.id,
+          discordId: players.discordId,
+          characterName: players.characterName,
+          discordUsername: players.discordUsername,
+        })
+        .from(players)
+        .where(inArray(players.id, assigneeIds))
+      : [];
+    const assigneesById = new Map(assigneeRows.map((player) => [player.id, player]));
+
     // Build pages
     const pages = [];
     for (let i = 0; i < ticketList.length; i += TICKETS_PER_PAGE) {
@@ -98,7 +150,7 @@ const command: Command = {
         const statusIcon = STATUS_EMOJI[ticket.status] ?? '';
         const priorityIcon = PRIORITY_EMOJI[ticket.priority] ?? '';
         const assignee = ticket.assignedToId
-          ? `<@${ticket.assignedToId}>`
+          ? formatTicketPlayer(assigneesById.get(ticket.assignedToId), '*unassigned*')
           : '*unassigned*';
         const age = `<t:${Math.floor(new Date(ticket.createdAt).getTime() / 1000)}:R>`;
 

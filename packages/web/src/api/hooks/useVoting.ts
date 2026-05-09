@@ -83,7 +83,7 @@ export function useElections(filters?: ElectionFilters) {
   if (filters?.scope) params.set('scope', filters.scope);
   if (filters?.type) params.set('type', filters.type);
   if (filters?.method) params.set('method', filters.method);
-  if (filters?.forOffice) params.set('forOffice', filters.forOffice);
+  if (filters?.forOffice) params.set('forOfficeId', filters.forOffice);
   if (filters?.since) params.set('since', filters.since);
   if (filters?.until) params.set('until', filters.until);
   if (filters?.page) params.set('page', String(filters.page));

@@ -18,6 +18,7 @@ import { MetricCard } from '../components/shared/MetricCard';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal } from '../components/shared/Modal';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 // ---- Helpers ----
 
@@ -42,7 +43,17 @@ function formatDateTime(dateString: string): string {
 // ---- Sub-components ----
 
 function ClockHeader() {
-  const { data: clock, isLoading } = useSimulationClock();
+  const { data: clock, isLoading, isError, error } = useSimulationClock();
+
+  if (isError) {
+    return (
+      <QueryErrorState
+        title="Could not load simulation clock"
+        error={error}
+        className="mb-6"
+      />
+    );
+  }
 
   if (isLoading || !clock) {
     return (
@@ -288,7 +299,7 @@ function ControlsCard() {
 }
 
 function AdvanceHistoryLog() {
-  const { data: history, isLoading } = useTimeAdvanceHistory();
+  const { data: history, isLoading, isError, error } = useTimeAdvanceHistory();
 
   if (isLoading) {
     return (
@@ -302,6 +313,10 @@ function AdvanceHistoryLog() {
         ))}
       </div>
     );
+  }
+
+  if (isError) {
+    return <QueryErrorState title="Could not load time advance history" error={error} />;
   }
 
   if (!history || history.length === 0) {
@@ -753,10 +768,13 @@ const EVENT_COLOR: Record<string, string> = {
 };
 
 function SimEventLog() {
-  const { data: events, isLoading } = useSimEvents(50);
+  const { data: events, isLoading, isError, error } = useSimEvents(50);
 
   if (isLoading) {
     return <div className="card border-l-accent-simulation"><div className="skeleton h-4 w-3/4" /></div>;
+  }
+  if (isError) {
+    return <QueryErrorState title="Could not load simulation events" error={error} />;
   }
   if (!events || events.length === 0) {
     return (

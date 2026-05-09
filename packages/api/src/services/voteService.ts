@@ -84,6 +84,18 @@ const ACTIVE_STATUSES: ElectionStatus[] = [
 /** Statuses considered "past" / archived for the scope filter. */
 const PAST_STATUSES: ElectionStatus[] = ['certified', 'cancelled'];
 
+function parseNpcTallyValue(value: unknown): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 0
+  ) {
+    throw new Error('NPC tally values must be non-negative integers');
+  }
+  return value;
+}
+
 export interface CastBallotInput {
   electionId: string;
   voterId: string;
@@ -837,15 +849,39 @@ export class VoteService {
   // ----------------------------------------------------------
 
   async enterNpcConfirmation(electionId: string, input: NpcConfirmInput) {
-    const total = input.yea + input.nay + input.abstain;
-    const confirmed = input.yea > input.nay;
+    const [election] = await this.db
+      .select()
+      .from(elections)
+      .where(eq(elections.id, electionId))
+      .limit(1);
+
+    if (!election) {
+      return null;
+    }
+
+    const config = election.config as ElectionConfig;
+    if (!config.requiresNpcConfirmation) {
+      throw new Error('Election does not require NPC confirmation');
+    }
+    if (election.status !== 'npc_pending') {
+      throw new Error('Election is not awaiting NPC confirmation');
+    }
+    if (!['position_election', 'appointment_confirmation'].includes(election.type)) {
+      throw new Error('NPC confirmation is only valid for position elections and appointment confirmations');
+    }
+
+    const yea = parseNpcTallyValue(input.yea);
+    const nay = parseNpcTallyValue(input.nay);
+    const abstain = parseNpcTallyValue(input.abstain);
+    const total = yea + nay + abstain;
+    const confirmed = yea > nay;
 
     const npcConfirmation: NpcConfirmation = {
       status: confirmed ? 'confirmed' : 'rejected',
       tally: {
-        yea: input.yea,
-        nay: input.nay,
-        abstain: input.abstain,
+        yea,
+        nay,
+        abstain,
         total,
       },
       decidedAt: new Date().toISOString(),

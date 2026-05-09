@@ -481,14 +481,15 @@ function VotesTab({
       header: 'Vote',
       minWidth: '90px',
       render: (row) => {
+        const choice = row.choice ?? 'Private';
         const choiceColor: Record<string, string> = {
           yea: 'passed',
           nay: 'rejected',
           abstain: 'closed',
         };
         return (
-          <Tag color={choiceColor[row.choice] || 'primary'}>
-            {row.choice}
+          <Tag color={row.choice ? choiceColor[row.choice] || 'primary' : 'closed'}>
+            {choice}
           </Tag>
         );
       },
@@ -498,7 +499,7 @@ function VotesTab({
       header: 'Cast',
       mono: true,
       minWidth: '100px',
-      render: (row) => formatDate(row.castAt),
+      render: (row) => row.castAt ? formatDate(row.castAt) : 'Private',
     },
   ];
 

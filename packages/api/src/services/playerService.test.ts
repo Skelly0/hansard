@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { findOrCreatePlayerByDiscordId, aggregatePermissionsForPlayer, listPlayers } from './playerService';
+import {
+  findOrCreatePlayerByDiscordId,
+  aggregatePermissionsForPlayer,
+  listPlayers,
+  getPlayerVotingRecord,
+} from './playerService';
 
 // Mock drizzle db: handles
 //   - .insert(players).values().onConflictDoUpdate().returning() (returns inserted)
@@ -138,5 +143,86 @@ describe('listPlayers with search', () => {
     // Search predicate must actually be present in the WHERE arg, not silently dropped.
     const whereArg = where.mock.calls[0][0];
     expect(whereArg).toBeTruthy();
+  });
+});
+
+describe('getPlayerVotingRecord privacy', () => {
+  function makeVotingRecordDb(rows: any[]) {
+    const orderBy = vi.fn().mockResolvedValue(rows);
+    const where = vi.fn().mockReturnValue({ orderBy });
+    const innerJoin = vi.fn().mockReturnValue({ where });
+    const from = vi.fn().mockReturnValue({ innerJoin });
+    const select = vi.fn().mockReturnValue({ from });
+    return { select, _orderBy: orderBy };
+  }
+
+  const castAt = new Date('2026-01-01T00:00:00.000Z');
+  const baseRow = {
+    ballot: {
+      electionId: 'election-1',
+      voterId: 'target-player',
+      vote: { type: 'yea_nay_abstain', choice: 'yea' },
+      castAt,
+    },
+    electionTitle: 'Chancellor Confirmation',
+    electionStatus: 'tallied',
+    electionConfig: {},
+  };
+
+  it('redacts anonymous ballot choices and cast times from other players', async () => {
+    const db: any = makeVotingRecordDb([
+      {
+        ...baseRow,
+        electionConfig: { anonymousBallots: true },
+      },
+    ]);
+
+    const result = await (getPlayerVotingRecord as any)(db, 'target-player', {
+      userId: 'viewer-player',
+      isStaff: false,
+    });
+
+    expect(result).toEqual([
+      {
+        electionId: 'election-1',
+        electionTitle: 'Chancellor Confirmation',
+        choice: null,
+        castAt: null,
+      },
+    ]);
+  });
+
+  it('redacts sealed in-progress choices and cast times even for staff', async () => {
+    const db: any = makeVotingRecordDb([
+      {
+        ...baseRow,
+        electionStatus: 'voting_open',
+        electionConfig: { sealedResults: true },
+      },
+    ]);
+
+    const result = await (getPlayerVotingRecord as any)(db, 'target-player', {
+      userId: 'staff-player',
+      isStaff: true,
+    });
+
+    expect(result[0]).toMatchObject({
+      choice: null,
+      castAt: null,
+    });
+  });
+
+  it('allows players to see their own ballot record', async () => {
+    const db: any = makeVotingRecordDb([baseRow]);
+
+    const result = await (getPlayerVotingRecord as any)(db, 'target-player', {
+      userId: 'target-player',
+      isStaff: false,
+    });
+
+    expect(result[0]).toMatchObject({
+      choice: 'yea',
+      castAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 });

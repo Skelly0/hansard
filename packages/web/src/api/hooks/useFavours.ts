@@ -76,7 +76,7 @@ export function useFavourLeaderboard(categoryId?: string) {
 
 export function useFavourHistory(playerId?: string, categoryId?: string) {
   const params = new URLSearchParams();
-  if (categoryId) params.set('category', categoryId);
+  if (categoryId) params.set('categoryId', categoryId);
   const qs = params.toString();
   return useQuery({
     queryKey: ['favours', 'history', playerId, categoryId],
@@ -87,7 +87,7 @@ export function useFavourHistory(playerId?: string, categoryId?: string) {
 
 export function useAllFavourHistory(categoryId?: string) {
   const params = new URLSearchParams();
-  if (categoryId) params.set('category', categoryId);
+  if (categoryId) params.set('categoryId', categoryId);
   const qs = params.toString();
   return useQuery({
     queryKey: ['favours', 'history', 'all', categoryId],

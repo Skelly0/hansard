@@ -7,17 +7,23 @@ import {
   getPlayer,
   getPlayerByDiscordId,
   listPlayers,
+  countPlayers,
   updateCharacter,
   changeParty,
   leaveParty,
   getPlayerEvents,
   getPlayerHealth,
+  getPlayerOfficeHistory,
+  getPlayerVotingRecord,
   calculateStartingAgeFavourBonus,
   type CreateCharacterInput,
   type UpdateCharacterInput,
   type ListPlayersFilters,
   type PlayerEventFilters,
 } from '../services/playerService.js';
+import { listBills } from '../services/billService.js';
+import { getHistory as getFavourHistory, getPlayerBalances } from '../services/favourService.js';
+import { TicketService } from '../services/ticketService.js';
 
 // ============================================================
 // Route Parameter / Query Types
@@ -29,13 +35,19 @@ interface IdParams {
 
 interface ListPlayersQuery {
   factionId?: string;
+  faction?: string;
   partyId?: string;
+  party?: string;
   isActive?: string;
+  active?: string;
   isStaff?: string;
+  staff?: string;
   isAlive?: string;
+  alive?: string;
   search?: string;
   limit?: string;
   offset?: string;
+  page?: string;
 }
 
 interface PlayerEventsQuery {
@@ -64,17 +76,26 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       const q = request.query;
 
       const filters: ListPlayersFilters = {};
-      if (q.factionId) filters.factionId = q.factionId;
-      if (q.partyId) filters.partyId = q.partyId;
-      if (q.isActive !== undefined) filters.isActive = q.isActive === 'true';
-      if (q.isStaff !== undefined) filters.isStaff = q.isStaff === 'true';
-      if (q.isAlive !== undefined) filters.isAlive = q.isAlive === 'true';
+      const factionId = q.factionId ?? q.faction;
+      const partyId = q.partyId ?? q.party;
+      const isActive = q.isActive ?? q.active;
+      const isStaff = q.isStaff ?? q.staff;
+      const isAlive = q.isAlive ?? q.alive;
+      if (factionId) filters.factionId = factionId;
+      if (partyId) filters.partyId = partyId;
+      if (isActive !== undefined) filters.isActive = isActive === 'true';
+      if (isStaff !== undefined) filters.isStaff = isStaff === 'true';
+      if (isAlive !== undefined) filters.isAlive = isAlive === 'true';
       if (q.search) filters.search = q.search.slice(0, 100);
       if (q.limit) filters.limit = parseInt(q.limit, 10);
       if (q.offset) filters.offset = parseInt(q.offset, 10);
+      else if (q.page && filters.limit) filters.offset = (Math.max(1, parseInt(q.page, 10)) - 1) * filters.limit;
 
-      const players = await listPlayers(fastify.db, filters);
-      return players;
+      const [players, total] = await Promise.all([
+        listPlayers(fastify.db, filters),
+        countPlayers(fastify.db, filters),
+      ]);
+      return { data: players, total };
     },
   );
 
@@ -85,11 +106,33 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     '/api/players/:id',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const player = await getPlayer(fastify.db, request.params.id);
+      const { id } = request.params;
+      const player = await getPlayer(fastify.db, id);
       if (!player) {
         return reply.status(404).send({ error: 'Player not found' });
       }
-      return player;
+      const voteViewer = { userId: request.session.user!.id, isStaff: !!request.player?.isStaff };
+
+      const [offices, billResult, votes, favourBalances, events] = await Promise.all([
+        getPlayerOfficeHistory(fastify.db, id),
+        listBills(fastify.db, { authorId: id, limit: 100 }),
+        getPlayerVotingRecord(fastify.db, id, voteViewer),
+        getPlayerBalances(fastify.db, id),
+        getPlayerEvents(fastify.db, id, { limit: 50 }),
+      ]);
+
+      return {
+        ...player,
+        offices,
+        bills: billResult.bills,
+        votes,
+        favours: favourBalances.map((balance) => ({
+          categoryId: balance.categoryId,
+          categoryName: balance.categoryName,
+          balance: balance.balance,
+        })),
+        events,
+      };
     },
   );
 
@@ -262,21 +305,22 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // ----------------------------------------------------------
-  // STUBS — these return empty data until their services are built
-  // ----------------------------------------------------------
-
   // GET /api/players/:id/tickets — player's ticket history
   fastify.get<{ Params: IdParams }>(
     '/api/players/:id/tickets',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const player = await getPlayer(fastify.db, request.params.id);
+      const { id } = request.params;
+      const player = await getPlayer(fastify.db, id);
       if (!player) {
         return reply.status(404).send({ error: 'Player not found' });
       }
-      // TODO: Wire up ticket service
-      return { playerId: request.params.id, tickets: [] };
+      const ticketService = new TicketService(fastify.db);
+      const result = await ticketService.listTickets(
+        { createdById: id, limit: 100 },
+        { userId: request.session.user!.id, isStaff: !!request.player?.isStaff },
+      );
+      return { data: result.tickets, total: result.total };
     },
   );
 
@@ -285,12 +329,15 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     '/api/players/:id/votes',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const player = await getPlayer(fastify.db, request.params.id);
+      const { id } = request.params;
+      const player = await getPlayer(fastify.db, id);
       if (!player) {
         return reply.status(404).send({ error: 'Player not found' });
       }
-      // TODO: Wire up voting service
-      return { playerId: request.params.id, votes: [] };
+      return getPlayerVotingRecord(fastify.db, id, {
+        userId: request.session.user!.id,
+        isStaff: !!request.player?.isStaff,
+      });
     },
   );
 
@@ -299,12 +346,12 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     '/api/players/:id/offices',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const player = await getPlayer(fastify.db, request.params.id);
+      const { id } = request.params;
+      const player = await getPlayer(fastify.db, id);
       if (!player) {
         return reply.status(404).send({ error: 'Player not found' });
       }
-      // TODO: Wire up office service
-      return { playerId: request.params.id, offices: [] };
+      return getPlayerOfficeHistory(fastify.db, id);
     },
   );
 
@@ -313,12 +360,13 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     '/api/players/:id/bills',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const player = await getPlayer(fastify.db, request.params.id);
+      const { id } = request.params;
+      const player = await getPlayer(fastify.db, id);
       if (!player) {
         return reply.status(404).send({ error: 'Player not found' });
       }
-      // TODO: Wire up bills service
-      return { playerId: request.params.id, bills: [] };
+      const result = await listBills(fastify.db, { authorId: id, limit: 100 });
+      return result.bills;
     },
   );
 
@@ -327,12 +375,16 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     '/api/players/:id/favours',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const player = await getPlayer(fastify.db, request.params.id);
+      const { id } = request.params;
+      const player = await getPlayer(fastify.db, id);
       if (!player) {
         return reply.status(404).send({ error: 'Player not found' });
       }
-      // TODO: Wire up favours service
-      return { playerId: request.params.id, balances: [], transactions: [] };
+      const [balances, transactions] = await Promise.all([
+        getPlayerBalances(fastify.db, id),
+        getFavourHistory(fastify.db, id, { limit: 100 }),
+      ]);
+      return { playerId: id, balances, transactions };
     },
   );
 

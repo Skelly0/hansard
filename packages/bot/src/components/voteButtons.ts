@@ -136,26 +136,28 @@ async function handleConfirmVote(
   electionId: string,
   choiceData: string,
 ): Promise<void> {
+  await interaction.deferUpdate();
+
   let voteDescription: string;
   let votePayload: BallotVote;
 
-  const [voter] = await db
-    .select({
-      id: players.id,
-    })
-    .from(players)
-    .where(eq(players.discordId, interaction.user.id))
-    .limit(1);
-
-  if (!voter) {
-    await interaction.reply({
-      embeds: [errorEmbed('You are not registered as a player. Run `/character create` first.')],
-      ephemeral: true,
-    });
-    return;
-  }
-
   try {
+    const [voter] = await db
+      .select({
+        id: players.id,
+      })
+      .from(players)
+      .where(eq(players.discordId, interaction.user.id))
+      .limit(1);
+
+    if (!voter) {
+      await interaction.followUp({
+        embeds: [errorEmbed('You are not registered as a player. Run `/character create` first.')],
+        ephemeral: true,
+      });
+      return;
+    }
+
     const [election] = await db
       .select({
         method: elections.method,
@@ -165,7 +167,7 @@ async function handleConfirmVote(
       .limit(1);
 
     if (!election) {
-      await interaction.reply({
+      await interaction.followUp({
         embeds: [errorEmbed('Election not found.')],
         ephemeral: true,
       });
@@ -174,7 +176,7 @@ async function handleConfirmVote(
 
     const ballot = buildBallot(choiceData, election.method as VotingMethod);
     if (!ballot) {
-      await interaction.reply({
+      await interaction.followUp({
         embeds: [errorEmbed(`This ballot control is not valid for a ${formatVotingMethod(election.method as VotingMethod)} election.`)],
         ephemeral: true,
       });
@@ -193,7 +195,7 @@ async function handleConfirmVote(
     const friendly = /unique|duplicate/i.test(message)
       ? 'You have already voted in this election.'
       : message;
-    await interaction.reply({
+    await interaction.followUp({
       embeds: [errorEmbed(friendly)],
       ephemeral: true,
     });
@@ -205,7 +207,7 @@ async function handleConfirmVote(
     `Your vote of **${voteDescription}** has been recorded for election \`${electionId}\`.`,
   );
 
-  await interaction.update({
+  await interaction.editReply({
     embeds: [embed],
     components: [],
   });

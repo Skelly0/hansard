@@ -1,4 +1,4 @@
-import { eq, and, desc, isNull, ilike, or, inArray, type SQL } from 'drizzle-orm';
+import { eq, and, desc, isNull, ilike, or, inArray, count, type SQL } from 'drizzle-orm';
 import {
   players,
   playerEventLog,
@@ -7,12 +7,15 @@ import {
   officeHolders,
   offices,
   simulationClock,
+  ballots,
+  elections,
   type Database,
 } from '@hansard/db';
 import type {
   PlayerProfile,
   PlayerEvent,
   Ailment,
+  ElectionConfig,
 } from '@hansard/shared';
 import { PlayerEventType, birthDateForAge } from '@hansard/shared';
 
@@ -53,6 +56,26 @@ export interface PlayerEventFilters {
   eventType?: string;
   limit?: number;
   offset?: number;
+}
+
+export interface PlayerOfficeHistoryEntry {
+  officeId: string;
+  officeName: string;
+  startDate: string;
+  endDate: string | null;
+  appointmentMethod: string;
+}
+
+export interface PlayerVoteRecordEntry {
+  electionId: string;
+  electionTitle: string;
+  choice: string | null;
+  castAt: string | null;
+}
+
+export interface PlayerVoteRecordViewer {
+  userId: string;
+  isStaff: boolean;
 }
 
 // ============================================================
@@ -160,7 +183,7 @@ export async function getPlayerByDiscordId(db: Database, discordId: string): Pro
 /**
  * List players with optional filters.
  */
-export async function listPlayers(db: Database, filters: ListPlayersFilters = {}): Promise<PlayerProfile[]> {
+function playerListConditions(filters: ListPlayersFilters): SQL[] {
   const conditions: SQL[] = [];
 
   if (filters.factionId !== undefined) {
@@ -183,9 +206,14 @@ export async function listPlayers(db: Database, filters: ListPlayersFilters = {}
     conditions.push(or(ilike(players.characterName, term), ilike(players.discordUsername, term))!);
   }
 
+  return conditions;
+}
+
+export async function listPlayers(db: Database, filters: ListPlayersFilters = {}): Promise<PlayerProfile[]> {
   const limit = filters.limit ?? 100;
   const offset = filters.offset ?? 0;
 
+  const conditions = playerListConditions(filters);
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
   const results = await db
@@ -197,6 +225,18 @@ export async function listPlayers(db: Database, filters: ListPlayersFilters = {}
     .offset(offset);
 
   return results.map(toPlayerProfile);
+}
+
+export async function countPlayers(db: Database, filters: ListPlayersFilters = {}): Promise<number> {
+  const conditions = playerListConditions(filters);
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [row] = await db
+    .select({ value: count() })
+    .from(players)
+    .where(whereClause);
+
+  return row?.value ?? 0;
 }
 
 /**
@@ -396,6 +436,69 @@ export async function getPlayerHealth(
   };
 }
 
+/**
+ * Get all offices a player has held, newest first.
+ */
+export async function getPlayerOfficeHistory(
+  db: Database,
+  playerId: string,
+): Promise<PlayerOfficeHistoryEntry[]> {
+  const rows = await db
+    .select({
+      holder: officeHolders,
+      officeName: offices.name,
+    })
+    .from(officeHolders)
+    .innerJoin(offices, eq(officeHolders.officeId, offices.id))
+    .where(eq(officeHolders.playerId, playerId))
+    .orderBy(desc(officeHolders.startDate));
+
+  return rows.map((row) => ({
+    officeId: row.holder.officeId,
+    officeName: row.officeName,
+    startDate: row.holder.startDate.toISOString(),
+    endDate: row.holder.endDate?.toISOString() ?? null,
+    appointmentMethod: row.holder.appointmentMethod,
+  }));
+}
+
+/**
+ * Get a player's voting record across elections, newest first.
+ */
+export async function getPlayerVotingRecord(
+  db: Database,
+  playerId: string,
+  viewer?: PlayerVoteRecordViewer,
+): Promise<PlayerVoteRecordEntry[]> {
+  const rows = await db
+    .select({
+      ballot: ballots,
+      electionTitle: elections.title,
+      electionStatus: elections.status,
+      electionConfig: elections.config,
+    })
+    .from(ballots)
+    .innerJoin(elections, eq(ballots.electionId, elections.id))
+    .where(eq(ballots.voterId, playerId))
+    .orderBy(desc(ballots.castAt));
+
+  return rows.map((row) => {
+    const canViewDetails = canViewBallotDetails({
+      targetPlayerId: playerId,
+      viewer,
+      electionStatus: row.electionStatus,
+      electionConfig: row.electionConfig as ElectionConfig,
+    });
+
+    return {
+      electionId: row.ballot.electionId,
+      electionTitle: row.electionTitle,
+      choice: canViewDetails ? formatBallotChoice(row.ballot.vote) : null,
+      castAt: canViewDetails ? row.ballot.castAt.toISOString() : null,
+    };
+  });
+}
+
 // ============================================================
 // Mappers
 // ============================================================
@@ -448,6 +551,52 @@ function toPlayerEvent(row: typeof playerEventLog.$inferSelect): PlayerEvent {
     isAutomatic: row.isAutomatic,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+function formatBallotChoice(vote: typeof ballots.$inferSelect.vote): string {
+  switch (vote.type) {
+    case 'yea_nay_abstain':
+      return vote.choice;
+    case 'fptp':
+    case 'two_round':
+    case 'exhaustive':
+      return vote.candidateId;
+    case 'approval':
+      return vote.approved.join(', ');
+    case 'ranked':
+      return vote.ranking.join(' > ');
+  }
+}
+
+function canViewBallotDetails({
+  targetPlayerId,
+  viewer,
+  electionStatus,
+  electionConfig,
+}: {
+  targetPlayerId: string;
+  viewer?: PlayerVoteRecordViewer;
+  electionStatus: string;
+  electionConfig: ElectionConfig;
+}): boolean {
+  if (viewer?.userId === targetPlayerId) {
+    return true;
+  }
+
+  if (electionConfig.anonymousBallots) {
+    return false;
+  }
+
+  const detailsArePublic = electionStatus === 'tallied' || electionStatus === 'certified';
+  if (electionConfig.sealedResults && !detailsArePublic) {
+    return false;
+  }
+
+  if (viewer?.isStaff) {
+    return true;
+  }
+
+  return detailsArePublic;
 }
 
 // ============================================================

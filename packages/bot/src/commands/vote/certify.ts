@@ -71,7 +71,7 @@ const command: Command = {
       const npc = election.npcConfirmation;
       if (!npc || npc.status === 'pending') {
         await interaction.editReply({
-          embeds: [errorEmbed('NPC confirmation is still pending. Use `/vote-npc-confirm` first.')],
+          embeds: [errorEmbed('NPC confirmation is still pending. Use `/npc-confirm` first.')],
         });
         return;
       }

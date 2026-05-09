@@ -2,16 +2,19 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
+import { eq } from 'drizzle-orm';
+import { players } from '@hansard/db';
+import { TicketService } from '@hansard/api/services/ticketService';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { buildTicketActionRow } from '../../components/ticketButtons.js';
+import { getTicketViewer } from '../../utils/ticketAccess.js';
+import { db } from '../../db.js';
 import type { Command } from '../../client.js';
 
 /**
  * /ticket view <number>
  *
  * Shows a ticket embed with status, assignee, priority, and metadata.
- * In production this will query the API/DB. Currently stubbed with
- * a "not found" response until the DB layer is wired up.
  */
 
 const STATUS_DISPLAY: Record<string, string> = {
@@ -46,19 +49,31 @@ const command: Command = {
 
     await interaction.deferReply();
 
-    // TODO: Replace with actual DB/API query
-    // const ticket = await ticketService.getTicketByNumber(ticketNumber);
-
-    // For now, demonstrate what the embed looks like with mock data
-    // In production, this block is replaced by a real lookup.
-    const ticket = null as any; // placeholder — will be a real query
+    const { viewer } = await getTicketViewer(interaction);
+    const ticket = viewer
+      ? await new TicketService(db).getTicketByNumber(ticketNumber, viewer)
+      : null;
 
     if (!ticket) {
       await interaction.editReply({
-        embeds: [errorEmbed(`Ticket \`#${ticketNumber}\` not found.`)],
+        embeds: [errorEmbed(`Ticket \`#${ticketNumber}\` not found or you do not have access.`)],
       });
       return;
     }
+
+    const [creator] = await db
+      .select()
+      .from(players)
+      .where(eq(players.id, ticket.createdById))
+      .limit(1);
+
+    const [assignee] = ticket.assignedToId
+      ? await db
+        .select()
+        .from(players)
+        .where(eq(players.id, ticket.assignedToId))
+        .limit(1)
+      : [null];
 
     const fields = [
       {
@@ -78,12 +93,16 @@ const command: Command = {
       },
       {
         name: 'Created By',
-        value: ticket.createdById ? `<@${ticket.createdById}>` : 'Unknown',
+        value: creator?.discordId
+          ? `<@${creator.discordId}>`
+          : creator?.characterName ?? creator?.discordUsername ?? 'Unknown',
         inline: true,
       },
       {
         name: 'Assigned To',
-        value: ticket.assignedToId ? `<@${ticket.assignedToId}>` : '*Unassigned*',
+        value: assignee?.discordId
+          ? `<@${assignee.discordId}>`
+          : assignee?.characterName ?? assignee?.discordUsername ?? '*Unassigned*',
         inline: true,
       },
       {

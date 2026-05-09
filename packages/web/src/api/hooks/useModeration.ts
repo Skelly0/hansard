@@ -54,8 +54,8 @@ export function useModActions(filters?: ModActionFilters) {
   if (filters?.type) params.set('type', filters.type);
   if (filters?.targetPlayerId) params.set('targetPlayerId', filters.targetPlayerId);
   if (filters?.isActive !== undefined) params.set('isActive', String(filters.isActive));
-  if (filters?.page) params.set('page', String(filters.page));
   if (filters?.limit) params.set('limit', String(filters.limit));
+  if (filters?.page && filters?.limit) params.set('offset', String((filters.page - 1) * filters.limit));
   const qs = params.toString();
   return useQuery({
     queryKey: ['moderation', 'actions', filters],

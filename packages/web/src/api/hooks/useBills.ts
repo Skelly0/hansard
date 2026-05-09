@@ -72,6 +72,17 @@ export interface BillVoter {
   castAt: string;
 }
 
+type BillVoterApiRow = BillVoter & {
+  voterId?: string;
+  discordUsername?: string;
+};
+
+type LegacyBillVoterApiRow = Omit<BillVoter, 'playerId' | 'characterName'> & {
+  voterId: string;
+  characterName?: string;
+  discordUsername?: string;
+};
+
 export interface BillDetail extends Bill {
   statusLog: BillStatusEntry[];
   voters?: BillVoter[];
@@ -93,13 +104,13 @@ interface BillFilters {
 export function useBills(filters?: BillFilters) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
-  if (filters?.author) params.set('author', filters.author);
+  if (filters?.author) params.set('authorId', filters.author);
   if (filters?.policyArea) params.set('policyArea', filters.policyArea);
   if (filters?.tags?.length) params.set('tags', filters.tags.join(','));
   if (filters?.search) params.set('search', filters.search);
   if (filters?.sort) params.set('sort', filters.sort);
-  if (filters?.page) params.set('page', String(filters.page));
   if (filters?.limit) params.set('limit', String(filters.limit));
+  if (filters?.page && filters?.limit) params.set('offset', String((filters.page - 1) * filters.limit));
   const qs = params.toString();
   return useQuery({
     queryKey: ['bills', filters],
@@ -126,7 +137,19 @@ export function useBillStatusLog(slug?: string) {
 export function useBillVoters(slug?: string) {
   return useQuery({
     queryKey: ['bills', slug, 'voters'],
-    queryFn: () => api.get<BillVoter[]>(`/bills/${slug}/voters`),
+    queryFn: async () => {
+      const response = await api.get<
+        (BillVoterApiRow | LegacyBillVoterApiRow)[] |
+        { playerVotes: (BillVoterApiRow | LegacyBillVoterApiRow)[] }
+      >(`/bills/${slug}/voters`);
+      const rows = Array.isArray(response) ? response : response.playerVotes;
+      return rows.map((row) => ({
+        playerId: 'playerId' in row ? row.playerId : row.voterId,
+        characterName: row.characterName ?? row.discordUsername ?? ('playerId' in row ? row.playerId : row.voterId),
+        choice: row.choice,
+        castAt: row.castAt,
+      }));
+    },
     enabled: !!slug,
   });
 }

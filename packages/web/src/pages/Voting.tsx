@@ -5,6 +5,7 @@ import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 import type { Election } from '../api/hooks/useVoting';
 
 const ELECTION_STATUSES = [
@@ -83,7 +84,7 @@ export function Voting() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
-  const { data, isLoading } = useElections({
+  const { data, isLoading, isError, error } = useElections({
     // Explicit status wins over scope on the server, so only send one.
     status: status !== 'all' ? status : undefined,
     scope: status === 'all' && scope !== 'all' ? scope : undefined,
@@ -93,6 +94,13 @@ export function Voting() {
   });
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState title="Could not load votes" error={error} />
+      </div>
+    );
+  }
 
   const elections = data?.data ?? [];
   const total = data?.total ?? 0;

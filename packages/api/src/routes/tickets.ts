@@ -35,12 +35,15 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     Querystring: {
       status?: TicketStatus;
       categoryId?: string;
+      category?: string;
       assignedToId?: string;
+      assignee?: string;
       createdById?: string;
       priority?: TicketPriority;
       search?: string;
       limit?: string;
       offset?: string;
+      page?: string;
     };
   }>(
     '/api/tickets',
@@ -49,24 +52,34 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       const {
         status,
         categoryId,
+        category,
         assignedToId,
+        assignee,
         createdById,
         priority,
         search,
         limit,
         offset,
+        page,
       } = request.query;
+      const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+      const parsedOffset = offset
+        ? parseInt(offset, 10)
+        : page && parsedLimit
+          ? (Math.max(1, parseInt(page, 10)) - 1) * parsedLimit
+          : undefined;
 
-      return ticketService.listTickets({
+      const result = await ticketService.listTickets({
         status: status as TicketStatus | undefined,
-        categoryId,
-        assignedToId,
+        categoryId: categoryId ?? category,
+        assignedToId: assignedToId ?? assignee,
         createdById,
         priority: priority as TicketPriority | undefined,
         search,
-        limit: limit ? parseInt(limit, 10) : undefined,
-        offset: offset ? parseInt(offset, 10) : undefined,
+        limit: parsedLimit,
+        offset: parsedOffset,
       }, getViewer(request));
+      return { data: result.tickets, total: result.total };
     },
   );
 

@@ -11,6 +11,11 @@ import {
   removeFromOffice,
 } from '../services/officeService.js';
 
+function withoutPermissionStrings<T extends { permissions?: unknown }>(office: T): Omit<T, 'permissions'> {
+  const { permissions: _permissions, ...publicOffice } = office;
+  return publicOffice;
+}
+
 /**
  * Office routes plugin — office management and appointments.
  */
@@ -19,8 +24,10 @@ export default async function officeRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/api/offices',
     { preHandler: [requireAuth] },
-    async () => {
-      return listOffices(fastify.db);
+    async (request) => {
+      const offices = await listOffices(fastify.db);
+      if (request.player?.isStaff) return offices;
+      return offices.map(withoutPermissionStrings);
     },
   );
 
@@ -32,6 +39,9 @@ export default async function officeRoutes(fastify: FastifyInstance) {
       const office = await getOffice(fastify.db, request.params.id);
       if (!office) {
         return reply.status(404).send({ error: 'Office not found' });
+      }
+      if (!request.player?.isStaff) {
+        return withoutPermissionStrings(office);
       }
       return office;
     },

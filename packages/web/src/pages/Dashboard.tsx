@@ -41,12 +41,17 @@ export function Dashboard() {
   }
   if (!overview) return null;
 
-  const metrics: MetricDef[] = [
-    {
+  const metrics: MetricDef[] = [];
+
+  if (overview.activeTickets !== undefined) {
+    metrics.push({
       key: 'tickets', label: 'Active Tickets',
       current: overview.activeTickets, prev: overview.prevWeek?.activeTickets ?? null,
       color: 'text-accent-tickets', borderColor: 'border-l-accent-tickets',
-    },
+    });
+  }
+
+  metrics.push(
     {
       key: 'bills', label: 'Open Bills',
       current: overview.activeBills, prev: overview.prevWeek?.activeBills ?? null,
@@ -62,18 +67,24 @@ export function Dashboard() {
       current: overview.playerCount, prev: overview.prevWeek?.playerCount ?? null,
       color: 'text-accent-players', borderColor: 'border-l-accent-players',
     },
-    {
+  );
+
+  if (overview.activeModActions !== undefined) {
+    metrics.push({
       key: 'moderation', label: 'Active Mod Actions',
       current: overview.activeModActions, prev: overview.prevWeek?.activeModActions ?? null,
       color: 'text-accent-moderation', borderColor: 'border-l-accent-moderation',
-    },
+    });
+  }
+
+  metrics.push(
     {
       key: 'sim', label: 'Simulation Tick',
       current: overview.currentSimTick, prev: null,    // sim tick gets sim-date instead
       color: 'text-accent-simulation', borderColor: 'border-l-accent-simulation',
       fallback: overview.currentSimDate ?? '',
     },
-  ];
+  );
 
   return (
     <div className="p-8">

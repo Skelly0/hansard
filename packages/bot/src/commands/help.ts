@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { commands, type Command } from '../client.js';
 import { createEmbed, type System, type EmbedField } from '../utils/embeds.js';
+import { isStaff } from '../utils/permissions.js';
 
 const SYSTEM_BY_PREFIX: Array<{ match: (name: string) => boolean; system: System; label: string }> = [
   { match: (n) => n.startsWith('bill') || n === 'npc-bill', system: 'bills', label: 'Bills' },
@@ -24,16 +25,29 @@ function categorize(cmd: Command): { label: string } {
   return { label: 'Other' };
 }
 
+function commandIsRestricted(cmd: Command): boolean {
+  const json = cmd.data.toJSON();
+  if (json.default_member_permissions != null) return true;
+
+  const markerText = `${json.name} ${json.description}`;
+  return /\b(staff|admin|moderation)\b/i.test(markerText);
+}
+
 const command: Command = {
   data: new SlashCommandBuilder()
     .setName('help')
-    .setDescription('Show all available commands grouped by system'),
+    .setDescription('Show available commands grouped by system'),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
+    const staffViewer = interaction.guild && interaction.member
+      ? await isStaff(await interaction.guild.members.fetch(interaction.user.id))
+      : false;
+
     const grouped = new Map<string, Command[]>();
     for (const cmd of commands.values()) {
+      if (!staffViewer && commandIsRestricted(cmd)) continue;
       const { label } = categorize(cmd);
       if (!grouped.has(label)) grouped.set(label, []);
       grouped.get(label)!.push(cmd);
@@ -95,7 +109,7 @@ const command: Command = {
       const embed = createEmbed({
         title: `Hansard — Commands${pageSuffix}`,
         description: isFirst
-          ? 'A ledger of every slash command, grouped by system. Type `/` in any channel to invoke.'
+          ? 'A ledger of available slash commands, grouped by system. Type `/` in any channel to invoke.'
           : undefined,
         system: 'simulation',
         fields: fieldGroups[i],

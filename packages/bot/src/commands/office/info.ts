@@ -8,6 +8,7 @@ import { offices, officeHolders, players } from '@hansard/db';
 import { createEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { autocompleteOffice } from './_officeAutocomplete.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const command: Command = {
@@ -24,6 +25,9 @@ const command: Command = {
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply();
+    const staffViewer = interaction.guild && interaction.member
+      ? await isStaff(await interaction.guild.members.fetch(interaction.user.id))
+      : false;
 
     const officeName = interaction.options.getString('office', true);
 
@@ -93,7 +97,7 @@ const command: Command = {
     ];
 
     const permissions = match.permissions as string[] | null;
-    if (permissions && permissions.length > 0) {
+    if (staffViewer && permissions && permissions.length > 0) {
       fields.push({
         name: 'Permissions',
         value: permissions.map((p) => `\`${p}\``).join(', '),

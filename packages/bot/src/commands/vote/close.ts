@@ -4,16 +4,17 @@ import {
   type GuildMember,
   type Message,
 } from 'discord.js';
-import { eq, ilike, inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { ballots, candidates, elections, players } from '@hansard/db';
 import { client } from '../../client.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-close election:<title> — closes voting for an election.
+ * /vote-close election:<title-or-id> — closes voting for an election.
  *
  * Mirrors VoteService.closeVoting: transitions status to `voting_closed`.
  *
@@ -37,7 +38,7 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title')
+        .setDescription('Election title or ID')
         .setRequired(true),
     ) as SlashCommandBuilder,
 
@@ -60,17 +61,13 @@ const command: Command = {
       return;
     }
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
 
-    const [election] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!election) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }

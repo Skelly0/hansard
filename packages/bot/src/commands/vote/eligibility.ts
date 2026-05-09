@@ -2,14 +2,15 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { and, eq, ilike } from 'drizzle-orm';
-import { elections, ballots, players } from '@hansard/db';
+import { and, eq } from 'drizzle-orm';
+import { ballots, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-eligibility election:<title> — invoking player checks if they can vote.
+ * /vote-eligibility election:<title-or-id> — invoking player checks if they can vote.
  *
  * Mirrors VoteService.getEligibility. Looks up the player by Discord ID,
  * checks election status, ensures they haven't voted yet, and (best-effort)
@@ -25,14 +26,14 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title')
+        .setDescription('Election title or ID')
         .setRequired(true),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
 
     // Look up player by Discord ID
     const [player] = await db
@@ -52,15 +53,11 @@ const command: Command = {
       return;
     }
 
-    const [election] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!election) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }

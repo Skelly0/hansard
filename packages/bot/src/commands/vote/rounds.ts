@@ -2,14 +2,15 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, ilike, inArray } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { elections, candidates, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-rounds election:<title> — show round-by-round results for
+ * /vote-rounds election:<title-or-id> — show round-by-round results for
  * ranked-choice / runoff / STV / exhaustive ballot elections.
  *
  * Mirrors VoteService.getRounds: walks the parent/child election chain
@@ -22,25 +23,21 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title')
+        .setDescription('Election title or ID')
         .setRequired(true),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply();
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
 
     // 1. Look up the (potentially child) election
-    const [seed] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    const { election: seed, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!seed) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }

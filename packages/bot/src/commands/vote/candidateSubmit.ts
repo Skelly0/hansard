@@ -2,20 +2,21 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { and, eq, ilike } from 'drizzle-orm';
-import { elections, candidates, players, parties } from '@hansard/db';
+import { and, eq } from 'drizzle-orm';
+import { candidates, players, parties } from '@hansard/db';
 import { REACTION_FPTP_MAX_CANDIDATES } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
 import { seedReactionForNewCandidate } from './_seedFptpReactions.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /candidate-submit election:<title> — register the invoking player as a
+ * /candidate-submit election:<title-or-id> — register the invoking player as a
  * candidate in a position election.
  *
- * Mirrors VoteService.registerCandidate. Looks up the election by title
- * (case-insensitive) since UUIDs are unfriendly in Discord. Fails clearly
+ * Mirrors VoteService.registerCandidate. Looks up the election by title or ID.
+ * Fails clearly
  * if the invoker isn't a registered player or nominations aren't open.
  */
 const command: Command = {
@@ -25,7 +26,7 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title (e.g. "Governor of Northshire")')
+        .setDescription('Election title or ID')
         .setRequired(true),
     )
     .addStringOption((opt) =>
@@ -38,7 +39,7 @@ const command: Command = {
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply();
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
     const statement = interaction.options.getString('statement') ?? undefined;
     const discordId = interaction.user.id;
 
@@ -56,16 +57,12 @@ const command: Command = {
       return;
     }
 
-    // 2. Look up the election by title (case-insensitive)
-    const [election] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    // 2. Look up the election by title or ID.
+    const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!election) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }

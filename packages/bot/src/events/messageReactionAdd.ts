@@ -28,7 +28,7 @@ import { db } from '../db.js';
  *   2. Map the emoji to a ballot value (yea/nay/abstain or candidate by index).
  *   3. Run eligibility checks (status==voting_open, faction/party filters).
  *   4. Atomically replace the existing ballot (delete + insert in a transaction)
- *      — reaction mode is opt-in public voting where changing your mind is
+ *      — reaction mode is public voting where changing your mind is
  *      part of the design.
  *   5. Remove the user's reaction so the visible counts on the embed don't
  *      double-count the bot's own seeds and aren't a public scoreboard mid-vote.

@@ -242,7 +242,7 @@ const command: Command = {
             '',
             ...lines,
             '',
-            'Use `/vote-info` with a title for full details.',
+            'Use `/vote-info` with a title or ID for full details.',
           ]
             .filter((l) => l !== null)
             .join('\n'),

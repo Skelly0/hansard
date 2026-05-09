@@ -8,15 +8,13 @@ A complete tour of the pipeline from sim clock → birth dates → tick rolls �
 
 There's a single row in `simulation_clock` (schema: `packages/db/src/schema/simulation.ts`). It holds:
 
-| Field | Meaning |
-|---|---|
-| `currentDate` | The in-sim "now". Either ISO (`1923-06-15`) or freeform (`Year 4, Month 3`). |
-| `currentTick` | Monotonic counter (just an integer that grows). |
-| `tickUnit` | `'day' \| 'week' \| 'month' \| 'year'`. How much each tick is worth. |
-| `startDate` | Where the season began. Reference only — math uses `currentDate`. |
-| `agingConfig` | JSONB — nullable. If `null`, falls back to `DEFAULT_AGING_CONFIG`. |
-| `seasonName` | Cosmetic. |
-| `isPaused` | Hard gate on `advanceTime`. Throws if true. |
+- **`currentDate`** — the in-sim "now". Either ISO (`1923-06-15`) or freeform (`Year 4, Month 3`).
+- **`currentTick`** — monotonic counter (just an integer that grows).
+- **`tickUnit`** — `'day' | 'week' | 'month' | 'year'`. How much each tick is worth.
+- **`startDate`** — where the season began. Reference only — math uses `currentDate`.
+- **`agingConfig`** — JSONB, nullable. If `null`, falls back to `DEFAULT_AGING_CONFIG`.
+- **`seasonName`** — cosmetic.
+- **`isPaused`** — hard gate on `advanceTime`. Throws if true.
 
 Staff manage it via `/time status | advance | preview | set | pause | unpause` (`packages/bot/src/commands/simulation/time.ts`). Both `/time advance` and `/time preview` are thin wrappers around the canonical service functions in `packages/api/src/services/simulationService.ts` — there's no inline duplication, so the bot and the webapp behave identically.
 
@@ -134,18 +132,20 @@ Automatic deaths now pass through a one-advance settle-affairs period first. The
 
 ## 6. Default aging config
 
-From `DEFAULT_AGING_CONFIG` in `simulationService.ts`. All knobs live in `simulation_clock.aging_config` (JSONB) when overridden per-season:
+From `DEFAULT_AGING_CONFIG` in `simulationService.ts`. All knobs live in `simulation_clock.aging_config` (JSONB) when overridden per-season.
 
-| Knob | Default | Effect |
-|---|---|---|
-| `ailmentAgeThreshold` | 50 | Age below this: zero ailment rolls. |
-| `ailmentBaseChance` | 0.008 | Chance at exactly the threshold age. |
-| `ailmentAgeScaling` | 0.003 | Linear bonus per year above threshold. |
-| `deathAgeThreshold` | 62 | Age below this: no old-age death. |
-| `deathBaseChance` | 0.003 | Chance at exactly the threshold age. |
-| `deathAgeScaling` | 0.005 | Linear bonus per year above threshold. |
-| `criticalAilmentDeathChance` | 0.22 | Per critical ailment, additive. |
-| `minStartingAge` / `max` / `default` | 18 / 70 / 30 | Character-creation bounds. |
+**Ailment knobs:**
+- `ailmentAgeThreshold` = **50** — age below this gets zero ailment rolls.
+- `ailmentBaseChance` = **0.008** — per-tick chance at exactly the threshold age.
+- `ailmentAgeScaling` = **0.003** — linear bonus per year above threshold.
+
+**Death knobs:**
+- `deathAgeThreshold` = **62** — age below this gets no old-age death roll.
+- `deathBaseChance` = **0.003** — per-tick chance at exactly the threshold age.
+- `deathAgeScaling` = **0.005** — linear bonus per year above threshold.
+- `criticalAilmentDeathChance` = **0.22** — per critical ailment, additive.
+
+**Character-creation bounds:** `minStartingAge` / `max` / `default` = **18 / 70 / 30**.
 
 These defaults centre most natural deaths in the **60–70 window** under monthly ticks: roughly ~75% alive at 60, ~22% alive at 65, ~1% alive at 70. Anyone who clears 70 is a notable survivor.
 
@@ -153,14 +153,12 @@ These defaults centre most natural deaths in the **60–70 window** under monthl
 
 Weighted random pick, filtered by `minAge`. Once acquired, an ailment can't be re-rolled onto the same player.
 
-| Name | Severity | Weight | Min Age |
-|---|---|---|---|
-| gout | minor | 3 | — |
-| fever | minor | 3 | — |
-| pneumonia | major | 2 | — |
-| heart disease | major | 2 | 55 |
-| tuberculosis | major | 1 | — |
-| stroke | critical | 1 | 60 |
+- **gout** — minor, weight 3, no min age.
+- **fever** — minor, weight 3, no min age.
+- **pneumonia** — major, weight 2, no min age.
+- **tuberculosis** — major, weight 1, no min age.
+- **heart disease** — major, weight 2, min age 55.
+- **stroke** — critical, weight 1, min age 60.
 
 Total pool weight depends on age (eligibility filter): ages 50–54 see weight 9, 55–59 see 11, 60+ see 12. Stroke is the only critical in the default pool, so under defaults you can't acquire a critical ailment before 60.
 
@@ -170,12 +168,10 @@ Total pool weight depends on age (eligibility filter): ages 50–54 see weight 9
 
 All four require staff (`requireAuth + requireStaff` on the API; `ManageGuild` on the bot).
 
-| Action | Bot command | API route | Service fn |
-|---|---|---|---|
-| Assign ailment | `/ailment add user condition severity` | `POST /api/simulation/ailment` | `manualAilment` |
-| Cure ailment (exact match) | `/ailment remove user condition` | — | (inline) |
-| Cure ailment (fuzzy match) | `/heal user ailment` | `POST /api/simulation/heal` | `heal` |
-| Kill character | `/kill user cause` | `POST /api/simulation/death` | `manualDeath` (API) / `processPlayerDeath` (bot) |
+- **Assign ailment** — `/ailment add user condition severity` (bot) or `POST /api/simulation/ailment` → `manualAilment`.
+- **Cure ailment, exact match** — `/ailment remove user condition` (bot, inline; no API route).
+- **Cure ailment, fuzzy match** — `/heal user ailment` (bot) or `POST /api/simulation/heal` → `heal`.
+- **Kill character** — `/kill user cause` (bot) or `POST /api/simulation/death` → `manualDeath` (API) / `processPlayerDeath` (bot).
 
 `manualAilment` refuses to assign to dead characters and refuses duplicates. `heal` does case-insensitive `includes` lookup and disambiguates if multiple ailments match — it asks the operator to be more specific instead of guessing. Both write `playerEventLog` entries with `isAutomatic=false` and the staff member as `triggeredById`. `manualDeath` reuses the same `processPlayerDeath` helper as automatic death — same office-vacation logic, same cause-of-death recording.
 
@@ -217,13 +213,11 @@ Returns a structured payload (used by webapp Graveyard / character dossier) plus
 
 ## 11. Quick reference — what runs when
 
-| Trigger | Effect |
-|---|---|
-| `/character create` | New player row, `birthDate = birthDateForAge(simNow, age)`, favour bonus tier looked up, registration event logged. |
-| `/time advance ticks:N` | Per-tick per-player ailment + death rolls, all in one transaction. Logs ailment_acquired / death / office_left events. Updates clock. Writes timeAdvanceLog. |
-| `/time preview ticks:N` | Same logic, no writes. Ephemeral embed. |
-| `/time set date:X` | Direct UPDATE on `currentDate`. **Does not** retro-age players — `calculateAge` will pick up the new date next read, but cached `currentAge` stays stale until next advance. |
-| `/time pause` / `unpause` | Toggles `isPaused`. `advanceTime` throws if paused. |
-| `/ailment add` | Manual JSONB push + `ailment_acquired` log (isAutomatic=false). |
-| `/ailment remove` / `/heal` | Manual JSONB filter + `ailment_recovered` log. |
-| `manualDeath` (API) | Same `processPlayerDeath` path as automatic; `isAutomatic=false`. |
+- **`/character create`** — new player row, `birthDate = birthDateForAge(simNow, age)`, favour bonus tier looked up, registration event logged.
+- **`/time advance ticks:N`** — per-tick per-player ailment + death rolls, all in one transaction. Logs `ailment_acquired` / `death` / `office_left` events. Updates clock. Writes `timeAdvanceLog`.
+- **`/time preview ticks:N`** — same logic, no writes. Ephemeral embed.
+- **`/time set date:X`** — direct UPDATE on `currentDate`. **Does not** retro-age players — `calculateAge` will pick up the new date next read, but cached `currentAge` stays stale until next advance.
+- **`/time pause` / `unpause`** — toggles `isPaused`. `advanceTime` throws if paused.
+- **`/ailment add`** — manual JSONB push + `ailment_acquired` log (`isAutomatic=false`).
+- **`/ailment remove` / `/heal`** — manual JSONB filter + `ailment_recovered` log.
+- **`/kill` / `manualDeath` (API)** — same `processPlayerDeath` path as automatic; `isAutomatic=false`.

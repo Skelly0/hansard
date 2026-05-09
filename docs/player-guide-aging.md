@@ -19,14 +19,12 @@ From age 50, every tick rolls a chance of acquiring an ailment. The chance grows
 
 Possible ailments:
 
-| Name | Severity | Min age |
-|---|---|---|
-| gout | minor | — |
-| fever | minor | — |
-| pneumonia | major | — |
-| tuberculosis | major | — |
-| heart disease | major | 55 |
-| stroke | critical | 60 |
+- **gout** — minor.
+- **fever** — minor.
+- **pneumonia** — major.
+- **tuberculosis** — major.
+- **heart disease** — major; cannot occur before age 55.
+- **stroke** — critical; cannot occur before age 60.
 
 You cannot acquire the same ailment twice. Staff can also assign any other ailment manually, with any severity.
 

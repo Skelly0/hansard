@@ -4,10 +4,14 @@ import {
   ButtonBuilder,
   ButtonStyle,
 } from 'discord.js';
-import { and, eq } from 'drizzle-orm';
-import { ballots, players } from '@hansard/db';
+import { eq } from 'drizzle-orm';
+import { elections, players } from '@hansard/db';
+import { VoteService } from '@hansard/api/services/voteService';
+import type { BallotVote, VotingMethod } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../utils/embeds.js';
 import { db } from '../db.js';
+
+const voteService = new VoteService(db);
 
 /**
  * Handle vote button interactions.
@@ -18,9 +22,11 @@ import { db } from '../db.js';
  *   vote-abstain:<electionId>
  *   vote-candidate:<electionId>:<candidateId>
  *   vote-confirm:<electionId>:<choice>
+ *   vote-confirm:<electionId>:candidate:<candidateId>
  */
 export async function handleVoteButton(interaction: ButtonInteraction): Promise<void> {
-  const [action, electionId, extra] = interaction.customId.split(':');
+  const [action, electionId, ...extraParts] = interaction.customId.split(':');
+  const extra = extraParts.join(':');
 
   switch (action) {
     case 'vote-yea':
@@ -131,25 +137,12 @@ async function handleConfirmVote(
   choiceData: string,
 ): Promise<void> {
   let voteDescription: string;
-  let votePayload: typeof ballots.$inferInsert.vote;
-
-  if (choiceData === 'yea' || choiceData === 'nay' || choiceData === 'abstain') {
-    voteDescription = choiceData.toUpperCase();
-    votePayload = { type: 'yea_nay_abstain', choice: choiceData };
-  } else if (choiceData.startsWith('candidate:')) {
-    const candidateId = choiceData.replace('candidate:', '');
-    voteDescription = `Candidate \`${candidateId}\``;
-    votePayload = { type: 'fptp', candidateId };
-  } else {
-    await interaction.reply({
-      embeds: [errorEmbed(`Unknown vote choice: \`${choiceData}\`.`)],
-      ephemeral: true,
-    });
-    return;
-  }
+  let votePayload: BallotVote;
 
   const [voter] = await db
-    .select({ id: players.id })
+    .select({
+      id: players.id,
+    })
     .from(players)
     .where(eq(players.discordId, interaction.user.id))
     .limit(1);
@@ -163,21 +156,34 @@ async function handleConfirmVote(
   }
 
   try {
-    const [existing] = await db
-      .select({ id: ballots.id })
-      .from(ballots)
-      .where(and(eq(ballots.electionId, electionId), eq(ballots.voterId, voter.id)))
+    const [election] = await db
+      .select({
+        method: elections.method,
+      })
+      .from(elections)
+      .where(eq(elections.id, electionId))
       .limit(1);
 
-    if (existing) {
+    if (!election) {
       await interaction.reply({
-        embeds: [errorEmbed('You have already voted in this election.')],
+        embeds: [errorEmbed('Election not found.')],
         ephemeral: true,
       });
       return;
     }
 
-    await db.insert(ballots).values({
+    const ballot = buildBallot(choiceData, election.method as VotingMethod);
+    if (!ballot) {
+      await interaction.reply({
+        embeds: [errorEmbed(`This ballot control is not valid for a ${formatVotingMethod(election.method as VotingMethod)} election.`)],
+        ephemeral: true,
+      });
+      return;
+    }
+
+    ({ voteDescription, votePayload } = ballot);
+
+    await voteService.castBallot({
       electionId,
       voterId: voter.id,
       vote: votePayload,
@@ -227,4 +233,39 @@ export async function handleVoteCancel(interaction: ButtonInteraction): Promise<
     embeds: [createEmbed({ title: 'Vote Cancelled', system: 'voting' })],
     components: [],
   });
+}
+
+function buildBallot(
+  choiceData: string,
+  method: VotingMethod,
+): { voteDescription: string; votePayload: BallotVote } | null {
+  if (choiceData === 'yea' || choiceData === 'nay' || choiceData === 'abstain') {
+    if (method !== 'yea_nay_abstain') return null;
+    return {
+      voteDescription: choiceData.toUpperCase(),
+      votePayload: { type: 'yea_nay_abstain', choice: choiceData },
+    };
+  }
+
+  if (!choiceData.startsWith('candidate:')) {
+    return null;
+  }
+
+  const candidateId = choiceData.replace('candidate:', '');
+  const voteDescription = `Candidate \`${candidateId}\``;
+
+  switch (method) {
+    case 'fptp':
+      return { voteDescription, votePayload: { type: 'fptp', candidateId } };
+    case 'two_round_runoff':
+      return { voteDescription, votePayload: { type: 'two_round', candidateId } };
+    case 'exhaustive_ballot':
+      return { voteDescription, votePayload: { type: 'exhaustive', candidateId } };
+    default:
+      return null;
+  }
+}
+
+function formatVotingMethod(method: VotingMethod): string {
+  return method.replaceAll('_', ' ');
 }

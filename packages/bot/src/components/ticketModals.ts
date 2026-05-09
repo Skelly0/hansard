@@ -45,7 +45,8 @@ async function handleCloseModal(interaction: ModalSubmitInteraction): Promise<vo
   });
 
   // Post the closure notification to the thread
-  if (interaction.channel && 'setArchived' in (interaction.channel as any)) {
+  const closeChannel = interaction.channel;
+  if (closeChannel && 'send' in closeChannel && 'setArchived' in closeChannel) {
     try {
       const closeEmbed = createEmbed({
         title: `Ticket #${ticketNumber} Closed`,
@@ -53,10 +54,10 @@ async function handleCloseModal(interaction: ModalSubmitInteraction): Promise<vo
         system: 'tickets',
       });
 
-      await interaction.channel.send({ embeds: [closeEmbed] });
+      await closeChannel.send({ embeds: [closeEmbed] });
 
       // Archive the thread
-      await (interaction.channel as any).setArchived(true, `Ticket #${ticketNumber} closed`);
+      await closeChannel.setArchived(true, `Ticket #${ticketNumber} closed`);
     } catch {
       // Thread operations failed — not critical
     }
@@ -92,7 +93,8 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
   });
 
   // Post internal note indicator to the thread (visible to staff)
-  if (interaction.channel) {
+  const noteChannel = interaction.channel;
+  if (noteChannel && 'send' in noteChannel) {
     try {
       const noteEmbed = createEmbed({
         title: 'Internal Staff Note',
@@ -105,7 +107,7 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
         colour: 0x9C9890, // muted grey for internal notes
       });
 
-      await interaction.channel.send({
+      await noteChannel.send({
         embeds: [noteEmbed],
         // In production, this would check if the channel is the ticket
         // thread and only visible to staff. For now, it's sent to the thread.

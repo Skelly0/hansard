@@ -23,6 +23,7 @@ import {
   getVoters,
 } from '../services/billService.js';
 import { cacheDocContent } from '../services/googleDocService.js';
+import { aggregatePermissionsForPlayer } from '../services/playerService.js';
 
 /**
  * Bill routes plugin.
@@ -211,7 +212,11 @@ export default async function billRoutes(fastify: FastifyInstance) {
       let bill;
       if (authorId && authorId !== user.id) {
         // Submitting on behalf — requires legislative_leader or staff
-        if (!user.isStaff && !user.permissions?.includes('legislative_leader')) {
+        const isStaff = request.player?.isStaff ?? false;
+        const livePermissions = isStaff
+          ? []
+          : await aggregatePermissionsForPlayer(db, user.id);
+        if (!isStaff && !livePermissions.includes('legislative_leader')) {
           return reply.status(403).send({
             error: 'Only the Chancellor or staff can submit bills on behalf of other players',
           });
@@ -240,7 +245,8 @@ export default async function billRoutes(fastify: FastifyInstance) {
 
       // Only the author or staff can re-cache
       const user = request.session.user!;
-      if (bill.authorId !== user.id && !user.isStaff) {
+      const isStaff = request.player?.isStaff ?? false;
+      if (bill.authorId !== user.id && !isStaff) {
         return reply.status(403).send({ error: 'Only the bill author or staff can re-cache content' });
       }
 
@@ -274,7 +280,8 @@ export default async function billRoutes(fastify: FastifyInstance) {
       }
 
       const user = request.session.user!;
-      if (bill.authorId !== user.id && !user.isStaff) {
+      const isStaff = request.player?.isStaff ?? false;
+      if (bill.authorId !== user.id && !isStaff) {
         return reply.status(403).send({ error: 'Only the bill author or staff can update this bill' });
       }
 

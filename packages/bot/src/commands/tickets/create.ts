@@ -11,6 +11,7 @@ import {
   type ChatInputCommandInteraction,
   type StringSelectMenuInteraction,
   type ModalSubmitInteraction,
+  type TextChannel,
 } from 'discord.js';
 import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import type { Command } from '../../client.js';
@@ -149,6 +150,10 @@ const command: Command = {
 
     // Create the ticket data (will be persisted via API/DB when wired up)
     const ticketNumber = Math.floor(Math.random() * 9000) + 1000; // placeholder
+    const memberDisplayName =
+      interaction.member && 'displayName' in interaction.member
+        ? interaction.member.displayName
+        : interaction.user.displayName;
     const ticketData = {
       number: ticketNumber,
       title,
@@ -159,7 +164,7 @@ const command: Command = {
       createdBy: {
         id: interaction.user.id,
         username: interaction.user.username,
-        displayName: interaction.member?.displayName ?? interaction.user.displayName,
+        displayName: memberDisplayName,
       },
       assignedTo: null as { id: string; displayName: string } | null,
       createdAt: new Date().toISOString(),
@@ -174,8 +179,8 @@ const command: Command = {
       try {
         const channel = await interaction.guild.channels.fetch(ticketChannelId);
 
-        if (channel?.isTextBased() && 'threads' in channel) {
-          const thread = await channel.threads.create({
+        if (channel?.type === ChannelType.GuildText) {
+          const thread = await (channel as TextChannel).threads.create({
             name: `#${ticketNumber} — ${title.slice(0, 80)}`,
             type: ChannelType.PrivateThread,
             reason: `Ticket #${ticketNumber} created by ${interaction.user.username}`,

@@ -252,7 +252,7 @@ export default async function documentRoutes(fastify: FastifyInstance) {
     };
   }>(
     '/api/documents/:slug',
-    { preHandler: [requireAuth] },
+    { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
       const user = request.session.user!;
       const { content, changeDescription, amendmentBillId } = request.body;

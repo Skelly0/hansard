@@ -2,6 +2,7 @@
   "name": "hansard",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.15.4",
   "scripts": {
     "dev:bot": "pnpm --filter @hansard/bot dev",
     "dev:api": "pnpm --filter @hansard/api dev",

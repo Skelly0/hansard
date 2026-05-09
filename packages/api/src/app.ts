@@ -22,19 +22,24 @@ const DEV_SESSION_SECRET = 'hansard-dev-secret-change-me-in-production';
 
 function checkProductionEnv(log: { warn: (msg: string) => void }) {
   if (process.env.NODE_ENV !== 'production') return;
+
+  const sessionSecret = process.env.SESSION_SECRET?.trim();
+  if (!sessionSecret) {
+    throw new Error('[startup] SESSION_SECRET must be set in production');
+  }
+  if (sessionSecret === DEV_SESSION_SECRET) {
+    throw new Error('[startup] SESSION_SECRET must not use the dev default in production');
+  }
+
   const required = [
     'CORS_ORIGIN',
     'DISCORD_REDIRECT_URI',
     'FRONTEND_URL',
-    'SESSION_SECRET',
     'DISCORD_CLIENT_ID',
     'DISCORD_CLIENT_SECRET',
   ];
   for (const key of required) {
     if (!process.env[key]) log.warn(`[startup] ${key} not set — production auth will misbehave`);
-  }
-  if (process.env.SESSION_SECRET === DEV_SESSION_SECRET) {
-    log.warn('[startup] SESSION_SECRET is the dev default — sessions are forge-able');
   }
 }
 

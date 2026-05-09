@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import '../plugins/db.js'; // ensure fastify.db type augmentation is available
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireStaff } from '../middleware/requireStaff.js';
-import { requireRole } from '../middleware/requireRole.js';
 import { VoteService } from '../services/voteService.js';
+import { aggregatePermissionsForPlayer } from '../services/playerService.js';
 
 /**
  * Voting / Election routes.
@@ -88,8 +88,11 @@ export default async function votingRoutes(fastify: FastifyInstance) {
         'appointment_confirmation',
       ];
       if (chancellorTypes.includes(body.type)) {
-        const hasPermission = user.permissions?.includes('legislative_leader') ?? false;
-        if (!hasPermission && !user.isStaff) {
+        const isStaff = request.player?.isStaff ?? false;
+        const hasPermission = isStaff
+          ? true
+          : (await aggregatePermissionsForPlayer(fastify.db, user.id)).includes('legislative_leader');
+        if (!hasPermission) {
           return reply.status(403).send({
             error: 'Only the Chancellor or staff can create this election type',
           });
@@ -122,7 +125,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       if (!election) {
         return reply.status(404).send({ error: 'Election not found' });
       }
-      if (election.createdById !== user.id && !user.isStaff) {
+      if (election.createdById !== user.id && !request.player?.isStaff) {
         return reply.status(403).send({ error: 'Only the creator or staff can update this election' });
       }
 
@@ -215,7 +218,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
 
       // Self-registration only, unless staff is nominating someone else.
       const targetPlayerId = body.playerId ?? user.id;
-      if (targetPlayerId !== user.id && !user.isStaff) {
+      if (targetPlayerId !== user.id && !request.player?.isStaff) {
         return reply.status(403).send({
           error: 'Only staff can nominate other players',
         });
@@ -256,7 +259,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       // The candidate themselves, the election creator, or staff can withdraw
       const isSelf = user.id === playerId;
       const isOwner = election.createdById === user.id;
-      if (!isSelf && !isOwner && !user.isStaff) {
+      if (!isSelf && !isOwner && !request.player?.isStaff) {
         return reply.status(403).send({ error: 'Not allowed to withdraw this candidate' });
       }
 

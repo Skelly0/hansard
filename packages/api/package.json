@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./services/*": "./src/services/*.ts"
+    "./services/*": {
+      "development": "./src/services/*.ts",
+      "types": "./dist/services/*.d.ts",
+      "import": "./dist/services/*.js",
+      "default": "./dist/services/*.js"
+    }
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx --conditions=development watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest",
@@ -20,6 +25,7 @@
     "@fastify/session": "^11.0.0",
     "@hansard/db": "workspace:*",
     "@hansard/shared": "workspace:*",
+    "diff": "^9.0.0",
     "dotenv": "^16.4.0",
     "drizzle-orm": "^0.38.0",
     "fastify": "^5.2.0",

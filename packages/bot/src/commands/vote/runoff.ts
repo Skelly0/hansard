@@ -3,15 +3,16 @@ import {
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
-import { and, eq, ilike, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { elections, candidates } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-runoff election:<title> — Chancellor/staff spawns a runoff round.
+ * /vote-runoff election:<title-or-id> — Chancellor/staff spawns a runoff round.
  *
  * Mirrors VoteService.createRunoff. Selects qualifying candidates from the
  * existing `results.finalTallies`, creates a child election with
@@ -31,7 +32,7 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title')
+        .setDescription('Election title or ID')
         .setRequired(true),
     ) as SlashCommandBuilder,
 
@@ -54,17 +55,13 @@ const command: Command = {
       return;
     }
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
 
-    const [election] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!election) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }

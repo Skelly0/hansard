@@ -17,6 +17,7 @@ import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { hasPermission, type Permission } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
+import { getRequestedVoteInterface } from './_electionReference.js';
 
 const CHANCELLOR_ONLY_TYPES = new Set([
   'legislative_vote',
@@ -37,7 +38,7 @@ const REQUIRED_PERMISSION_BY_TYPE: Record<string, Permission> = {
  * 1. User runs /vote create
  * 2. Bot shows a modal with: title, description, type, method, majority type
  * 3. On submit, bot creates the election in the DB
- * 4. If `interface=reactions` was selected:
+ * 4. If reactions are selected (the default for compatible methods):
  *    - The bot posts the vote embed in the current channel and seeds it
  *      with the reaction emoji for the chosen method.
  *    - Players cast votes by clicking reactions; the MessageReactionAdd
@@ -107,11 +108,11 @@ const command: Command = {
         .addStringOption((opt) =>
           opt
             .setName('interface')
-            .setDescription('How players cast votes (defaults to buttons)')
+            .setDescription('How players cast votes (defaults to reactions when supported)')
             .setRequired(false)
             .addChoices(
-              { name: 'Buttons (private/ephemeral)', value: 'buttons' },
               { name: 'Reactions (public, on the embed)', value: 'reactions' },
+              { name: 'Buttons (private/ephemeral)', value: 'buttons' },
             ),
         ),
     ) as SlashCommandBuilder,
@@ -123,7 +124,7 @@ const command: Command = {
     const electionType = interaction.options.getString('type', true);
     const method = interaction.options.getString('method', true);
     const majority = interaction.options.getString('majority') ?? 'simple';
-    const iface = interaction.options.getString('interface') ?? 'buttons';
+    const iface = getRequestedVoteInterface(interaction.options.getString('interface'), method);
 
     // Reject reaction mode early for incompatible methods.
     // (Only `yea_nay_abstain` and `fptp` map cleanly to a small set of emoji.)
@@ -184,14 +185,14 @@ const command: Command = {
  *
  * customId shape: vote-create:<type>:<method>:<majority>:<iface>
  * `iface` is appended in the slash handler — older customIds without it
- * are still tolerated by defaulting to `buttons`.
+ * use the current default for the chosen method.
  */
 export async function handleVoteCreateModal(
   interaction: ModalSubmitInteraction,
 ): Promise<void> {
   const parts = interaction.customId.split(':');
   const [, electionType, method, majority, ifaceRaw] = parts;
-  const iface = ifaceRaw === 'reactions' ? 'reactions' : 'buttons';
+  const iface = getRequestedVoteInterface(ifaceRaw ?? null, method);
 
   // Re-check permission for restricted types — modal submits don't re-run
   // the slash command's permission logic.

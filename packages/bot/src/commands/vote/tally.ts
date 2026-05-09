@@ -3,17 +3,18 @@ import {
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
-import { eq, ilike } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { VoteService } from '@hansard/api/services/voteService';
-import { candidates, elections, players } from '@hansard/db';
+import { candidates, players } from '@hansard/db';
 import { errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import { buildResultsEmbed } from './results.js';
 import type { Command } from '../../client.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-tally election:<title> — staff force-tally an election.
+ * /vote-tally election:<title-or-id> — staff force-tally an election.
  *
  * Mirrors VoteService.tallyVotes.
  */
@@ -24,7 +25,7 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title')
+        .setDescription('Election title or ID')
         .setRequired(true),
     ) as SlashCommandBuilder,
 
@@ -47,17 +48,13 @@ const command: Command = {
       return;
     }
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
 
-    const [election] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!election) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }

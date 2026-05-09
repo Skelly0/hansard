@@ -3,7 +3,7 @@ import {
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
-import { eq, ilike } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { elections } from '@hansard/db';
 import { REACTION_FPTP_MAX_CANDIDATES } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
@@ -11,12 +11,13 @@ import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
 import { seedAllReactionsForOpenVote } from './_seedFptpReactions.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-open election:<title> — staff/Chancellor opens an election for voting.
+ * /vote-open election:<title-or-id> — staff/Chancellor opens an election for voting.
  *
  * Mirrors VoteService.openVoting: transitions status to `voting_open`.
- * Looks up election by title (ilike) and updates its status.
+ * Looks up election by title or ID and updates its status.
  */
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -25,7 +26,7 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title')
+        .setDescription('Election title or ID')
         .setRequired(true),
     ) as SlashCommandBuilder,
 
@@ -48,17 +49,13 @@ const command: Command = {
       return;
     }
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
 
-    const [election] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!election) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }

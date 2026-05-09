@@ -2,14 +2,15 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, ilike } from 'drizzle-orm';
-import { elections, offices } from '@hansard/db';
+import { eq } from 'drizzle-orm';
+import { offices } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-info election:<title> — show the metadata "details page" for an
+ * /vote-info election:<title-or-id> — show the metadata "details page" for an
  * election: type, method, threshold, start/end times, status.
  */
 const command: Command = {
@@ -19,24 +20,20 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title')
+        .setDescription('Election title or ID')
         .setRequired(true),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply();
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
 
-    const [election] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!election) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }
@@ -58,6 +55,11 @@ const command: Command = {
       { name: 'Method', value: election.method, inline: true },
       { name: 'Status', value: election.status, inline: true },
       { name: 'Round', value: String(election.roundNumber), inline: true },
+      {
+        name: 'Interface',
+        value: election.useReactions ? 'Discord reactions' : 'Buttons',
+        inline: true,
+      },
     ];
 
     // Threshold display

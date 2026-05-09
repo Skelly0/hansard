@@ -2,14 +2,15 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { and, eq, ilike, inArray } from 'drizzle-orm';
-import { elections, candidates, players, parties } from '@hansard/db';
+import { and, eq, inArray } from 'drizzle-orm';
+import { candidates, players, parties } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
+import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /candidate-list election:<title> — list all (non-withdrawn) candidates
+ * /candidate-list election:<title-or-id> — list all (non-withdrawn) candidates
  * in an election with their party/faction.
  */
 const command: Command = {
@@ -19,25 +20,21 @@ const command: Command = {
     .addStringOption((opt) =>
       opt
         .setName('election')
-        .setDescription('Election title (e.g. "Governor of Northshire")')
+        .setDescription('Election title or ID')
         .setRequired(true),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply();
 
-    const electionTitle = interaction.options.getString('election', true);
+    const electionRef = interaction.options.getString('election', true);
 
-    // 1. Look up election by title
-    const [election] = await db
-      .select()
-      .from(elections)
-      .where(ilike(elections.title, electionTitle))
-      .limit(1);
+    // 1. Look up election by title or ID
+    const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
     if (!election) {
       await interaction.editReply({
-        embeds: [errorEmbed(`No election found with title \`${electionTitle}\`.`)],
+        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });
       return;
     }

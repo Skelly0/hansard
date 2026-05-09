@@ -1,4 +1,4 @@
-import { eq, desc, and, ilike, sql, count, avg, inArray } from 'drizzle-orm';
+import { eq, desc, and, ilike, sql, count, avg, inArray, or, type SQL } from 'drizzle-orm';
 import {
   tickets,
   ticketCategories,
@@ -53,6 +53,11 @@ export interface ListTicketsFilters {
   offset?: number;
 }
 
+export interface TicketAccessContext {
+  userId: string;
+  isStaff: boolean;
+}
+
 export interface TicketWithDetails extends Ticket {
   messages?: TicketMessage[];
   auditLog?: TicketAuditLogEntry[];
@@ -83,6 +88,32 @@ export interface CreateCategoryData {
 
 export class TicketService {
   constructor(private db: Database) {}
+
+  private visibilityCondition(viewer?: TicketAccessContext): SQL | undefined {
+    if (!viewer || viewer.isStaff) return undefined;
+
+    return or(
+      eq(tickets.createdById, viewer.userId),
+      eq(tickets.assignedToId, viewer.userId),
+    );
+  }
+
+  private combineConditions(conditions: (SQL | undefined)[]): SQL | undefined {
+    const present = conditions.filter((condition): condition is SQL => condition !== undefined);
+    return present.length > 0 ? and(...present) : undefined;
+  }
+
+  private canViewTicket(
+    ticket: { createdById: string; assignedToId: string | null },
+    viewer?: TicketAccessContext,
+  ): boolean {
+    return (
+      !viewer ||
+      viewer.isStaff ||
+      ticket.createdById === viewer.userId ||
+      ticket.assignedToId === viewer.userId
+    );
+  }
 
   // ----------------------------------------------------------
   // createTicket
@@ -120,7 +151,7 @@ export class TicketService {
   // getTicket
   // ----------------------------------------------------------
 
-  async getTicket(id: string): Promise<TicketWithDetails | null> {
+  async getTicket(id: string, viewer?: TicketAccessContext): Promise<TicketWithDetails | null> {
     const [ticket] = await this.db
       .select()
       .from(tickets)
@@ -128,18 +159,26 @@ export class TicketService {
       .limit(1);
 
     if (!ticket) return null;
+    if (!this.canViewTicket(ticket, viewer)) return null;
+
+    const messageConditions = [eq(ticketMessages.ticketId, id)];
+    if (viewer && !viewer.isStaff) {
+      messageConditions.push(eq(ticketMessages.isInternal, false));
+    }
 
     const messages = await this.db
       .select()
       .from(ticketMessages)
-      .where(eq(ticketMessages.ticketId, id))
+      .where(this.combineConditions(messageConditions))
       .orderBy(ticketMessages.createdAt);
 
-    const auditLog = await this.db
-      .select()
-      .from(ticketAuditLog)
-      .where(eq(ticketAuditLog.ticketId, id))
-      .orderBy(desc(ticketAuditLog.createdAt));
+    const auditLog = viewer && !viewer.isStaff
+      ? []
+      : await this.db
+        .select()
+        .from(ticketAuditLog)
+        .where(eq(ticketAuditLog.ticketId, id))
+        .orderBy(desc(ticketAuditLog.createdAt));
 
     const [category] = await this.db
       .select()
@@ -159,7 +198,10 @@ export class TicketService {
   // getTicketByNumber
   // ----------------------------------------------------------
 
-  async getTicketByNumber(ticketNumber: number): Promise<TicketWithDetails | null> {
+  async getTicketByNumber(
+    ticketNumber: number,
+    viewer?: TicketAccessContext,
+  ): Promise<TicketWithDetails | null> {
     const [ticket] = await this.db
       .select()
       .from(tickets)
@@ -168,15 +210,23 @@ export class TicketService {
 
     if (!ticket) return null;
 
-    return this.getTicket(ticket.id);
+    return this.getTicket(ticket.id, viewer);
   }
 
   // ----------------------------------------------------------
   // listTickets
   // ----------------------------------------------------------
 
-  async listTickets(filters: ListTicketsFilters = {}): Promise<{ tickets: Ticket[]; total: number }> {
-    const conditions = [];
+  async listTickets(
+    filters: ListTicketsFilters = {},
+    viewer?: TicketAccessContext,
+  ): Promise<{ tickets: Ticket[]; total: number }> {
+    const conditions: SQL[] = [];
+    const visibilityCondition = this.visibilityCondition(viewer);
+
+    if (visibilityCondition) {
+      conditions.push(visibilityCondition);
+    }
 
     if (filters.status) {
       conditions.push(eq(tickets.status, filters.status));
@@ -197,7 +247,7 @@ export class TicketService {
       conditions.push(ilike(tickets.title, `%${filters.search}%`));
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = this.combineConditions(conditions);
 
     const limit = filters.limit ?? 25;
     const offset = filters.offset ?? 0;
@@ -225,12 +275,18 @@ export class TicketService {
   // getTicketsByIds — batch lookup, used for resolving linked-ticket IDs
   // ----------------------------------------------------------
 
-  async getTicketsByIds(ids: string[]): Promise<Ticket[]> {
+  async getTicketsByIds(ids: string[], viewer?: TicketAccessContext): Promise<Ticket[]> {
     if (!ids.length) return [];
+
+    const whereClause = this.combineConditions([
+      inArray(tickets.id, ids),
+      this.visibilityCondition(viewer),
+    ]);
+
     const rows = await this.db
       .select()
       .from(tickets)
-      .where(inArray(tickets.id, ids));
+      .where(whereClause);
     return rows as unknown as Ticket[];
   }
 
@@ -336,7 +392,8 @@ export class TicketService {
     authorId: string,
     isInternal = false,
     discordMessageId?: string,
-  ): Promise<TicketMessage> {
+    actorIsStaff = false,
+  ): Promise<TicketMessage | null> {
     // Check if this is the first staff response — track firstResponseAt
     const [ticket] = await this.db
       .select()
@@ -344,12 +401,20 @@ export class TicketService {
       .where(eq(tickets.id, ticketId))
       .limit(1);
 
-    if (ticket && !ticket.firstResponseAt && authorId !== ticket.createdById) {
+    if (!ticket) return null;
+    if (!this.canViewTicket(ticket, { userId: authorId, isStaff: actorIsStaff })) {
+      return null;
+    }
+    if (isInternal && !actorIsStaff) {
+      return null;
+    }
+
+    if (!ticket.firstResponseAt && authorId !== ticket.createdById) {
       await this.db
         .update(tickets)
         .set({ firstResponseAt: new Date(), updatedAt: new Date() })
         .where(eq(tickets.id, ticketId));
-    } else if (ticket) {
+    } else {
       await this.db
         .update(tickets)
         .set({ updatedAt: new Date() })
@@ -397,7 +462,12 @@ export class TicketService {
   // closeTicket
   // ----------------------------------------------------------
 
-  async closeTicket(ticketId: string, resolution: string | null, actorId: string): Promise<Ticket | null> {
+  async closeTicket(
+    ticketId: string,
+    resolution: string | null,
+    actorId: string,
+    actorIsStaff = false,
+  ): Promise<Ticket | null> {
     const updated = await this.updateTicket(
       ticketId,
       { status: 'closed' },
@@ -408,7 +478,14 @@ export class TicketService {
 
     // Add resolution message if provided
     if (resolution) {
-      await this.addMessage(ticketId, `**Resolution:** ${resolution}`, actorId, false);
+      await this.addMessage(
+        ticketId,
+        `**Resolution:** ${resolution}`,
+        actorId,
+        false,
+        undefined,
+        actorIsStaff,
+      );
     }
 
     return updated;
@@ -532,28 +609,35 @@ export class TicketService {
   // getMetrics
   // ----------------------------------------------------------
 
-  async getMetrics(): Promise<TicketMetrics> {
+  async getMetrics(viewer?: TicketAccessContext): Promise<TicketMetrics> {
+    const visibilityCondition = this.visibilityCondition(viewer);
+
     const [{ value: openCount }] = await this.db
       .select({ value: count() })
       .from(tickets)
-      .where(eq(tickets.status, 'open'));
+      .where(this.combineConditions([
+        eq(tickets.status, 'open'),
+        visibilityCondition,
+      ]));
 
     const [{ value: inProgressCount }] = await this.db
       .select({ value: count() })
       .from(tickets)
-      .where(eq(tickets.status, 'in_progress'));
+      .where(this.combineConditions([
+        eq(tickets.status, 'in_progress'),
+        visibilityCondition,
+      ]));
 
     // Resolved in last 24 hours
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const [{ value: resolvedToday }] = await this.db
       .select({ value: count() })
       .from(tickets)
-      .where(
-        and(
-          eq(tickets.status, 'resolved'),
-          sql`${tickets.resolvedAt} >= ${oneDayAgo}`,
-        ),
-      );
+      .where(this.combineConditions([
+        eq(tickets.status, 'resolved'),
+        sql`${tickets.resolvedAt} >= ${oneDayAgo}`,
+        visibilityCondition,
+      ]));
 
     // Average first-response time for tickets that have one
     const avgResult = await this.db
@@ -563,7 +647,10 @@ export class TicketService {
         ),
       })
       .from(tickets)
-      .where(sql`${tickets.firstResponseAt} IS NOT NULL`);
+      .where(this.combineConditions([
+        sql`${tickets.firstResponseAt} IS NOT NULL`,
+        visibilityCondition,
+      ]));
 
     const avgResponseTimeMs = avgResult[0]?.value
       ? Math.round(parseFloat(String(avgResult[0].value)))

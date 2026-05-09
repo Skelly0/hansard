@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx --conditions=development watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@hansard/api": "workspace:*",
     "discord.js": "^14.16.0",
     "@hansard/api": "workspace:*",
     "@hansard/db": "workspace:*",

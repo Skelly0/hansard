@@ -4,6 +4,7 @@ WORKDIR /app
 
 # Install dependencies
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+COPY packages/api/package.json packages/api/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
 COPY packages/api/package.json packages/api/
@@ -12,6 +13,7 @@ RUN pnpm install --frozen-lockfile
 
 # Copy source
 COPY tsconfig.base.json ./
+COPY packages/api/ packages/api/
 COPY packages/db/ packages/db/
 COPY packages/shared/ packages/shared/
 COPY packages/api/ packages/api/

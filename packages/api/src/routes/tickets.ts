@@ -1,9 +1,10 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireStaff } from '../middleware/requireStaff.js';
 import { TicketService } from '../services/ticketService.js';
 import '../plugins/db.js'; // augments FastifyInstance with .db
 import type { TicketStatus, TicketPriority } from '@hansard/shared';
+import type { TicketAccessContext } from '../services/ticketService.js';
 
 /**
  * Ticket routes plugin.
@@ -12,6 +13,19 @@ import type { TicketStatus, TicketPriority } from '@hansard/shared';
  */
 export default async function ticketRoutes(fastify: FastifyInstance) {
   const ticketService = new TicketService(fastify.db);
+  const getViewer = (request: FastifyRequest): TicketAccessContext => ({
+    userId: request.session.user!.id,
+    isStaff: request.player?.isStaff ?? false,
+  });
+  const getSessionActor = (request: FastifyRequest): { id: string; isStaff: boolean } => ({
+    id: request.session.user!.id,
+    isStaff: request.player?.isStaff ?? false,
+  });
+
+  const getViewerFromActor = (user: { id: string; isStaff: boolean }): TicketAccessContext => ({
+    userId: user.id,
+    isStaff: user.isStaff,
+  });
 
   // ============================================================
   // GET /api/tickets — List tickets with filters
@@ -52,7 +66,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         search,
         limit: limit ? parseInt(limit, 10) : undefined,
         offset: offset ? parseInt(offset, 10) : undefined,
-      });
+      }, getViewer(request));
     },
   );
 
@@ -75,8 +89,8 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/api/tickets/metrics',
     { preHandler: [requireAuth] },
-    async () => {
-      return ticketService.getMetrics();
+    async (request) => {
+      return ticketService.getMetrics(getViewer(request));
     },
   );
 
@@ -90,7 +104,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     async (request) => {
       const raw = request.query.ids ?? '';
       const ids = raw.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 100);
-      const results = await ticketService.getTicketsByIds(ids);
+      const results = await ticketService.getTicketsByIds(ids, getViewer(request));
       return { tickets: results };
     },
   );
@@ -103,7 +117,10 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     '/api/tickets/:id',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const ticket = await ticketService.getTicket(request.params.id);
+      const ticket = await ticketService.getTicket(
+        request.params.id,
+        getViewer(request),
+      );
       if (!ticket) {
         return reply.status(404).send({ error: 'Ticket not found' });
       }
@@ -167,10 +184,10 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     '/api/tickets/:id',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const user = request.session.user!;
+      const user = getSessionActor(request);
       const body = request.body;
 
-      const ticket = await ticketService.getTicket(request.params.id);
+      const ticket = await ticketService.getTicket(request.params.id, getViewerFromActor(user));
       if (!ticket) {
         return reply.status(404).send({ error: 'Ticket not found' });
       }
@@ -227,11 +244,16 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     '/api/tickets/:id/messages',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const user = request.session.user!;
+      const user = getSessionActor(request);
       const { content, isInternal } = request.body;
 
       if (!content) {
         return reply.status(400).send({ error: 'content is required' });
+      }
+
+      const ticket = await ticketService.getTicket(request.params.id, getViewerFromActor(user));
+      if (!ticket) {
+        return reply.status(404).send({ error: 'Ticket not found' });
       }
 
       // Only staff can post internal notes
@@ -244,7 +266,13 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         content,
         user.id,
         isInternal ?? false,
+        undefined,
+        user.isStaff,
       );
+
+      if (!message) {
+        return reply.status(404).send({ error: 'Ticket not found' });
+      }
 
       return reply.status(201).send(message);
     },
@@ -261,7 +289,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     '/api/tickets/:id/assign',
     { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
-      const user = request.session.user!;
+      const user = getSessionActor(request);
       const target = request.body.assigneeId ?? request.body.assignedToId;
 
       if (!target) {
@@ -293,10 +321,10 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     '/api/tickets/:id/close',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const user = request.session.user!;
+      const user = getSessionActor(request);
       const { resolution } = request.body ?? {};
 
-      const ticket = await ticketService.getTicket(request.params.id);
+      const ticket = await ticketService.getTicket(request.params.id, getViewerFromActor(user));
       if (!ticket) {
         return reply.status(404).send({ error: 'Ticket not found' });
       }
@@ -315,6 +343,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         request.params.id,
         resolution ?? null,
         user.id,
+        user.isStaff,
       );
 
       if (!updated) {

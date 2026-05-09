@@ -5,9 +5,9 @@
  * runoff generation, NPC confirmation, and certification (with auto
  * office-appointment on certified position elections).
  */
-import { eq, and, desc, inArray, sql, gte, lte } from 'drizzle-orm';
+import { eq, and, inArray, isNull, sql, gte, lte } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
-import { elections, candidates, ballots, bills } from '@hansard/db';
+import { elections, candidates, ballots, bills, players, officeHolders } from '@hansard/db';
 import type {
   ElectionConfig,
   BallotVote,
@@ -112,6 +112,110 @@ export interface NpcConfirmInput {
 
 export class VoteService {
   constructor(private db: Database) {}
+
+  private async getEligibilityForElection(
+    election: typeof elections.$inferSelect,
+    playerId: string,
+  ): Promise<{ eligible: boolean; reason?: string }> {
+    if (election.status !== 'voting_open') {
+      return { eligible: false, reason: 'Voting is not open' };
+    }
+
+    const [player] = await this.db
+      .select({
+        id: players.id,
+        characterName: players.characterName,
+        factionId: players.factionId,
+        partyId: players.partyId,
+      })
+      .from(players)
+      .where(eq(players.id, playerId))
+      .limit(1);
+
+    if (!player) {
+      return { eligible: false, reason: 'Player not found' };
+    }
+
+    const config = election.config as ElectionConfig;
+    if (config.requireRegistration && !player.characterName) {
+      return { eligible: false, reason: 'Character registration is required' };
+    }
+
+    if (config.eligibleFactions?.length) {
+      if (!player.factionId || !config.eligibleFactions.includes(player.factionId)) {
+        return { eligible: false, reason: 'Your faction is not eligible to vote in this election' };
+      }
+    }
+
+    if (config.eligibleParties?.length) {
+      if (!player.partyId || !config.eligibleParties.includes(player.partyId)) {
+        return { eligible: false, reason: 'Your party is not eligible to vote in this election' };
+      }
+    }
+
+    if (config.eligibleOffices?.length) {
+      const [holding] = await this.db
+        .select({ id: officeHolders.id })
+        .from(officeHolders)
+        .where(and(
+          eq(officeHolders.playerId, playerId),
+          isNull(officeHolders.endDate),
+          inArray(officeHolders.officeId, config.eligibleOffices),
+        ))
+        .limit(1);
+
+      if (!holding) {
+        return { eligible: false, reason: 'You do not hold an eligible office for this election' };
+      }
+    }
+
+    const existing = await this.db
+      .select({ id: ballots.id })
+      .from(ballots)
+      .where(and(eq(ballots.electionId, election.id), eq(ballots.voterId, playerId)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      return { eligible: false, reason: 'Already voted' };
+    }
+
+    return { eligible: true };
+  }
+
+  private candidateIdsFromVote(vote: BallotVote): string[] {
+    switch (vote.type) {
+      case 'fptp':
+      case 'two_round':
+      case 'exhaustive':
+        return [vote.candidateId];
+      case 'approval':
+        return vote.approved;
+      case 'ranked':
+        return vote.ranking;
+      case 'yea_nay_abstain':
+        return [];
+    }
+  }
+
+  private async validateCandidateChoices(electionId: string, vote: BallotVote): Promise<void> {
+    const candidateIds = [...new Set(this.candidateIdsFromVote(vote))];
+    if (candidateIds.length === 0) return;
+
+    const rows = await this.db
+      .select({ playerId: candidates.playerId })
+      .from(candidates)
+      .where(and(
+        eq(candidates.electionId, electionId),
+        eq(candidates.isWithdrawn, false),
+        inArray(candidates.playerId, candidateIds),
+      ));
+
+    const validIds = new Set(rows.map((row) => row.playerId));
+    const invalidIds = candidateIds.filter((id) => !validIds.has(id));
+    if (invalidIds.length > 0) {
+      throw new Error('Ballot includes a candidate who is not registered for this election');
+    }
+  }
 
   // ----------------------------------------------------------
   // Create
@@ -325,23 +429,7 @@ export class VoteService {
       .limit(1);
 
     if (!election) return { eligible: false, reason: 'Election not found' };
-    if (election.status !== 'voting_open') {
-      return { eligible: false, reason: 'Voting is not open' };
-    }
-
-    // Check if already voted
-    const existing = await this.db
-      .select()
-      .from(ballots)
-      .where(and(eq(ballots.electionId, electionId), eq(ballots.voterId, playerId)))
-      .limit(1);
-
-    if (existing.length > 0) {
-      return { eligible: false, reason: 'Already voted' };
-    }
-
-    // TODO: Check eligibleFactions, eligibleParties, eligibleOffices from config
-    return { eligible: true };
+    return this.getEligibilityForElection(election, playerId);
   }
 
   async getRounds(id: string) {
@@ -524,6 +612,13 @@ export class VoteService {
     if (!strategy.validate(input.vote, config)) {
       throw new Error('Invalid ballot format for this voting method');
     }
+
+    const eligibility = await this.getEligibilityForElection(election, input.voterId);
+    if (!eligibility.eligible) {
+      throw new Error(eligibility.reason ?? 'Not eligible to vote in this election');
+    }
+
+    await this.validateCandidateChoices(input.electionId, input.vote);
 
     // Atomic insert — relies on UNIQUE(election_id, voter_id) to enforce
     // one vote per person per election. Catch 23505 unique_violation and

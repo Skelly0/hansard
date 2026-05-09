@@ -1,5 +1,4 @@
 import {
-  PermissionFlagsBits,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
@@ -17,7 +16,6 @@ const command: Command = {
   data: new SlashCommandBuilder()
     .setName('ticket-category-create')
     .setDescription('Create a ticket category (staff only)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption((opt) =>
       opt
         .setName('name')

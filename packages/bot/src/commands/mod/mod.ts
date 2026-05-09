@@ -7,6 +7,7 @@ import { eq, and, desc, ne } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { modActions, modNotes, players, playerEventLog } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { postModLog } from '../../utils/modLog.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
@@ -119,6 +120,7 @@ async function handleWarn(interaction: ChatInputCommandInteraction): Promise<voi
   });
 
   await interaction.editReply({ embeds: [embed] });
+  await postModLog(interaction, embed);
 
   // DM the target user about the warning
   try {
@@ -176,6 +178,7 @@ async function handleNote(interaction: ChatInputCommandInteraction): Promise<voi
   });
 
   await interaction.editReply({ embeds: [embed] });
+  await postModLog(interaction, embed);
 }
 
 // ─── /mod history ───────────────────────────────────────────────────────────
@@ -345,6 +348,7 @@ async function handleSuspend(interaction: ChatInputCommandInteraction): Promise<
   });
 
   await interaction.editReply({ embeds: [embed] });
+  await postModLog(interaction, embed);
 
   // DM the target user
   try {
@@ -442,6 +446,7 @@ async function handleUnsuspend(interaction: ChatInputCommandInteraction): Promis
   );
 
   await interaction.editReply({ embeds: [embed] });
+  await postModLog(interaction, embed);
 
   // DM the target user
   try {
@@ -621,6 +626,7 @@ async function handleAppealReview(interaction: ChatInputCommandInteraction): Pro
   });
 
   await interaction.editReply({ embeds: [embed] });
+  await postModLog(interaction, embed);
 
   // DM the target user about the decision
   if (target?.discordId) {

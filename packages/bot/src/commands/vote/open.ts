@@ -5,10 +5,12 @@ import {
 } from 'discord.js';
 import { eq, ilike } from 'drizzle-orm';
 import { elections } from '@hansard/db';
+import { REACTION_FPTP_MAX_CANDIDATES } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
+import { seedAllReactionsForOpenVote } from './_seedFptpReactions.js';
 
 /**
  * /vote-open election:<title> — staff/Chancellor opens an election for voting.
@@ -97,6 +99,50 @@ const command: Command = {
         ),
       ],
     });
+
+    // Trigger B — safety-net seeder for reaction-mode FPTP votes. Walk every
+    // non-withdrawn candidate in registration order and add 1️⃣..N reactions
+    // to the public vote message. Idempotent (Discord ignores duplicate
+    // reaction-adds on the bot's own emoji), so this re-runs cleanly even
+    // if Trigger A in /candidate-submit already seeded most slots.
+    //
+    // Order matters: events/messageReactionAdd.ts maps emoji → candidate by
+    // registeredAt asc, so the helper's same ordering is load-bearing.
+    if (updated.useReactions && updated.method === 'fptp' && updated.discordMessageId) {
+      try {
+        const result = await seedAllReactionsForOpenVote({
+          client: interaction.client,
+          electionId: updated.id,
+          channelId: updated.discordChannelId,
+          messageId: updated.discordMessageId,
+        });
+
+        if (result.overflow) {
+          // More candidates than reaction slots — warn staff ephemerally.
+          // Don't error; the vote still opens and the first 9 are reactable.
+          await interaction.followUp({
+            embeds: [errorEmbed(
+              `Warning: this election has **${result.totalCandidates}** candidates but reaction mode supports only ${REACTION_FPTP_MAX_CANDIDATES}. ` +
+              `Reactions 1️⃣..${REACTION_FPTP_MAX_CANDIDATES}️⃣ have been seeded for the first ${REACTION_FPTP_MAX_CANDIDATES} candidates by registration order; later candidates cannot be voted for via reactions. ` +
+              `Consider closing the vote and re-creating in button mode, or withdrawing extra candidates.`,
+            )],
+            ephemeral: true,
+          });
+        } else if (result.seededCount === 0 && result.totalCandidates > 0) {
+          // We had candidates but couldn't fetch the message (deleted? perms?).
+          await interaction.followUp({
+            embeds: [errorEmbed(
+              `Heads up: could not seed reaction emoji on the vote message — it may have been deleted or the bot lost access. ` +
+              `Voters will not see candidate reactions to click. Re-post the vote or switch to button mode.`,
+            )],
+            ephemeral: true,
+          });
+        }
+      } catch (error) {
+        // Don't block the announcement on a seeding failure.
+        console.error('[vote-open] reaction seeding failed:', error);
+      }
+    }
 
     // Public announcement
     const announce = createEmbed({

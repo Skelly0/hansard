@@ -8,11 +8,22 @@ import {
   StringSelectMenuOptionBuilder,
   ComponentType,
   ChannelType,
+  TextChannel,
   type ChatInputCommandInteraction,
   type StringSelectMenuInteraction,
   type ModalSubmitInteraction,
 } from 'discord.js';
+import { asc, eq } from 'drizzle-orm';
+import {
+  ticketCategories,
+  tickets,
+  ticketMessages,
+  ticketAuditLog,
+  players,
+} from '@hansard/db';
+import { TicketStatus, TicketPriority } from '@hansard/shared';
 import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
+import { db } from '../../db.js';
 import type { Command } from '../../client.js';
 import { buildTicketSummaryEmbed, buildTicketActionRow } from '../../components/ticketButtons.js';
 
@@ -20,26 +31,20 @@ import { buildTicketSummaryEmbed, buildTicketActionRow } from '../../components/
  * /ticket create
  *
  * Flow:
- * 1. Bot replies with a category select menu (ephemeral)
- * 2. Player picks a category
- * 3. Modal opens with title + description fields
- * 4. On submit: ticket is created, Discord thread opened, summary pinned
+ * 1. Bot replies with a category select menu (ephemeral) — categories from DB.
+ * 2. Player picks a category.
+ * 3. Modal opens with title + description fields.
+ * 4. On submit: ticket is persisted to Postgres atomically (tickets +
+ *    initial ticketMessages + ticketAuditLog), then a Discord thread is
+ *    opened (best-effort) and updated with the real thread id.
  *
- * NOTE: The actual DB write uses a fetch to the API. In a future iteration
- * this could use a shared service directly. For now, the ticket creation
- * logic is inlined here so the bot works standalone during development.
+ * Persistence is direct-Drizzle per CLAUDE.md ("vote/election writes are
+ * direct DB. No API hop. Same pattern applies here."). The bot package
+ * does NOT import @hansard/api.
  */
 
-/** Placeholder categories until API/DB is wired up. */
-const DEFAULT_CATEGORIES = [
-  { id: 'general', name: 'General Enquiry', emoji: '\u2753', description: 'General questions or requests' },
-  { id: 'bug', name: 'Bug Report', emoji: '\uD83D\uDC1B', description: 'Report a bug or issue' },
-  { id: 'character', name: 'Character Request', emoji: '\uD83D\uDC64', description: 'Character creation, changes, or issues' },
-  { id: 'rules', name: 'Rules Question', emoji: '\uD83D\uDCDA', description: 'Rules clarifications or disputes' },
-  { id: 'suggestion', name: 'Suggestion', emoji: '\uD83D\uDCA1', description: 'Ideas and suggestions' },
-];
-
 const TICKET_CHANNEL_ENV = 'TICKET_CHANNEL_ID';
+const DEFAULT_EMOJI = '📋'; // 📋 — fallback when category has no emoji
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -54,18 +59,45 @@ const command: Command = {
 
     if (subcommand !== 'create') return;
 
-    // Step 1: Show category selection
+    // Step 0: Load active categories from DB.
+    const categoryRows = await db
+      .select()
+      .from(ticketCategories)
+      .where(eq(ticketCategories.isActive, true))
+      .orderBy(asc(ticketCategories.sortOrder));
+
+    if (categoryRows.length === 0) {
+      await interaction.reply({
+        embeds: [
+          errorEmbed(
+            'No ticket categories are configured. Ask staff to seed `ticket_categories` before opening a ticket.',
+          ),
+        ],
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Discord caps select-menu options at 25.
+    const visibleCategories = categoryRows.slice(0, 25);
+
+    // Step 1: Show category selection.
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId(`ticket_category_select:${interaction.user.id}`)
       .setPlaceholder('Select a ticket category...')
       .addOptions(
-        DEFAULT_CATEGORIES.map((cat) =>
-          new StringSelectMenuOptionBuilder()
+        visibleCategories.map((cat) => {
+          const opt = new StringSelectMenuOptionBuilder()
             .setLabel(cat.name)
-            .setDescription(cat.description)
-            .setValue(cat.id)
-            .setEmoji(cat.emoji),
-        ),
+            .setValue(cat.id);
+          if (cat.description) {
+            opt.setDescription(cat.description.slice(0, 100));
+          }
+          if (cat.emoji) {
+            opt.setEmoji(cat.emoji);
+          }
+          return opt;
+        }),
       );
 
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
@@ -83,7 +115,7 @@ const command: Command = {
       fetchReply: true,
     });
 
-    // Step 2: Wait for category selection
+    // Step 2: Wait for category selection.
     let categoryInteraction: StringSelectMenuInteraction;
     try {
       categoryInteraction = await reply.awaitMessageComponent({
@@ -100,12 +132,20 @@ const command: Command = {
     }
 
     const selectedCategoryId = categoryInteraction.values[0];
-    const selectedCategory = DEFAULT_CATEGORIES.find((c) => c.id === selectedCategoryId)!;
+    const selectedCategory = visibleCategories.find((c) => c.id === selectedCategoryId);
 
-    // Step 3: Open modal
+    if (!selectedCategory) {
+      await categoryInteraction.update({
+        embeds: [errorEmbed('That category is no longer available. Please try again.')],
+        components: [],
+      });
+      return;
+    }
+
+    // Step 3: Open modal.
     const modal = new ModalBuilder()
       .setCustomId(`ticket_create_modal:${selectedCategoryId}`)
-      .setTitle(`New Ticket: ${selectedCategory.name}`);
+      .setTitle(`New Ticket: ${selectedCategory.name.slice(0, 32)}`);
 
     const titleInput = new TextInputBuilder()
       .setCustomId('ticket_title')
@@ -130,7 +170,7 @@ const command: Command = {
 
     await categoryInteraction.showModal(modal);
 
-    // Step 4: Wait for modal submission
+    // Step 4: Wait for modal submission.
     let modalInteraction: ModalSubmitInteraction;
     try {
       modalInteraction = await categoryInteraction.awaitModalSubmit({
@@ -138,43 +178,127 @@ const command: Command = {
         time: 300_000, // 5 minutes to fill out
       });
     } catch {
-      // Modal timed out — no way to follow up since the original was ephemeral
+      // Modal timed out — no way to follow up since the original was ephemeral.
       return;
     }
 
     await modalInteraction.deferReply({ ephemeral: true });
 
-    const title = modalInteraction.fields.getTextInputValue('ticket_title');
-    const description = modalInteraction.fields.getTextInputValue('ticket_description');
+    const title = modalInteraction.fields.getTextInputValue('ticket_title').trim();
+    const description = modalInteraction.fields.getTextInputValue('ticket_description').trim();
 
-    // Create the ticket data (will be persisted via API/DB when wired up)
-    const ticketNumber = Math.floor(Math.random() * 9000) + 1000; // placeholder
+    // Step 5: Resolve creator — auto-create on first contact (mirrors the
+    // OAuth callback's findOrCreatePlayerByDiscordId pattern). The bot
+    // doesn't import @hansard/api, so the upsert is inlined here.
+    let creator;
+    try {
+      const [upserted] = await db
+        .insert(players)
+        .values({
+          discordId: interaction.user.id,
+          discordUsername: interaction.user.username,
+        })
+        .onConflictDoUpdate({
+          target: players.discordId,
+          set: { discordUsername: interaction.user.username },
+        })
+        .returning();
+      creator = upserted;
+    } catch (err) {
+      console.error('Failed to resolve creator player for ticket:', err);
+      await modalInteraction.editReply({
+        embeds: [errorEmbed('Could not resolve your player record. Please try again.')],
+      });
+      return;
+    }
+
+    if (!creator) {
+      await modalInteraction.editReply({
+        embeds: [errorEmbed('Could not resolve your player record. Please try again.')],
+      });
+      return;
+    }
+
+    // Step 6: Persist ticket atomically — tickets row + initial message + audit log.
+    let inserted: typeof tickets.$inferSelect;
+    try {
+      inserted = await db.transaction(async (tx) => {
+        const [ticketRow] = await tx
+          .insert(tickets)
+          .values({
+            categoryId: selectedCategory.id,
+            createdById: creator.id,
+            title,
+            description,
+            status: TicketStatus.OPEN,
+            priority: TicketPriority.NORMAL,
+          })
+          .returning();
+
+        // The opening description doubles as the first conversation message
+        // so the webapp transcript reads naturally.
+        await tx.insert(ticketMessages).values({
+          ticketId: ticketRow.id,
+          authorId: creator.id,
+          content: description,
+          isInternal: false,
+        });
+
+        await tx.insert(ticketAuditLog).values({
+          ticketId: ticketRow.id,
+          actorId: creator.id,
+          action: 'created',
+          newValue: { title, categoryId: selectedCategory.id },
+        });
+
+        return ticketRow;
+      });
+    } catch (err) {
+      console.error('Failed to persist ticket:', err);
+      await modalInteraction.editReply({
+        embeds: [errorEmbed('Failed to create ticket. Please try again or contact staff.')],
+      });
+      return;
+    }
+
+    const ticketNumber = inserted.number;
+
+    // Step 7: Build the data shape ticketButtons expects.
     const ticketData = {
       number: ticketNumber,
       title,
       description,
-      category: selectedCategory,
-      status: 'open' as const,
-      priority: 'normal' as const,
+      category: {
+        name: selectedCategory.name,
+        emoji: selectedCategory.emoji ?? DEFAULT_EMOJI,
+      },
+      status: inserted.status,
+      priority: inserted.priority,
       createdBy: {
         id: interaction.user.id,
-        username: interaction.user.username,
-        displayName: interaction.member?.displayName ?? interaction.user.displayName,
+        displayName:
+          ('displayName' in (interaction.member ?? {}) && (interaction.member as { displayName?: string }).displayName) ||
+          interaction.user.displayName ||
+          interaction.user.username,
       },
-      assignedTo: null as { id: string; displayName: string } | null,
-      createdAt: new Date().toISOString(),
+      assignedTo: null,
+      createdAt: inserted.createdAt instanceof Date
+        ? inserted.createdAt.toISOString()
+        : new Date(inserted.createdAt as unknown as string).toISOString(),
       tags: [] as string[],
     };
 
-    // Step 5: Create Discord thread
+    // Step 8: Best-effort Discord thread creation. If TICKET_CHANNEL_ID is
+    // unset or thread creation fails, the ticket still exists in the DB.
     const ticketChannelId = process.env[TICKET_CHANNEL_ENV];
     let threadId: string | undefined;
+    let threadChannelId: string | undefined;
 
     if (ticketChannelId && interaction.guild) {
       try {
         const channel = await interaction.guild.channels.fetch(ticketChannelId);
 
-        if (channel?.isTextBased() && 'threads' in channel) {
+        if (channel instanceof TextChannel) {
           const thread = await channel.threads.create({
             name: `#${ticketNumber} — ${title.slice(0, 80)}`,
             type: ChannelType.PrivateThread,
@@ -182,11 +306,12 @@ const command: Command = {
           });
 
           threadId = thread.id;
+          threadChannelId = channel.id;
 
-          // Add the ticket creator to the thread
+          // Add the ticket creator to the thread.
           await thread.members.add(interaction.user.id);
 
-          // Pin the summary embed
+          // Pin the summary embed.
           const summaryEmbed = buildTicketSummaryEmbed(ticketData);
           const actionRow = buildTicketActionRow(ticketNumber);
           const pinMessage = await thread.send({
@@ -195,22 +320,39 @@ const command: Command = {
           });
           await pinMessage.pin();
 
-          // Send initial description as a message
+          // Send initial description as a message.
           await thread.send({
-            content: `**${interaction.user.displayName}** opened this ticket:\n\n${description}`,
+            content: `**${ticketData.createdBy.displayName}** opened this ticket:\n\n${description}`,
           });
         }
       } catch (err) {
-        console.error('Failed to create ticket thread:', err);
-        // Thread creation failed but ticket still created — not fatal
+        console.error('Failed to create ticket thread (ticket persisted):', err);
+        // Thread creation failed but ticket still created — not fatal.
       }
     }
 
-    // Step 6: Confirm to user
+    // Step 9: Persist the Discord channel/thread ids back to the ticket row
+    // so the webapp can deep-link into Discord.
+    if (threadId) {
+      try {
+        await db
+          .update(tickets)
+          .set({
+            discordThreadId: threadId,
+            discordChannelId: threadChannelId ?? null,
+            updatedAt: new Date(),
+          })
+          .where(eq(tickets.id, inserted.id));
+      } catch (err) {
+        console.error('Failed to attach thread id to ticket:', err);
+      }
+    }
+
+    // Step 10: Confirm to user.
     const confirmEmbed = successEmbed(
       `Ticket #${ticketNumber} Created`,
       [
-        `**Category:** ${selectedCategory.emoji} ${selectedCategory.name}`,
+        `**Category:** ${selectedCategory.emoji ? `${selectedCategory.emoji} ` : ''}${selectedCategory.name}`,
         `**Title:** ${title}`,
         threadId ? `**Thread:** <#${threadId}>` : '',
         '',

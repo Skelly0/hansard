@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { client, commands, type Command } from './client.js';
 import { registerReadyEvent } from './events/ready.js';
 import { registerInteractionCreateEvent } from './events/interactionCreate.js';
+import { registerMessageReactionAddEvent } from './events/messageReactionAdd.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -60,6 +61,7 @@ async function main(): Promise<void> {
   // Register event handlers
   registerReadyEvent(client);
   registerInteractionCreateEvent(client);
+  registerMessageReactionAddEvent(client);
 
   // Load commands
   await loadCommands();

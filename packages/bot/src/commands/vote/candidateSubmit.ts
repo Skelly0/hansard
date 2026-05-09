@@ -4,9 +4,11 @@ import {
 } from 'discord.js';
 import { and, eq, ilike } from 'drizzle-orm';
 import { elections, candidates, players, parties } from '@hansard/db';
+import { REACTION_FPTP_MAX_CANDIDATES } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
+import { seedReactionForNewCandidate } from './_seedFptpReactions.js';
 
 /**
  * /candidate-submit election:<title> — register the invoking player as a
@@ -135,6 +137,39 @@ const command: Command = {
     }
 
     await interaction.editReply({ embeds: [embed] });
+
+    // Trigger A — responsive UX: if this is a reaction-mode FPTP vote whose
+    // public message already exists, seed the next 1️⃣..9️⃣ reaction so
+    // voters see slots fill in as candidates register.
+    //
+    // Best-effort: any failure here is logged inside the helper and never
+    // surfaces back to the candidate (the registration itself succeeded).
+    // Trigger B in /vote-open is the safety net that re-seeds at open time.
+    if (election.useReactions && election.method === 'fptp' && election.discordMessageId) {
+      try {
+        const result = await seedReactionForNewCandidate({
+          client: interaction.client,
+          electionId: election.id,
+          channelId: election.discordChannelId,
+          messageId: election.discordMessageId,
+        });
+
+        if (result.overflow) {
+          // 10th+ candidate — no emoji to add, warn the registrant ephemerally.
+          await interaction.followUp({
+            embeds: [errorEmbed(
+              `Heads up: this reaction-mode FPTP vote already has ${REACTION_FPTP_MAX_CANDIDATES} candidates with emoji slots. ` +
+              `Your candidacy is recorded, but voters will not be able to react for you — staff should switch to button mode or close additional nominations.`,
+            )],
+            ephemeral: true,
+          });
+        }
+      } catch (error) {
+        // Helper already swallows fetch/react failures; this catch is for the
+        // outer DB recount only. Don't break the slash command on it.
+        console.error('[candidate-submit] reaction seeding failed:', error);
+      }
+    }
   },
 };
 

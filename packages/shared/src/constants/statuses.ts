@@ -172,3 +172,40 @@ export const DocumentType = {
   REFERENCE: 'reference',
 } as const;
 export type DocumentType = (typeof DocumentType)[keyof typeof DocumentType];
+
+// --- Reaction-mode voting ---
+// Emoji → ballot value mapping for reaction-based public votes.
+// Used by both vote creation (to seed reactions on the embed) and the
+// MessageReactionAdd handler (to translate a click back into a ballot).
+//
+// Methods supported:
+//   - yea_nay_abstain: 3 reactions (yea / nay / abstain)
+//   - fptp: 1..9 number reactions, indexed against candidates by registration order
+//
+// Other methods (ranked_choice, stv, approval, two_round_runoff, exhaustive_ballot,
+// proportional) cannot fit reactions and must remain button-mode.
+export const REACTION_EMOJI = {
+  YEA: '👍',       // 👍
+  NAY: '👎',       // 👎
+  ABSTAIN: '🤐',   // 🤐 (zipper-mouth — distinct from yea/nay)
+} as const;
+
+/** Candidate-position emojis for FPTP reaction mode (positions 1..9). */
+export const REACTION_CANDIDATE_EMOJIS = [
+  '1️⃣', // 1️⃣
+  '2️⃣',
+  '3️⃣',
+  '4️⃣',
+  '5️⃣',
+  '6️⃣',
+  '7️⃣',
+  '8️⃣',
+  '9️⃣',
+] as const;
+
+/** Voting methods compatible with reaction mode. */
+export const REACTION_COMPATIBLE_METHODS = ['yea_nay_abstain', 'fptp'] as const;
+export type ReactionCompatibleMethod = (typeof REACTION_COMPATIBLE_METHODS)[number];
+
+/** Hard cap on FPTP candidates for reaction mode (Discord caps reactions at 20 but UX falls apart well before that). */
+export const REACTION_FPTP_MAX_CANDIDATES = 9;

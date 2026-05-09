@@ -49,7 +49,7 @@ Node.js 20+, TypeScript, pnpm workspaces, PostgreSQL 16, Drizzle ORM, discord.js
 
 ## Bot Command Surface (recent additions)
 
-Document admin (`/document-create`, `/document-edit`, `/document-restore`), bulk favour grants (`/favour-grant-bulk` filtered by party or office), global event timeline (`/sim-events`), moderation appeal review (`/mod appeal-list`, `/mod appeal-review`), staff player administration (`/player-admin character-create`, `/player-admin change-party`), and faction administration (`/faction create|list|info|edit|dissolve`).
+Document admin (`/document-create`, `/document-edit`, `/document-restore`), bulk favour grants (`/favour-grant-bulk` filtered by party or office), global event timeline (`/sim-events`), moderation appeal review (`/mod appeal-list`, `/mod appeal-review`), staff player administration (`/player-admin character-create`, `/player-admin change-party`), faction administration (`/faction create|list|info|edit|dissolve`), and vote browsing (`/vote-list scope:active|past|all`, `/vote-history range:7|30|90|365|all`) plus future-dated scheduling (`/vote-schedule` — drops an election in `'draft'` with a future `votingOpensAt`; staff still flips it open manually with `/vote-open` until a scheduler worker exists).
 
 ## Bot Persistence Patterns
 
@@ -61,6 +61,7 @@ Document admin (`/document-create`, `/document-edit`, `/document-restore`), bulk
 - **Character name uniqueness is checked twice** — early UX hint, plus a re-check immediately before insert plus a `23505` catch in the persist block (modal flow has minutes between the two).
 - **Pagination collector `end` handler uses `interaction.editReply`** — works for ephemeral messages too. `message.edit` would 404 on ephemeral.
 - **Modal handlers re-check permissions for restricted election types** (`legislative_vote`, `position_election`, `appointment_confirmation`). Slash command perms don't carry through to modal submits.
+- **Reaction-mode votes (opt-in).** `elections.useReactions` (boolean) flags a vote whose ballots come from emoji reactions on the public embed instead of ephemeral buttons. Only valid for `yea_nay_abstain` (👍/👎/🤐) and `fptp` (1️⃣..9️⃣ by candidate registration order) — `/vote create` rejects ranked/approval/STV/proportional methods at both the slash and modal layer. Cast path is `events/messageReactionAdd.ts`, which (1) fast-paths via `discordMessageId` lookup, (2) requires an existing player (no auto-create), (3) replaces the prior ballot atomically (delete-then-insert in a transaction — reaction votes are mutable until close), and (4) strips the user's reaction so live counts stay anonymous. Bot needs `Partials.{Message,Channel,Reaction,User}` on the client to receive reactions on messages cached before startup. `/vote-close` for reaction-mode votes inlines a tally (yea/nay or FPTP only — bot still doesn't import API tally strategies), edits the original embed in-place with results, and `removeAll()`s reactions to freeze it.
 
 ## Full Spec
 

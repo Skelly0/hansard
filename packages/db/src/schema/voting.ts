@@ -133,6 +133,14 @@ export const elections = pgTable('elections', {
   discordMessageId: varchar('discord_message_id', { length: 20 }),
   discordChannelId: varchar('discord_channel_id', { length: 20 }),
 
+  // === REACTION-MODE VOTING ===
+  // When true, votes are cast by reacting to the public Discord embed
+  // (discordMessageId + discordChannelId) rather than via ephemeral buttons.
+  // Only valid for `yea_nay_abstain` and `fptp` (with <= 9 candidates).
+  // The `MessageReactionAdd` listener filters by an open election whose
+  // discordMessageId matches the reacted message.
+  useReactions: boolean('use_reactions').default(false).notNull(),
+
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 });

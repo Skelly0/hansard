@@ -1,5 +1,6 @@
 import {
   SlashCommandBuilder,
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { eq, desc, sum, asc } from 'drizzle-orm';
@@ -11,6 +12,7 @@ import {
   parties,
 } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { autocompleteFavourCategory } from './_categoryAutocomplete.js';
 import type { Command } from '../../client.js';
 
 const TOP_N = 10;
@@ -180,6 +182,10 @@ const command: Command = {
     });
 
     await interaction.editReply({ embeds: [embed] });
+  },
+
+  async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    await autocompleteFavourCategory(interaction);
   },
 };
 

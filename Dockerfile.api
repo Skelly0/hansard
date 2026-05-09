@@ -15,11 +15,8 @@ COPY packages/db/ packages/db/
 COPY packages/shared/ packages/shared/
 COPY packages/api/ packages/api/
 
-# Build source packages before using node dist starts
-RUN pnpm --filter @hansard/api... build
-
 # Expose
 EXPOSE 3001
 
 # Run
-CMD ["pnpm", "--filter", "@hansard/api", "start"]
+CMD ["pnpm", "dev:api"]

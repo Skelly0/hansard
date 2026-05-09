@@ -14,7 +14,7 @@ import {
   type MessageComponentInteraction,
   type Message,
 } from 'discord.js';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../../db.js';
 import {
   players,
@@ -41,6 +41,7 @@ import type { Command } from '../../client.js';
 const MIN_STARTING_AGE = 18;
 const MAX_STARTING_AGE = 70;
 const DEFAULT_STARTING_AGE = 30;
+const CHARACTER_ALREADY_EXISTS_ERROR = 'CHARACTER_ALREADY_EXISTS';
 
 // ─── Health display ────────────────────────────────────────────────────────
 
@@ -461,7 +462,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 
       if (existingPlayer.length > 0) {
         playerId = existingPlayer[0].id;
-        await tx
+        const [updatedPlayer] = await tx
           .update(players)
           .set({
             discordUsername: interaction.user.username,
@@ -477,7 +478,12 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
             isActive: true,
             lastActiveAt: new Date(),
           })
-          .where(eq(players.id, playerId));
+          .where(and(eq(players.id, playerId), isNull(players.characterName)))
+          .returning({ id: players.id });
+
+        if (!updatedPlayer) {
+          throw new Error(CHARACTER_ALREADY_EXISTS_ERROR);
+        }
       } else {
         const [newPlayer] = await tx
           .insert(players)
@@ -520,36 +526,40 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     });
     const { playerId, startingFavourGrant } = creationResult;
 
-    // Assign Discord roles
-    const member = interaction.guild?.members.cache.get(interaction.user.id)
-      ?? await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+    try {
+      // Assign Discord roles
+      const member = interaction.guild?.members.cache.get(interaction.user.id)
+        ?? await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
 
-    if (member) {
-      // Faction role
-      const factionFull = await db
-        .select({ discordRoleId: factions.discordRoleId })
-        .from(factions)
-        .where(eq(factions.id, selectedFactionId))
-        .limit(1);
-
-      if (factionFull[0]?.discordRoleId) {
-        try { await member.roles.add(factionFull[0].discordRoleId); }
-        catch (err) { console.warn(`Failed to assign faction role: ${err}`); }
-      }
-
-      // Party role
-      if (selectedPartyId) {
-        const partyFull = await db
-          .select({ discordRoleId: parties.discordRoleId })
-          .from(parties)
-          .where(eq(parties.id, selectedPartyId))
+      if (member) {
+        // Faction role
+        const factionFull = await db
+          .select({ discordRoleId: factions.discordRoleId })
+          .from(factions)
+          .where(eq(factions.id, selectedFactionId))
           .limit(1);
 
-        if (partyFull[0]?.discordRoleId) {
-          try { await member.roles.add(partyFull[0].discordRoleId); }
-          catch (err) { console.warn(`Failed to assign party role: ${err}`); }
+        if (factionFull[0]?.discordRoleId) {
+          try { await member.roles.add(factionFull[0].discordRoleId); }
+          catch (err) { console.warn(`Failed to assign faction role: ${err}`); }
+        }
+
+        // Party role
+        if (selectedPartyId) {
+          const partyFull = await db
+            .select({ discordRoleId: parties.discordRoleId })
+            .from(parties)
+            .where(eq(parties.id, selectedPartyId))
+            .limit(1);
+
+          if (partyFull[0]?.discordRoleId) {
+            try { await member.roles.add(partyFull[0].discordRoleId); }
+            catch (err) { console.warn(`Failed to assign party role: ${err}`); }
+          }
         }
       }
+    } catch (err) {
+      console.warn('Character created, but failed to sync Discord roles:', err);
     }
 
     // Success embed
@@ -573,12 +583,30 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 
     if (portraitUrl) result.setThumbnail(portraitUrl);
 
-    await modalSubmit.editReply({ embeds: [result], components: [] });
+    try {
+      await modalSubmit.editReply({ embeds: [result], components: [] });
+    } catch (err) {
+      console.error('Character created, but failed to send success response:', err);
+    }
   } catch (error) {
     console.error('Failed to create character:', error);
     const code = (error as { code?: string } | null)?.code;
     const message = error instanceof Error ? error.message : '';
-    if (code === '23505' || /unique|duplicate/i.test(message)) {
+    const detail = (error as { detail?: string } | null)?.detail ?? '';
+    const constraint = (error as { constraint?: string } | null)?.constraint ?? '';
+    const duplicateContext = `${message} ${detail} ${constraint}`;
+
+    if (message === CHARACTER_ALREADY_EXISTS_ERROR || (code === '23505' && /discord/i.test(duplicateContext))) {
+      await modalSubmit.editReply({
+        embeds: [errorEmbed(
+          'This Discord account already has a character. Use `/character edit` to update it.',
+        )],
+        components: [],
+      });
+      return;
+    }
+
+    if (code === '23505' || /unique|duplicate/i.test(duplicateContext)) {
       await modalSubmit.editReply({
         embeds: [errorEmbed(
           `The character name **${characterName}** is already taken. Run \`/character create\` again with a different name.`,

@@ -61,6 +61,12 @@ interface ChangePartyBody {
   triggeredById?: string;
 }
 
+function uniqueViolationContext(err: unknown): string | null {
+  const error = err as { code?: string; message?: string; detail?: string; constraint?: string } | null;
+  if (error?.code !== '23505') return null;
+  return `${error.message ?? ''} ${error.detail ?? ''} ${error.constraint ?? ''}`;
+}
+
 // ============================================================
 // Plugin
 // ============================================================
@@ -179,6 +185,23 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
             : 'Character created!',
         });
       } catch (err) {
+        const duplicateContext = uniqueViolationContext(err);
+        if (duplicateContext) {
+          if (/discord/i.test(duplicateContext)) {
+            return reply.status(409).send({
+              error: 'A character already exists for this Discord account',
+            });
+          }
+
+          if (/character[_ ]?name/i.test(duplicateContext)) {
+            return reply.status(409).send({
+              error: 'The character name is already taken',
+            });
+          }
+
+          return reply.status(409).send({ error: 'Character conflicts with an existing player' });
+        }
+
         fastify.log.error(err, 'Failed to create character');
         return reply.status(500).send({ error: 'Failed to create character' });
       }

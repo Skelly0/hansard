@@ -7,7 +7,7 @@ export const players = pgTable('players', {
 
   // === CHARACTER CREATION ===
   // Players create a character via /character create -- fills in these fields.
-  characterName: varchar('character_name', { length: 128 }),
+  characterName: varchar('character_name', { length: 128 }).unique(),
   characterBio: text('character_bio'),                     // free-form biography/description
   characterPortraitUrl: varchar('character_portrait_url', { length: 512 }),
   // Player uploads an image to Discord or provides a URL. Stored for display in webapp/embeds.

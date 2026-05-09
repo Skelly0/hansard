@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   getPlayerEvents: vi.fn(),
   getPlayerOfficeHistory: vi.fn(),
   getPlayerVotingRecord: vi.fn(),
+  createCharacter: vi.fn(),
+  getPlayerByDiscordId: vi.fn(),
   listPlayers: vi.fn(),
   countPlayers: vi.fn(),
   getPlayerBalances: vi.fn(),
@@ -66,9 +68,9 @@ vi.mock('../services/documentService.js', () => ({
 }));
 
 vi.mock('../services/playerService.js', () => ({
-  createCharacter: vi.fn(),
+  createCharacter: mocks.createCharacter,
   getPlayer: mocks.getPlayer,
-  getPlayerByDiscordId: vi.fn(),
+  getPlayerByDiscordId: mocks.getPlayerByDiscordId,
   listPlayers: mocks.listPlayers,
   countPlayers: mocks.countPlayers,
   updateCharacter: vi.fn(),
@@ -78,7 +80,7 @@ vi.mock('../services/playerService.js', () => ({
   getPlayerHealth: vi.fn(),
   getPlayerOfficeHistory: mocks.getPlayerOfficeHistory,
   getPlayerVotingRecord: mocks.getPlayerVotingRecord,
-  calculateStartingAgeFavourBonus: vi.fn(),
+  calculateStartingAgeFavourBonus: vi.fn().mockReturnValue(0),
   aggregatePermissionsForPlayer: vi.fn(),
 }));
 
@@ -131,6 +133,8 @@ describe('list route response contracts', () => {
     mocks.getPlayerEvents.mockResolvedValue([{ id: 'e1' }]);
     mocks.getPlayerOfficeHistory.mockResolvedValue([{ officeId: 'o1', officeName: 'Chancellor' }]);
     mocks.getPlayerVotingRecord.mockResolvedValue([{ electionId: 'v1', electionTitle: 'Vote', choice: 'yea' }]);
+    mocks.createCharacter.mockResolvedValue({ id: 'created-player', characterName: 'Ada' });
+    mocks.getPlayerByDiscordId.mockResolvedValue(null);
     mocks.listPlayers.mockResolvedValue([{ id: 'p1' }]);
     mocks.countPlayers.mockResolvedValue(1);
     mocks.getPlayerBalances.mockResolvedValue([{ categoryId: 'f1', categoryName: 'Guild', balance: 7 }]);
@@ -184,6 +188,31 @@ describe('list route response contracts', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ data: [{ id: 'p1' }], total: 1 });
+  });
+
+  it('returns 409 when character creation hits a duplicate character name constraint', async () => {
+    const app = await appWith(playerRoutes);
+    const duplicate = Object.assign(
+      new Error('duplicate key value violates unique constraint "players_character_name_unique"'),
+      { code: '23505', constraint: 'players_character_name_unique' },
+    );
+    mocks.createCharacter.mockRejectedValueOnce(duplicate);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/players/create',
+      payload: {
+        discordId: '123',
+        discordUsername: 'ada',
+        characterName: 'Ada Vance',
+        startingAge: 30,
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: 'The character name is already taken',
+    });
   });
 
   it('returns a player dossier with related records instead of empty stubs', async () => {

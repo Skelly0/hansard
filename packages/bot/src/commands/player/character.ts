@@ -38,10 +38,9 @@ const MAX_STARTING_AGE = 70;
 const DEFAULT_STARTING_AGE = 30;
 
 const FAVOUR_BONUS_TIERS = [
-  { minAge: 35, totalFavours: 2 },
-  { minAge: 45, totalFavours: 5 },
-  { minAge: 55, totalFavours: 9 },
-  { minAge: 65, totalFavours: 14 },
+  { minAge: 35, totalFavours: 1 },
+  { minAge: 45, totalFavours: 2 },
+  { minAge: 60, totalFavours: 3 },
 ];
 
 function getFavourBonus(age: number): number {

@@ -62,10 +62,9 @@ export interface PlayerEventFilters {
 // Default tiers — in production these come from simulation config.
 // The service calculates which tier applies and returns the bonus amount.
 const DEFAULT_FAVOUR_TIERS = [
-  { minAge: 35, totalFavours: 2 },
-  { minAge: 45, totalFavours: 5 },
-  { minAge: 55, totalFavours: 9 },
-  { minAge: 65, totalFavours: 14 },
+  { minAge: 35, totalFavours: 1 },
+  { minAge: 45, totalFavours: 2 },
+  { minAge: 60, totalFavours: 3 },
 ];
 
 /**

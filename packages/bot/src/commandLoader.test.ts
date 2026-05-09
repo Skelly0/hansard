@@ -43,6 +43,15 @@ describe('loadCommands', () => {
       rmSync(rootDir, { recursive: true, force: true });
     }
   });
+
+  it('keeps the registered guild slash command set within Discord limits', async () => {
+    process.env.DATABASE_URL ??= 'postgres://user:pass@localhost:5432/hansard';
+
+    const commands = new Collection<string, Command>();
+    await loadCommands(join(process.cwd(), 'src', 'commands'), commands);
+
+    expect(commands.size).toBeLessThanOrEqual(100);
+  });
 });
 
 describe('collectCommandFiles', () => {

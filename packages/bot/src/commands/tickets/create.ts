@@ -24,8 +24,14 @@ import {
 import { TicketStatus, TicketPriority } from '@hansard/shared';
 import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 import { buildTicketSummaryEmbed, buildTicketActionRow } from '../../components/ticketButtons.js';
+import {
+  buildTicketCategoryCreatedDescription,
+  buildTicketCategoryFields,
+  normalizeTicketCategoryInput,
+} from './categoryHelpers.js';
 
 /**
  * /ticket create
@@ -51,10 +57,70 @@ const command: Command = {
     .setDescription('Ticket system commands')
     .addSubcommand((sub) =>
       sub.setName('create').setDescription('Create a new support ticket'),
+    )
+    .addSubcommand((sub) =>
+      sub.setName('categories').setDescription('List active ticket categories'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('category-create')
+        .setDescription('Create a ticket category (staff only)')
+        .addStringOption((opt) =>
+          opt
+            .setName('name')
+            .setDescription('Display name, e.g. Appeals')
+            .setRequired(true)
+            .setMaxLength(64),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('description')
+            .setDescription('What this category is for')
+            .setRequired(false)
+            .setMaxLength(2000),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('emoji')
+            .setDescription('Emoji used in embeds and menus')
+            .setRequired(false)
+            .setMaxLength(8),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('colour')
+            .setDescription('Hex colour for UI, e.g. #7B8BA8')
+            .setRequired(false)
+            .setMaxLength(7),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('assignable-roles')
+            .setDescription('Comma-separated staff role names for this category')
+            .setRequired(false)
+            .setMaxLength(512),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('sort-order')
+            .setDescription('Display order; lower appears first')
+            .setRequired(false)
+            .setMinValue(0),
+        ),
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand === 'categories') {
+      await handleCategories(interaction);
+      return;
+    }
+
+    if (subcommand === 'category-create') {
+      await handleCategoryCreate(interaction);
+      return;
+    }
 
     if (subcommand !== 'create') return;
 
@@ -368,5 +434,96 @@ const command: Command = {
     await modalInteraction.editReply({ embeds: [confirmEmbed] });
   },
 };
+
+async function handleCategories(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  const categories = await db
+    .select()
+    .from(ticketCategories)
+    .where(eq(ticketCategories.isActive, true))
+    .orderBy(asc(ticketCategories.sortOrder), asc(ticketCategories.name));
+
+  if (categories.length === 0) {
+    await interaction.editReply({
+      embeds: [
+        createEmbed({
+          title: 'Ticket Categories',
+          description: 'No ticket categories have been created yet. Staff can create one with `/ticket category-create`.',
+          system: 'tickets',
+        }),
+      ],
+    });
+    return;
+  }
+
+  const maxEmbedFields = 25;
+  const visibleCategories = categories.slice(0, maxEmbedFields);
+  const hiddenCount = categories.length - visibleCategories.length;
+
+  await interaction.editReply({
+    embeds: [
+      createEmbed({
+        title: 'Ticket Categories',
+        description: [
+          `${categories.length} active categor${categories.length === 1 ? 'y' : 'ies'}.`,
+          hiddenCount > 0 ? `Showing the first ${maxEmbedFields}; ${hiddenCount} more are configured.` : '',
+        ].filter(Boolean).join('\n'),
+        system: 'tickets',
+        fields: buildTicketCategoryFields(visibleCategories),
+      }),
+    ],
+  });
+}
+
+async function handleCategoryCreate(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  if (!interaction.guild) {
+    await interaction.editReply({ embeds: [errorEmbed('This command can only be used in a server.')] });
+    return;
+  }
+
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!(await isStaff(member))) {
+    await interaction.editReply({ embeds: [errorEmbed('Only staff can create ticket categories.')] });
+    return;
+  }
+
+  let values;
+  try {
+    values = normalizeTicketCategoryInput({
+      name: interaction.options.getString('name', true),
+      description: interaction.options.getString('description'),
+      emoji: interaction.options.getString('emoji'),
+      colour: interaction.options.getString('colour'),
+      assignableRoles: interaction.options.getString('assignable-roles'),
+      sortOrder: interaction.options.getInteger('sort-order'),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid category options.';
+    await interaction.editReply({ embeds: [errorEmbed(message)] });
+    return;
+  }
+
+  try {
+    const [category] = await db
+      .insert(ticketCategories)
+      .values(values)
+      .returning();
+
+    await interaction.editReply({
+      embeds: [
+        successEmbed(
+          'Ticket Category Created',
+          buildTicketCategoryCreatedDescription(category),
+        ),
+      ],
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to create ticket category.';
+    await interaction.editReply({ embeds: [errorEmbed(message)] });
+  }
+}
 
 export default command;

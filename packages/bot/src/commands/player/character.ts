@@ -133,6 +133,8 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     return; // timed out
   }
 
+  await modalSubmit.deferReply({ ephemeral: true });
+
   const characterName = modalSubmit.fields.getTextInputValue('character_name').trim();
   const characterBio = modalSubmit.fields.getTextInputValue('character_bio').trim() || null;
   const ageRaw = modalSubmit.fields.getTextInputValue('character_age').trim();
@@ -140,13 +142,12 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 
   // Validate age
   if (isNaN(startingAge) || startingAge < MIN_STARTING_AGE || startingAge > MAX_STARTING_AGE) {
-    await modalSubmit.reply({
+    await modalSubmit.editReply({
       embeds: [
         errorEmbed(
           `Starting age must be a number between ${MIN_STARTING_AGE} and ${MAX_STARTING_AGE}. You entered: \`${ageRaw}\``,
         ),
       ],
-      ephemeral: true,
     });
     return;
   }
@@ -159,18 +160,15 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     .limit(1);
 
   if (nameTaken.length > 0) {
-    await modalSubmit.reply({
+    await modalSubmit.editReply({
       embeds: [
         errorEmbed(
           `The character name **${characterName}** is already taken. Please try again with a different name.`,
         ),
       ],
-      ephemeral: true,
     });
     return;
   }
-
-  await modalSubmit.deferReply({ ephemeral: true });
 
   // Step 2: Portrait prompt
   const skipButton = new ButtonBuilder()

@@ -103,9 +103,22 @@ describe('aggregatePermissionsForPlayer', () => {
 });
 
 describe('listPlayers with search', () => {
-  it('passes search to the where clause', async () => {
-    // Real chain in playerService.ts: from → where → orderBy → limit → offset
-    const offset = vi.fn().mockResolvedValue([{
+  function containsText(value: unknown, pattern: RegExp, seen = new Set<object>()): boolean {
+    if (typeof value === 'string') return pattern.test(value);
+    if (!value || typeof value !== 'object') return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+
+    for (const key of Reflect.ownKeys(value)) {
+      const child = (value as Record<PropertyKey, unknown>)[key];
+      if (containsText(child, pattern, seen)) return true;
+    }
+
+    return false;
+  }
+
+  function playerRow(overrides: Partial<Record<string, any>> = {}) {
+    return {
       id: 'p1',
       discordId: '111',
       discordUsername: 'aldrick',
@@ -129,7 +142,13 @@ describe('listPlayers with search', () => {
       registeredAt: new Date(),
       lastActiveAt: null,
       profileData: null,
-    }]);
+      ...overrides,
+    };
+  }
+
+  it('passes search to the where clause', async () => {
+    // Real chain in playerService.ts: from → where → orderBy → limit → offset
+    const offset = vi.fn().mockResolvedValue([playerRow()]);
     const limit = vi.fn().mockReturnValue({ offset });
     const orderBy = vi.fn().mockReturnValue({ limit });
     const where = vi.fn().mockReturnValue({ orderBy });
@@ -143,6 +162,31 @@ describe('listPlayers with search', () => {
     // Search predicate must actually be present in the WHERE arg, not silently dropped.
     const whereArg = where.mock.calls[0][0];
     expect(whereArg).toBeTruthy();
+  });
+
+  it('excludes OAuth-only rows that have not created a character', async () => {
+    const rows = [
+      playerRow({ id: 'created-character', characterName: 'Aldrick Vance' }),
+      playerRow({ id: 'oauth-placeholder', discordUsername: 'oauth-only', characterName: null }),
+    ];
+    const offset = vi.fn().mockImplementation(() => {
+      const whereArg = where.mock.calls[0][0];
+      return Promise.resolve(
+        containsText(whereArg, /is not null/i)
+          ? rows.filter((row) => row.characterName !== null)
+          : rows,
+      );
+    });
+    const limit = vi.fn().mockReturnValue({ offset });
+    const orderBy = vi.fn().mockReturnValue({ limit });
+    const where = vi.fn().mockReturnValue({ orderBy });
+    const from = vi.fn().mockReturnValue({ where });
+    const select = vi.fn().mockReturnValue({ from });
+    const db: any = { select };
+
+    const results = await listPlayers(db, { isActive: true, limit: 10, offset: 0 });
+
+    expect(results.map((player) => player.id)).toEqual(['created-character']);
   });
 });
 

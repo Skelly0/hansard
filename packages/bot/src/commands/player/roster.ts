@@ -2,7 +2,7 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, and, isNull, asc } from 'drizzle-orm';
+import { eq, and, isNull, isNotNull, asc } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, factions, parties, offices, officeHolders } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
@@ -88,7 +88,7 @@ const command: Command = {
     }
 
     // Build active-player query with optional filters
-    const conditions = [eq(players.isActive, true)];
+    const conditions = [eq(players.isActive, true), isNotNull(players.characterName)];
     if (factionId) conditions.push(eq(players.factionId, factionId));
     if (partyId) conditions.push(eq(players.partyId, partyId));
 

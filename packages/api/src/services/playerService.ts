@@ -1,4 +1,4 @@
-import { eq, and, desc, isNull, ilike, or, inArray, count, type SQL } from 'drizzle-orm';
+import { eq, and, desc, isNull, isNotNull, ilike, or, inArray, count, type SQL } from 'drizzle-orm';
 import {
   players,
   playerEventLog,
@@ -184,7 +184,7 @@ export async function getPlayerByDiscordId(db: Database, discordId: string): Pro
  * List players with optional filters.
  */
 function playerListConditions(filters: ListPlayersFilters): SQL[] {
-  const conditions: SQL[] = [];
+  const conditions: SQL[] = [isNotNull(players.characterName)];
 
   if (filters.factionId !== undefined) {
     conditions.push(eq(players.factionId, filters.factionId));

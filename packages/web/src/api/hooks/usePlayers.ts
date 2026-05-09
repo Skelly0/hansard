@@ -54,7 +54,7 @@ export interface PlayerEvent {
 export interface PlayerDossier extends Player {
   offices?: { officeId: string; officeName: string; startDate: string; endDate?: string; appointmentMethod: string }[];
   bills?: { id: string; title: string; slug: string; status: string; billNumber: number; submittedAt: string }[];
-  votes?: { electionId: string; electionTitle: string; choice: string; castAt: string }[];
+  votes?: { electionId: string; electionTitle: string; choice: string | null; castAt: string | null }[];
   favours?: { categoryId: string; categoryName: string; balance: number }[];
   events?: PlayerEvent[];
 }
@@ -74,18 +74,19 @@ interface PlayerFilters {
 
 export function usePlayers(filters?: PlayerFilters) {
   const params = new URLSearchParams();
-  if (filters?.faction) params.set('faction', filters.faction);
-  if (filters?.party) params.set('party', filters.party);
-  if (filters?.active !== undefined) params.set('active', String(filters.active));
-  if (filters?.staff !== undefined) params.set('staff', String(filters.staff));
-  if (filters?.alive !== undefined) params.set('alive', String(filters.alive));
+  if (filters?.faction) params.set('factionId', filters.faction);
+  if (filters?.party) params.set('partyId', filters.party);
+  if (filters?.active !== undefined) params.set('isActive', String(filters.active));
+  if (filters?.staff !== undefined) params.set('isStaff', String(filters.staff));
+  if (filters?.alive !== undefined) params.set('isAlive', String(filters.alive));
   if (filters?.search) params.set('search', filters.search);
-  if (filters?.page) params.set('page', String(filters.page));
   if (filters?.limit) params.set('limit', String(filters.limit));
+  if (filters?.page && filters?.limit) params.set('offset', String((filters.page - 1) * filters.limit));
   const qs = params.toString();
   return useQuery({
     queryKey: ['players', filters],
     queryFn: () => api.get<{ data: Player[]; total: number }>(`/players${qs ? `?${qs}` : ''}`),
+    enabled: filters !== undefined,
   });
 }
 

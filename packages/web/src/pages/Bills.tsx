@@ -9,6 +9,7 @@ import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal } from '../components/shared/Modal';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 import type { Bill } from '../api/hooks/useBills';
 
 const BILL_STATUSES = [
@@ -34,7 +35,7 @@ export function Bills() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
-  const { data, isLoading } = useBills({
+  const { data, isLoading, isError, error } = useBills({
     status: status !== 'all' ? status : undefined,
     search: search || undefined,
     sort,
@@ -43,6 +44,13 @@ export function Bills() {
   });
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState title="Could not load bills" error={error} />
+      </div>
+    );
+  }
 
   const bills = data?.data ?? [];
   const total = data?.total ?? 0;

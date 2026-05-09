@@ -88,13 +88,13 @@ interface TicketFilters {
 export function useTickets(filters?: TicketFilters) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
-  if (filters?.category) params.set('category', filters.category);
-  if (filters?.assignee) params.set('assignee', filters.assignee);
+  if (filters?.category) params.set('categoryId', filters.category);
+  if (filters?.assignee) params.set('assignedToId', filters.assignee);
   if (filters?.priority) params.set('priority', filters.priority);
   if (filters?.tags?.length) params.set('tags', filters.tags.join(','));
   if (filters?.search) params.set('search', filters.search);
-  if (filters?.page) params.set('page', String(filters.page));
   if (filters?.limit) params.set('limit', String(filters.limit));
+  if (filters?.page && filters?.limit) params.set('offset', String((filters.page - 1) * filters.limit));
   const qs = params.toString();
   return useQuery({
     queryKey: ['tickets', filters],

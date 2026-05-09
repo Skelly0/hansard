@@ -4,22 +4,18 @@ import {
   type GuildMember,
 } from 'discord.js';
 import { eq, ilike } from 'drizzle-orm';
-import { elections, ballots } from '@hansard/db';
-import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { VoteService } from '@hansard/api/services/voteService';
+import { candidates, elections, players } from '@hansard/db';
+import { errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
+import { buildResultsEmbed } from './results.js';
 import type { Command } from '../../client.js';
 
 /**
  * /vote-tally election:<title> — staff force-tally an election.
  *
- * Mirrors VoteService.tallyVotes. The actual tally algorithms live in the
- * API package (`packages/api/src/services/tallying/*`) and are not imported
- * by the bot — bot package depends on `@hansard/db` + `@hansard/shared` only.
- *
- * This command marks the election so an out-of-band tally can be invoked
- * (e.g. via the API endpoint), shows current ballot count, and reports
- * existing results if any. The strategy execution itself is TODO.
+ * Mirrors VoteService.tallyVotes.
  */
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -78,54 +74,43 @@ const command: Command = {
       return;
     }
 
-    const allBallots = await db
-      .select()
-      .from(ballots)
-      .where(eq(ballots.electionId, election.id));
-
-    // TODO: Run the tally strategy. The bot package does NOT import
-    // `@hansard/api` or its `tallying/*` strategies, so the actual
-    // method-specific tally (FPTP / ranked / STV / approval / two-round /
-    // exhaustive / yea-nay / proportional) cannot run here.
-    //
-    // Options to wire this up later:
-    //   1. Move strategies into `@hansard/shared` and import them here, OR
-    //   2. POST to the API tally endpoint from the bot, OR
-    //   3. Have a worker pick up `tally_pending` and run it.
-    //
-    // For now: surface ballot count + current results, leave status alone.
-
-    const fields: { name: string; value: string; inline?: boolean }[] = [
-      { name: 'Method', value: `\`${election.method}\``, inline: true },
-      { name: 'Status', value: `\`${election.status}\``, inline: true },
-      { name: 'Ballots Cast', value: String(allBallots.length), inline: true },
-    ];
-
-    const r = election.results;
-    if (r) {
-      const tally = Object.entries(r.finalTallies)
-        .sort((a, b) => b[1] - a[1])
-        .map(([id, v]) => `\`${id}\`: ${v}`)
-        .join('\n');
-      if (tally) fields.push({ name: 'Existing Tallies', value: tally.slice(0, 1024) });
-      if (r.winners?.length) {
-        fields.push({ name: 'Winner(s)', value: r.winners.join(', ') });
-      }
+    let results;
+    try {
+      results = await new VoteService(db).tallyVotes(election.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to tally election';
+      await interaction.editReply({ embeds: [errorEmbed(message)] });
+      return;
     }
 
-    const embed = createEmbed({
-      title: `Tally: ${election.title}`,
-      description: [
-        'The bot cannot run the method-specific tally directly (strategies live in the API package).',
-        '',
-        'Use the API endpoint `POST /elections/:id/tally` to compute results, then re-run `/vote-info` or `/vote-results` to view them.',
-      ].join('\n'),
-      system: 'voting',
-      fields,
+    const embed = buildResultsEmbed({
+      title: election.title,
+      method: election.method,
+      results,
+      candidateNames: await getCandidateNames(election.id),
     });
 
     await interaction.editReply({ embeds: [embed] });
   },
 };
+
+async function getCandidateNames(electionId: string): Promise<Record<string, string>> {
+  const rows = await db
+    .select({
+      playerId: candidates.playerId,
+      characterName: players.characterName,
+      discordUsername: players.discordUsername,
+    })
+    .from(candidates)
+    .innerJoin(players, eq(candidates.playerId, players.id))
+    .where(eq(candidates.electionId, electionId));
+
+  return Object.fromEntries(
+    rows.map((row) => [
+      row.playerId,
+      row.characterName ?? row.discordUsername,
+    ]),
+  );
+}
 
 export default command;

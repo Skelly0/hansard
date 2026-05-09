@@ -14,6 +14,7 @@ import { Tag } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { RedlineDiff, type DiffHunk } from '../components/shared/RedlineDiff';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 const collectionTypeLabel: Record<string, string> = {
   legislation: 'Legislation',
@@ -215,7 +216,7 @@ export function Documents() {
   const limit = 20;
 
   const { data: collections } = useDocumentCollections();
-  const { data, isLoading } = useDocuments({
+  const { data, isLoading, isError, error } = useDocuments({
     collection: collection !== 'all' ? collection : undefined,
     search: search || undefined,
     page,
@@ -223,6 +224,13 @@ export function Documents() {
   });
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState title="Could not load documents" error={error} />
+      </div>
+    );
+  }
 
   const documents = data?.data ?? [];
   const total = data?.total ?? 0;

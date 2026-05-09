@@ -340,18 +340,22 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const body = request.body as any;
 
-      const updated = await service.enterNpcConfirmation(id, {
-        yea: body.yea,
-        nay: body.nay,
-        abstain: body.abstain,
-        enteredById: user.id,
-        notes: body.notes,
-      });
+      try {
+        const updated = await service.enterNpcConfirmation(id, {
+          yea: body.yea,
+          nay: body.nay,
+          abstain: body.abstain,
+          enteredById: user.id,
+          notes: body.notes,
+        });
 
-      if (!updated) {
-        return reply.status(404).send({ error: 'Election not found' });
+        if (!updated) {
+          return reply.status(404).send({ error: 'Election not found' });
+        }
+        return updated;
+      } catch (err: any) {
+        return reply.status(400).send({ error: err.message });
       }
-      return updated;
     },
   );
 

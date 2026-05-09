@@ -15,7 +15,7 @@ import { elections, players } from '@hansard/db';
 import { REACTION_EMOJI, REACTION_COMPATIBLE_METHODS } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
-import { isStaff } from '../../utils/permissions.js';
+import { hasPermission, type Permission } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const CHANCELLOR_ONLY_TYPES = new Set([
@@ -23,6 +23,12 @@ const CHANCELLOR_ONLY_TYPES = new Set([
   'position_election',
   'appointment_confirmation',
 ]);
+
+const REQUIRED_PERMISSION_BY_TYPE: Record<string, Permission> = {
+  legislative_vote: 'legislative_leader',
+  position_election: 'call_elections',
+  appointment_confirmation: 'call_elections',
+};
 
 /**
  * /vote create — opens a modal to create a new election or vote.
@@ -191,10 +197,13 @@ export async function handleVoteCreateModal(
   // the slash command's permission logic.
   if (CHANCELLOR_ONLY_TYPES.has(electionType)) {
     const member = interaction.member;
-    const allowed = member && 'roles' in member ? await isStaff(member as any) : false;
+    const requiredPermission = REQUIRED_PERMISSION_BY_TYPE[electionType] ?? 'legislative_leader';
+    const allowed = member && 'roles' in member
+      ? await hasPermission(member as any, requiredPermission)
+      : false;
     if (!allowed) {
       await interaction.reply({
-        embeds: [errorEmbed('Only the Chancellor or staff can create this type of vote.')],
+        embeds: [errorEmbed('Only staff or an office holder with the required voting permission can create this type of vote.')],
         ephemeral: true,
       });
       return;

@@ -2,8 +2,9 @@ import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { randomBytes, createHash } from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
-import { deviceCodes, mcpTokens } from '@hansard/db';
+import { deviceCodes, mcpTokens, players, type Database } from '@hansard/db';
 import '../types.js';
+import type { SessionUser } from '../types.js';
 import { findOrCreatePlayerByDiscordId, aggregatePermissionsForPlayer } from '../services/playerService.js';
 import { requireMcpToken } from '../middleware/requireMcpToken.js';
 
@@ -59,6 +60,30 @@ function publicApiUrl(request: FastifyRequest): string {
   const fromEnv = process.env.PUBLIC_API_URL;
   if (fromEnv) return fromEnv.replace(/\/$/, '');
   return `${request.protocol}://${request.hostname}`;
+}
+
+export async function refreshSessionUser(
+  db: Database,
+  sessionUser: SessionUser,
+): Promise<SessionUser | null> {
+  const [player] = await db
+    .select()
+    .from(players)
+    .where(eq(players.id, sessionUser.id))
+    .limit(1);
+
+  if (!player) return null;
+
+  const permissions = await aggregatePermissionsForPlayer(db, player.id);
+  return {
+    id: player.id,
+    discordId: player.discordId,
+    username: player.discordUsername,
+    avatar: sessionUser.avatar,
+    isStaff: player.isStaff,
+    staffRole: player.staffRole,
+    permissions,
+  };
 }
 
 export default fp(async function authPlugin(fastify: FastifyInstance) {
@@ -171,7 +196,15 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
     if (!user) {
       return reply.status(401).send({ error: 'Not authenticated' });
     }
-    return user;
+
+    const refreshed = await refreshSessionUser(fastify.db, user);
+    if (!refreshed) {
+      await request.session.destroy();
+      return reply.status(401).send({ error: 'Session player no longer exists' });
+    }
+
+    request.session.user = refreshed;
+    return refreshed;
   });
 
   // POST /api/auth/logout — destroy session

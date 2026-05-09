@@ -1,4 +1,7 @@
 import { GuildMember, type APIInteractionGuildMember } from 'discord.js';
+import { and, eq, isNull } from 'drizzle-orm';
+import { officeHolders, offices, players } from '@hansard/db';
+import { db } from '../db.js';
 
 /**
  * Staff role name — checked against member roles.
@@ -14,7 +17,7 @@ type InteractionMember = APIInteractionGuildMember | GuildMember | null | undefi
  *
  * Currently checks:
  * 1. Whether the member has a role named "Staff"
- * 2. (Future) Whether the member has `isStaff` set in the DB
+ * 2. Whether the member has `isStaff` set in the DB
  *
  * Returns true if either condition is met.
  *
@@ -44,10 +47,18 @@ export async function isStaff(member: InteractionMember): Promise<boolean> {
     return true;
   }
 
-  // DB-based check — will query player record once DB integration is wired up.
-  // For now, returns false if the role check didn't match.
-  // TODO: Query @hansard/db for player.isStaff flag
-  return false;
+  const discordId = getDiscordId(member);
+  if (!discordId) {
+    return false;
+  }
+
+  const [player] = await db
+    .select({ isStaff: players.isStaff })
+    .from(players)
+    .where(eq(players.discordId, discordId))
+    .limit(1);
+
+  return player?.isStaff ?? false;
 }
 
 /**
@@ -55,6 +66,11 @@ export async function isStaff(member: InteractionMember): Promise<boolean> {
  * Will be expanded as office system is built out.
  */
 export type Permission =
+  | 'legislative_leader'
+  | 'appoint_ministers'
+  | 'call_elections'
+  | 'executive_orders'
+  | 'veto'
   | 'bills.create'
   | 'bills.edit'
   | 'bills.delete'
@@ -68,12 +84,16 @@ export type Permission =
   | 'simulation.advance'
   | 'tickets.manage';
 
+const PERMISSION_ALIASES: Record<string, string[]> = {
+  'bills.create': ['legislative_leader'],
+  'voting.create': ['call_elections', 'legislative_leader'],
+  'voting.close': ['call_elections', 'legislative_leader'],
+  'offices.assign': ['appoint_ministers'],
+};
+
 /**
  * Check whether a guild member has a specific permission
  * based on their office(s) in the current season.
- *
- * Currently a stub — will query the DB for the member's offices
- * and check their associated permissions.
  *
  * Staff members bypass all permission checks.
  */
@@ -86,9 +106,38 @@ export async function hasPermission(
     return true;
   }
 
-  // Office-based permission check — will be implemented when the
-  // offices and permissions tables are wired up.
-  // TODO: Query @hansard/db for member's offices -> office.permissions
-  void permission; // suppress unused warning until implemented
-  return false;
+  const discordId = getDiscordId(member);
+  if (!discordId) {
+    return false;
+  }
+
+  const [player] = await db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.discordId, discordId))
+    .limit(1);
+
+  if (!player) {
+    return false;
+  }
+
+  const permissionNames = new Set([permission, ...(PERMISSION_ALIASES[permission] ?? [])]);
+  const rows = await db
+    .select({ permissions: offices.permissions })
+    .from(officeHolders)
+    .innerJoin(offices, eq(officeHolders.officeId, offices.id))
+    .where(and(eq(officeHolders.playerId, player.id), isNull(officeHolders.endDate)));
+
+  return rows.some((row) =>
+    Array.isArray(row.permissions) &&
+    row.permissions.some((heldPermission) => permissionNames.has(heldPermission as Permission)),
+  );
+}
+
+function getDiscordId(member: InteractionMember): string | null {
+  if (!member) return null;
+  if (member instanceof GuildMember) return member.user.id;
+
+  const apiMember = member as APIInteractionGuildMember;
+  return apiMember.user?.id ?? null;
 }

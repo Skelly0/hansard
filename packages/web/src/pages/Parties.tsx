@@ -11,6 +11,7 @@ import {
 import { useAuth } from '../api/hooks/useAuth';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -267,7 +268,7 @@ function DissolveModal({
 export function Parties() {
   const { isStaff } = useAuth();
   const [showInactive, setShowInactive] = useState(false);
-  const { data: parties, isLoading } = useParties(showInactive);
+  const { data: parties, isLoading, isError, error: loadError } = useParties(showInactive);
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<PartyWithStats | null>(null);
@@ -279,6 +280,13 @@ export function Parties() {
   const dissolveMut = useDissolveParty();
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState title="Could not load parties" error={loadError} />
+      </div>
+    );
+  }
 
   const handleCreate = async (form: PartyFormState) => {
     setError(null);

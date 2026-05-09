@@ -16,6 +16,7 @@ import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal, ConfirmModal } from '../components/shared/Modal';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 // ---- Types for the matrix view ----
 
@@ -55,8 +56,8 @@ const TYPE_COLOURS: Record<string, string> = {
 // ---- Sub-components ----
 
 function StaffOverview() {
-  const { data: categories, isLoading: catLoading } = useFavourCategories();
-  const { data: allBalances, isLoading: balLoading } = useAllFavourBalances();
+  const { data: categories, isLoading: catLoading, isError: catIsError, error: catError } = useFavourCategories();
+  const { data: allBalances, isLoading: balLoading, isError: balIsError, error: balError } = useAllFavourBalances();
 
   const isLoading = catLoading || balLoading;
 
@@ -91,6 +92,14 @@ function StaffOverview() {
   }, [allBalances, categories]);
 
   if (isLoading) return <PageSkeleton />;
+  if (catIsError || balIsError) {
+    return (
+      <QueryErrorState
+        title="Could not load favour overview"
+        error={catIsError ? catError : balError}
+      />
+    );
+  }
 
   const columns: Column<PlayerRow>[] = [
     {
@@ -136,9 +145,9 @@ function StaffOverview() {
 }
 
 function MyFavours({ playerId }: { playerId: string }) {
-  const { data: balances, isLoading: balLoading } = useFavourBalances(playerId);
-  const { data: history, isLoading: histLoading } = useFavourHistory(playerId);
-  const { data: categories } = useFavourCategories();
+  const { data: balances, isLoading: balLoading, isError: balIsError, error: balError } = useFavourBalances(playerId);
+  const { data: history, isLoading: histLoading, isError: histIsError, error: histError } = useFavourHistory(playerId);
+  const { data: categories, isError: catIsError, error: catError } = useFavourCategories();
 
   const isLoading = balLoading || histLoading;
 
@@ -171,6 +180,14 @@ function MyFavours({ playerId }: { playerId: string }) {
   }, [categories]);
 
   if (isLoading) return <PageSkeleton />;
+  if (balIsError || histIsError || catIsError) {
+    return (
+      <QueryErrorState
+        title="Could not load your favours"
+        error={balIsError ? balError : histIsError ? histError : catError}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -320,7 +337,7 @@ const EMPTY_FORM: CategoryFormState = {
 };
 
 function ManageCategories() {
-  const { data: categories, isLoading } = useAllFavourCategories();
+  const { data: categories, isLoading, isError, error: queryError } = useAllFavourCategories();
   const create = useCreateFavourCategory();
   const update = useUpdateFavourCategory();
   const remove = useDeleteFavourCategory();
@@ -412,6 +429,9 @@ function ManageCategories() {
   };
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) {
+    return <QueryErrorState title="Could not load favour categories" error={queryError} />;
+  }
 
   const sorted = [...(categories ?? [])].sort((a, b) => {
     if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;

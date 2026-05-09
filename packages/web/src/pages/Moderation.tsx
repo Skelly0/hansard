@@ -7,6 +7,7 @@ import { MetricCard } from '../components/shared/MetricCard';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { ModActionModal } from '../components/shared/ModActionModal';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 // ---- Type helpers ----
 
@@ -75,7 +76,7 @@ export function Moderation() {
   const limit = 20;
 
   // Look up players matching search to get their ID for filtering
-  const { data: playerResults } = usePlayers(
+  const { data: playerResults, isError: playerSearchIsError, error: playerSearchError } = usePlayers(
     search.length >= 2 ? { search, limit: 5 } : undefined,
   );
   const matchedPlayerId =
@@ -83,8 +84,8 @@ export function Moderation() {
       ? playerResults.data[0].id
       : undefined;
 
-  const { data: stats, isLoading: statsLoading } = useModStats();
-  const { data: actionsData, isLoading: actionsLoading } = useModActions({
+  const { data: stats, isLoading: statsLoading, isError: statsIsError, error: statsError } = useModStats();
+  const { data: actionsData, isLoading: actionsLoading, isError: actionsIsError, error: actionsError } = useModActions({
     targetPlayerId: matchedPlayerId,
     page,
     limit,
@@ -92,6 +93,16 @@ export function Moderation() {
 
   const isLoading = statsLoading || actionsLoading;
   if (isLoading) return <PageSkeleton />;
+  if (statsIsError || actionsIsError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState
+          title="Could not load moderation data"
+          error={statsIsError ? statsError : actionsError}
+        />
+      </div>
+    );
+  }
 
   const actions = actionsData?.data ?? [];
   const total = actionsData?.total ?? 0;
@@ -225,6 +236,13 @@ export function Moderation() {
               </button>
             ))}
           </div>
+        )}
+        {playerSearchIsError && (
+          <QueryErrorState
+            title="Could not search players"
+            error={playerSearchError}
+            className="mt-3 max-w-md"
+          />
         )}
       </div>
 

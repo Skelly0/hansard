@@ -46,6 +46,25 @@ export interface AddNoteInput {
   content: string;
 }
 
+function actionListConditions(filters: ListActionsFilters): SQL[] {
+  const conditions: SQL[] = [];
+
+  if (filters.type !== undefined) {
+    conditions.push(eq(modActions.type, filters.type));
+  }
+  if (filters.isActive !== undefined) {
+    conditions.push(eq(modActions.isActive, filters.isActive));
+  }
+  if (filters.targetPlayerId !== undefined) {
+    conditions.push(eq(modActions.targetPlayerId, filters.targetPlayerId));
+  }
+  if (filters.moderatorId !== undefined) {
+    conditions.push(eq(modActions.moderatorId, filters.moderatorId));
+  }
+
+  return conditions;
+}
+
 // ============================================================
 // Service Functions
 // ============================================================
@@ -173,21 +192,7 @@ export async function listActions(
   db: Database,
   filters: ListActionsFilters = {},
 ): Promise<ModAction[]> {
-  const conditions: SQL[] = [];
-
-  if (filters.type !== undefined) {
-    conditions.push(eq(modActions.type, filters.type));
-  }
-  if (filters.isActive !== undefined) {
-    conditions.push(eq(modActions.isActive, filters.isActive));
-  }
-  if (filters.targetPlayerId !== undefined) {
-    conditions.push(eq(modActions.targetPlayerId, filters.targetPlayerId));
-  }
-  if (filters.moderatorId !== undefined) {
-    conditions.push(eq(modActions.moderatorId, filters.moderatorId));
-  }
-
+  const conditions = actionListConditions(filters);
   const limit = filters.limit ?? 100;
   const offset = filters.offset ?? 0;
 
@@ -202,6 +207,21 @@ export async function listActions(
     .offset(offset);
 
   return results.map(toModAction);
+}
+
+export async function countActions(
+  db: Database,
+  filters: ListActionsFilters = {},
+): Promise<number> {
+  const conditions = actionListConditions(filters);
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [row] = await db
+    .select({ value: count() })
+    .from(modActions)
+    .where(whereClause);
+
+  return row?.value ?? 0;
 }
 
 /**

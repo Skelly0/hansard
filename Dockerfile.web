@@ -5,6 +5,7 @@ WORKDIR /app
 # VITE_API_URL must be baked in at build time (Vite inlines env vars)
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
+RUN test -n "$VITE_API_URL" || (echo "VITE_API_URL build arg is required for the static web image" && exit 1)
 
 # Install dependencies
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./

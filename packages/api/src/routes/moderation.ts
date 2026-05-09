@@ -135,16 +135,21 @@ export default async function moderationRoutes(fastify: FastifyInstance) {
     async (request) => {
       const { type, isActive, targetPlayerId, moderatorId, limit, offset } = request.query;
 
-      const actions = await modService.listActions(fastify.db, {
+      const filters = {
         type,
         isActive: isActive !== undefined ? isActive === 'true' : undefined,
         targetPlayerId,
         moderatorId,
         limit: limit ? parseInt(limit, 10) : undefined,
         offset: offset ? parseInt(offset, 10) : undefined,
-      });
+      };
 
-      return actions;
+      const [actions, total] = await Promise.all([
+        modService.listActions(fastify.db, filters),
+        modService.countActions(fastify.db, filters),
+      ]);
+
+      return { data: actions, total };
     },
   );
 

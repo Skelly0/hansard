@@ -2,7 +2,7 @@ import 'dotenv/config';
 
 import { readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { client, commands, type Command } from './client.js';
 import { registerReadyEvent } from './events/ready.js';
 import { registerInteractionCreateEvent } from './events/interactionCreate.js';
@@ -34,9 +34,10 @@ function collectCommandFiles(dir: string): string[] {
 async function loadCommands(): Promise<void> {
   const commandsDir = join(__dirname, 'commands');
   const commandFiles = collectCommandFiles(commandsDir);
+  const loadedCommandFiles = new Map<string, string>();
 
   for (const filePath of commandFiles) {
-    const module = (await import(filePath)) as { default: Command };
+    const module = (await import(pathToFileURL(filePath).href)) as { default: Command };
     const command = module.default;
 
     if (!command?.data?.name) {
@@ -44,8 +45,17 @@ async function loadCommands(): Promise<void> {
       continue;
     }
 
-    commands.set(command.data.name, command);
-    console.log(`Loaded command: /${command.data.name}`);
+    const commandName = command.data.name;
+    const existingFile = loadedCommandFiles.get(commandName);
+    if (existingFile) {
+      throw new Error(
+        `Duplicate command /${commandName} found in ${filePath}; already loaded from ${existingFile}.`,
+      );
+    }
+
+    commands.set(commandName, command);
+    loadedCommandFiles.set(commandName, filePath);
+    console.log(`Loaded command: /${commandName}`);
   }
 }
 

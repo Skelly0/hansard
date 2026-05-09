@@ -1,6 +1,7 @@
 import { usePlayers, type Player } from '../api/hooks/usePlayers';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 // ---- Helpers ----
 
@@ -189,9 +190,16 @@ function buildObituary(
 // ---- Main Page ----
 
 export function Graveyard() {
-  const { data, isLoading } = usePlayers({ alive: false, limit: 100 });
+  const { data, isLoading, isError, error } = usePlayers({ alive: false, limit: 100 });
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) {
+    return (
+      <div className="p-8 max-w-3xl mx-auto">
+        <QueryErrorState title="Could not load graveyard" error={error} />
+      </div>
+    );
+  }
 
   // Sort by death date, most recent first
   const deceased = [...(data?.data ?? [])].sort((a, b) => {

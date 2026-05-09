@@ -6,6 +6,7 @@ import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { MetricCard } from '../components/shared/MetricCard';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 import type { Ticket } from '../api/hooks/useTickets';
 
 const STATUSES = ['all', 'open', 'in_progress', 'waiting', 'resolved', 'closed'];
@@ -29,7 +30,7 @@ export function Tickets() {
   const limit = 20;
 
   const { data: categories } = useTicketCategories();
-  const { data, isLoading } = useTickets({
+  const { data, isLoading, isError, error } = useTickets({
     status: status !== 'all' ? status : undefined,
     category: category !== 'all' ? category : undefined,
     priority: priority !== 'all' ? priority : undefined,
@@ -38,6 +39,13 @@ export function Tickets() {
   });
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState title="Could not load tickets" error={error} />
+      </div>
+    );
+  }
 
   const tickets = data?.data ?? [];
   const total = data?.total ?? 0;
@@ -235,9 +243,10 @@ function formatDuration(ms: number | null | undefined): string {
 }
 
 function TicketMetricsView() {
-  const { data: metrics, isLoading } = useTicketMetrics();
+  const { data: metrics, isLoading, isError, error } = useTicketMetrics();
 
   if (isLoading) return <PageSkeleton />;
+  if (isError) return <QueryErrorState title="Could not load ticket metrics" error={error} />;
   if (!metrics) {
     return (
       <div className="card border-l-accent-tickets">

@@ -111,24 +111,36 @@ export default async function documentRoutes(fastify: FastifyInstance) {
   fastify.get<{
     Querystring: {
       collectionId?: string;
+      collection?: string;
       authorId?: string;
+      author?: string;
       tags?: string;
+      search?: string;
       limit?: string;
       offset?: string;
+      page?: string;
     };
   }>(
     '/api/documents',
     { preHandler: [requireAuth] },
     async (request) => {
-      const { collectionId, authorId, tags, limit, offset } = request.query;
+      const { collectionId, collection, authorId, author, tags, search, limit, offset, page } = request.query;
+      const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+      const parsedOffset = offset
+        ? parseInt(offset, 10)
+        : page && parsedLimit
+          ? (Math.max(1, parseInt(page, 10)) - 1) * parsedLimit
+          : undefined;
 
-      return listDocuments(db, {
-        collectionId,
-        authorId,
+      const result = await listDocuments(db, {
+        collectionId: collectionId ?? collection,
+        authorId: authorId ?? author,
         tags: tags ? tags.split(',') : undefined,
-        limit: limit ? parseInt(limit, 10) : undefined,
-        offset: offset ? parseInt(offset, 10) : undefined,
+        search,
+        limit: parsedLimit,
+        offset: parsedOffset,
       });
+      return { data: result.documents, total: result.total };
     },
   );
 

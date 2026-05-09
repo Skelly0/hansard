@@ -142,8 +142,9 @@ const command: Command = {
     }
 
     // Step 3: Open modal.
+    const modalCustomId = `ticket_create_modal:${interaction.user.id}:${selectedCategoryId}`;
     const modal = new ModalBuilder()
-      .setCustomId(`ticket_create_modal:${selectedCategoryId}`)
+      .setCustomId(modalCustomId)
       .setTitle(`New Ticket: ${selectedCategory.name.slice(0, 32)}`);
 
     const titleInput = new TextInputBuilder()
@@ -173,7 +174,7 @@ const command: Command = {
     let modalInteraction: ModalSubmitInteraction;
     try {
       modalInteraction = await categoryInteraction.awaitModalSubmit({
-        filter: (i) => i.customId === `ticket_create_modal:${selectedCategoryId}`,
+        filter: (i) => i.customId === modalCustomId && i.user.id === interaction.user.id,
         time: 300_000, // 5 minutes to fill out
       });
     } catch {
@@ -185,6 +186,8 @@ const command: Command = {
 
     const title = modalInteraction.fields.getTextInputValue('ticket_title').trim();
     const description = modalInteraction.fields.getTextInputValue('ticket_description').trim();
+    const creatorDiscordId = modalInteraction.user.id;
+    const creatorDiscordUsername = modalInteraction.user.username;
 
     // Step 5: Resolve creator — auto-create on first contact (mirrors the
     // OAuth callback's findOrCreatePlayerByDiscordId pattern). This command
@@ -194,12 +197,12 @@ const command: Command = {
       const [upserted] = await db
         .insert(players)
         .values({
-          discordId: interaction.user.id,
-          discordUsername: interaction.user.username,
+          discordId: creatorDiscordId,
+          discordUsername: creatorDiscordUsername,
         })
         .onConflictDoUpdate({
           target: players.discordId,
-          set: { discordUsername: interaction.user.username },
+          set: { discordUsername: creatorDiscordUsername },
         })
         .returning();
       creator = upserted;
@@ -262,9 +265,9 @@ const command: Command = {
 
     const ticketNumber = inserted.number;
     const memberDisplayName =
-      interaction.member && 'displayName' in interaction.member
-        ? interaction.member.displayName
-        : interaction.user.displayName || interaction.user.username;
+      modalInteraction.member && 'displayName' in modalInteraction.member
+        ? modalInteraction.member.displayName
+        : modalInteraction.user.displayName || modalInteraction.user.username;
 
     // Step 7: Build the data shape ticketButtons expects.
     const ticketData = {
@@ -278,7 +281,7 @@ const command: Command = {
       status: inserted.status,
       priority: inserted.priority,
       createdBy: {
-        id: interaction.user.id,
+        id: creatorDiscordId,
         displayName: memberDisplayName,
       },
       assignedTo: null,
@@ -302,14 +305,14 @@ const command: Command = {
           const thread = await channel.threads.create({
             name: `#${ticketNumber} — ${title.slice(0, 80)}`,
             type: ChannelType.PrivateThread,
-            reason: `Ticket #${ticketNumber} created by ${interaction.user.username}`,
+            reason: `Ticket #${ticketNumber} created by ${creatorDiscordUsername}`,
           });
 
           threadId = thread.id;
           threadChannelId = channel.id;
 
           // Add the ticket creator to the thread.
-          await thread.members.add(interaction.user.id);
+          await thread.members.add(creatorDiscordId);
 
           // Pin the summary embed.
           const summaryEmbed = buildTicketSummaryEmbed(ticketData);

@@ -2,6 +2,7 @@ import { useDashboardOverview, useDashboardActivity } from '../api/hooks/useDash
 import { ActivityFeed } from '../components/dashboard/ActivityFeed';
 import { formatTrendDelta } from '../components/dashboard/trendFormat';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
+import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 interface MetricDef {
   key: string;
@@ -14,10 +15,30 @@ interface MetricDef {
 }
 
 export function Dashboard() {
-  const { data: overview, isLoading: overviewLoading } = useDashboardOverview();
-  const { data: activity, isLoading: activityLoading } = useDashboardActivity();
+  const {
+    data: overview,
+    isLoading: overviewLoading,
+    isError: overviewIsError,
+    error: overviewError,
+  } = useDashboardOverview();
+  const {
+    data: activity,
+    isLoading: activityLoading,
+    isError: activityIsError,
+    error: activityError,
+  } = useDashboardActivity();
 
   if (overviewLoading || activityLoading) return <PageSkeleton />;
+  if (overviewIsError || activityIsError) {
+    return (
+      <div className="p-8">
+        <QueryErrorState
+          title="Could not load dashboard"
+          error={overviewError ?? activityError}
+        />
+      </div>
+    );
+  }
   if (!overview) return null;
 
   const metrics: MetricDef[] = [

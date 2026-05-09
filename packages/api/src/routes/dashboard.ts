@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { eq, and, desc, count, inArray, or, lt } from 'drizzle-orm';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { PlayerEventType } from '@hansard/shared';
 import {
   tickets,
   ticketMessages,
@@ -13,6 +14,42 @@ import {
   billStatusLog,
 } from '@hansard/db';
 
+const STAFF_UPCOMING_VOTE_STATUSES = ['voting_open', 'draft'];
+const PUBLIC_UPCOMING_VOTE_STATUSES = [
+  'nominations_open',
+  'nominations_closed',
+  'voting_open',
+];
+
+const PUBLIC_DASHBOARD_EVENT_TYPES = [
+  PlayerEventType.PARTY_CHANGE,
+  PlayerEventType.FACTION_CHANGE,
+  PlayerEventType.OFFICE_APPOINTED,
+  PlayerEventType.OFFICE_LEFT,
+  PlayerEventType.AILMENT_ACQUIRED,
+  PlayerEventType.AILMENT_RECOVERED,
+  PlayerEventType.HEALTH_CHANGED,
+  PlayerEventType.DEATH,
+  PlayerEventType.REGISTRATION,
+  PlayerEventType.NAME_CHANGE,
+];
+
+function activeTicketStatusFilter() {
+  return or(
+    eq(tickets.status, 'open'),
+    eq(tickets.status, 'in_progress'),
+    eq(tickets.status, 'waiting'),
+    eq(tickets.status, 'resolved'),
+  );
+}
+
+function upcomingVoteStatusFilter(isStaffViewer: boolean) {
+  return inArray(
+    elections.status,
+    isStaffViewer ? STAFF_UPCOMING_VOTE_STATUSES : PUBLIC_UPCOMING_VOTE_STATUSES,
+  );
+}
+
 /**
  * Dashboard routes — aggregated stats and activity feed.
  */
@@ -21,36 +58,26 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/api/dashboard/overview',
     { preHandler: [requireAuth] },
-    async () => {
+    async (request) => {
       const db = fastify.db;
+      const isStaffViewer = request.player?.isStaff ?? false;
 
-      // Active tickets: status != 'closed'
-      const [ticketResult] = await db
-        .select({ value: count() })
-        .from(tickets)
-        .where(
-          and(
-            // All non-closed tickets
-            or(
-              eq(tickets.status, 'open'),
-              eq(tickets.status, 'in_progress'),
-              eq(tickets.status, 'waiting'),
-              eq(tickets.status, 'resolved'),
-            ),
-          ),
-        );
-      const activeTickets = ticketResult?.value ?? 0;
+      let activeTickets: number | undefined;
+      if (isStaffViewer) {
+        // Staff-only operational queue size. Players should not learn whether
+        // private tickets exist through the public dashboard JSON.
+        const [ticketResult] = await db
+          .select({ value: count() })
+          .from(tickets)
+          .where(activeTicketStatusFilter());
+        activeTickets = ticketResult?.value ?? 0;
+      }
 
-      // Upcoming votes: elections where status is 'voting_open' or 'draft'
+      // Upcoming votes: staff sees drafts; players only see public vote states.
       const [voteResult] = await db
         .select({ value: count() })
         .from(elections)
-        .where(
-          or(
-            eq(elections.status, 'voting_open'),
-            eq(elections.status, 'draft'),
-          ),
-        );
+        .where(upcomingVoteStatusFilter(isStaffViewer));
       const upcomingVotes = voteResult?.value ?? 0;
 
       // Player count: active AND alive players
@@ -77,12 +104,15 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         );
       const activeBills = billResult?.value ?? 0;
 
-      // Active mod actions
-      const [modResult] = await db
-        .select({ value: count() })
-        .from(modActions)
-        .where(eq(modActions.isActive, true));
-      const activeModActions = modResult?.value ?? 0;
+      let activeModActions: number | undefined;
+      if (isStaffViewer) {
+        // Staff-only moderation queue size. Public dashboard must not expose it.
+        const [modResult] = await db
+          .select({ value: count() })
+          .from(modActions)
+          .where(eq(modActions.isActive, true));
+        activeModActions = modResult?.value ?? 0;
+      }
 
       // Current sim tick
       const [clock] = await db.select().from(simulationClock).limit(1);
@@ -92,78 +122,115 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       // === Previous-week counts (for trend deltas) ===
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       let prevWeek: {
-        activeTickets: number;
+        activeTickets?: number;
         upcomingVotes: number;
         playerCount: number;
         activeBills: number;
-        activeModActions: number;
+        activeModActions?: number;
       } | null = null;
 
       try {
-        // Run the 5 queries in parallel — they're fully independent.
-        const [
-          [prevTicketResult],
-          [prevVoteResult],
-          [prevPlayerResult],
-          [prevBillResult],
-          [prevModResult],
-        ] = await Promise.all([
-          db.select({ value: count() }).from(tickets).where(and(
-            or(
-              eq(tickets.status, 'open'),
-              eq(tickets.status, 'in_progress'),
-              eq(tickets.status, 'waiting'),
-              eq(tickets.status, 'resolved'),
-            ),
-            lt(tickets.createdAt, sevenDaysAgo),
-          )),
-          db.select({ value: count() }).from(elections).where(and(
-            or(
-              eq(elections.status, 'voting_open'),
-              eq(elections.status, 'draft'),
-            ),
-            lt(elections.createdAt, sevenDaysAgo),
-          )),
-          db.select({ value: count() }).from(players).where(and(
-            eq(players.isActive, true),
-            eq(players.isAlive, true),
-            lt(players.registeredAt, sevenDaysAgo),
-          )),
-          db.select({ value: count() }).from(bills).where(and(
-            or(
-              eq(bills.status, 'submitted'),
-              eq(bills.status, 'voting'),
-            ),
-            lt(bills.submittedAt, sevenDaysAgo),
-          )),
-          db.select({ value: count() }).from(modActions).where(and(
-            eq(modActions.isActive, true),
-            lt(modActions.createdAt, sevenDaysAgo),
-          )),
-        ]);
+        if (isStaffViewer) {
+          // Run the 5 queries in parallel — they're fully independent.
+          const [
+            [prevTicketResult],
+            [prevVoteResult],
+            [prevPlayerResult],
+            [prevBillResult],
+            [prevModResult],
+          ] = await Promise.all([
+            db.select({ value: count() }).from(tickets).where(and(
+              activeTicketStatusFilter(),
+              lt(tickets.createdAt, sevenDaysAgo),
+            )),
+            db.select({ value: count() }).from(elections).where(and(
+              upcomingVoteStatusFilter(isStaffViewer),
+              lt(elections.createdAt, sevenDaysAgo),
+            )),
+            db.select({ value: count() }).from(players).where(and(
+              eq(players.isActive, true),
+              eq(players.isAlive, true),
+              lt(players.registeredAt, sevenDaysAgo),
+            )),
+            db.select({ value: count() }).from(bills).where(and(
+              or(
+                eq(bills.status, 'submitted'),
+                eq(bills.status, 'voting'),
+              ),
+              lt(bills.submittedAt, sevenDaysAgo),
+            )),
+            db.select({ value: count() }).from(modActions).where(and(
+              eq(modActions.isActive, true),
+              lt(modActions.createdAt, sevenDaysAgo),
+            )),
+          ]);
 
-        prevWeek = {
-          activeTickets: prevTicketResult?.value ?? 0,
-          upcomingVotes: prevVoteResult?.value ?? 0,
-          playerCount: prevPlayerResult?.value ?? 0,
-          activeBills: prevBillResult?.value ?? 0,
-          activeModActions: prevModResult?.value ?? 0,
-        };
+          prevWeek = {
+            activeTickets: prevTicketResult?.value ?? 0,
+            upcomingVotes: prevVoteResult?.value ?? 0,
+            playerCount: prevPlayerResult?.value ?? 0,
+            activeBills: prevBillResult?.value ?? 0,
+            activeModActions: prevModResult?.value ?? 0,
+          };
+        } else {
+          const [
+            [prevVoteResult],
+            [prevPlayerResult],
+            [prevBillResult],
+          ] = await Promise.all([
+            db.select({ value: count() }).from(elections).where(and(
+              upcomingVoteStatusFilter(false),
+              lt(elections.createdAt, sevenDaysAgo),
+            )),
+            db.select({ value: count() }).from(players).where(and(
+              eq(players.isActive, true),
+              eq(players.isAlive, true),
+              lt(players.registeredAt, sevenDaysAgo),
+            )),
+            db.select({ value: count() }).from(bills).where(and(
+              or(
+                eq(bills.status, 'submitted'),
+                eq(bills.status, 'voting'),
+              ),
+              lt(bills.submittedAt, sevenDaysAgo),
+            )),
+          ]);
+
+          prevWeek = {
+            upcomingVotes: prevVoteResult?.value ?? 0,
+            playerCount: prevPlayerResult?.value ?? 0,
+            activeBills: prevBillResult?.value ?? 0,
+          };
+        }
       } catch (err) {
         fastify.log.warn({ err }, 'Failed to compute prevWeek dashboard counts');
         // prevWeek stays null
       }
 
-      return {
-        activeTickets,
+      const overview: {
+        activeTickets?: number;
+        upcomingVotes: number;
+        playerCount: number;
+        activeBills: number;
+        activeModActions?: number;
+        currentSimTick: number;
+        currentSimDate: string | null;
+        prevWeek: typeof prevWeek;
+      } = {
         upcomingVotes,
         playerCount,
         activeBills,
-        activeModActions,
         currentSimTick,
         currentSimDate,
         prevWeek,
       };
+
+      if (isStaffViewer) {
+        overview.activeTickets = activeTickets ?? 0;
+        overview.activeModActions = activeModActions ?? 0;
+      }
+
+      return overview;
     },
   );
 
@@ -171,8 +238,9 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/api/dashboard/activity',
     { preHandler: [requireAuth] },
-    async () => {
+    async (request) => {
       const db = fastify.db;
+      const isStaffViewer = request.player?.isStaff ?? false;
       const items: {
         type: string;
         system: string;
@@ -182,16 +250,18 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       }[] = [];
 
       // --- Recent ticket messages (last 20) ---
-      const recentMessages = await db
-        .select({
-          content: ticketMessages.content,
-          createdAt: ticketMessages.createdAt,
-          authorId: ticketMessages.authorId,
-          ticketId: ticketMessages.ticketId,
-        })
-        .from(ticketMessages)
-        .orderBy(desc(ticketMessages.createdAt))
-        .limit(20);
+      const recentMessages = isStaffViewer
+        ? await db
+          .select({
+            content: ticketMessages.content,
+            createdAt: ticketMessages.createdAt,
+            authorId: ticketMessages.authorId,
+            ticketId: ticketMessages.ticketId,
+          })
+          .from(ticketMessages)
+          .orderBy(desc(ticketMessages.createdAt))
+          .limit(20)
+        : [];
 
       // Collect unique player IDs for name resolution
       const playerIds = new Set<string>();
@@ -217,17 +287,30 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       }
 
       // --- Recent player events ---
-      const recentEvents = await db
-        .select({
-          eventType: playerEventLog.eventType,
-          description: playerEventLog.description,
-          createdAt: playerEventLog.createdAt,
-          playerId: playerEventLog.playerId,
-          triggeredById: playerEventLog.triggeredById,
-        })
-        .from(playerEventLog)
-        .orderBy(desc(playerEventLog.createdAt))
-        .limit(20);
+      const recentEvents = isStaffViewer
+        ? await db
+          .select({
+            eventType: playerEventLog.eventType,
+            description: playerEventLog.description,
+            createdAt: playerEventLog.createdAt,
+            playerId: playerEventLog.playerId,
+            triggeredById: playerEventLog.triggeredById,
+          })
+          .from(playerEventLog)
+          .orderBy(desc(playerEventLog.createdAt))
+          .limit(20)
+        : await db
+          .select({
+            eventType: playerEventLog.eventType,
+            description: playerEventLog.description,
+            createdAt: playerEventLog.createdAt,
+            playerId: playerEventLog.playerId,
+            triggeredById: playerEventLog.triggeredById,
+          })
+          .from(playerEventLog)
+          .where(inArray(playerEventLog.eventType, PUBLIC_DASHBOARD_EVENT_TYPES))
+          .orderBy(desc(playerEventLog.createdAt))
+          .limit(20);
 
       for (const event of recentEvents) {
         playerIds.add(event.playerId);
@@ -235,17 +318,19 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       }
 
       // --- Recent mod actions ---
-      const recentModActions = await db
-        .select({
-          type: modActions.type,
-          reason: modActions.reason,
-          createdAt: modActions.createdAt,
-          moderatorId: modActions.moderatorId,
-          targetPlayerId: modActions.targetPlayerId,
-        })
-        .from(modActions)
-        .orderBy(desc(modActions.createdAt))
-        .limit(20);
+      const recentModActions = isStaffViewer
+        ? await db
+          .select({
+            type: modActions.type,
+            reason: modActions.reason,
+            createdAt: modActions.createdAt,
+            moderatorId: modActions.moderatorId,
+            targetPlayerId: modActions.targetPlayerId,
+          })
+          .from(modActions)
+          .orderBy(desc(modActions.createdAt))
+          .limit(20)
+        : [];
 
       for (const action of recentModActions) {
         playerIds.add(action.moderatorId);

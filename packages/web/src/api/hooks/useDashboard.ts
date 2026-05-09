@@ -2,19 +2,19 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../client';
 
 export interface DashboardOverview {
-  activeTickets: number;
+  activeTickets?: number;
   upcomingVotes: number;
   playerCount: number;
   activeBills: number;
-  activeModActions: number;
+  activeModActions?: number;
   currentSimTick: number;
   currentSimDate: string | null;
   prevWeek: {
-    activeTickets: number;
+    activeTickets?: number;
     upcomingVotes: number;
     playerCount: number;
     activeBills: number;
-    activeModActions: number;
+    activeModActions?: number;
   } | null;
 }
 

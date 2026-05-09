@@ -4,15 +4,16 @@ import {
   TextInputBuilder,
   TextInputStyle,
   ActionRowBuilder,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
   type ChatInputCommandInteraction,
   type ModalSubmitInteraction,
-  ComponentType,
+  type TextChannel,
+  type NewsChannel,
+  type ThreadChannel,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { elections, players } from '@hansard/db';
-import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { REACTION_EMOJI, REACTION_COMPATIBLE_METHODS } from '@hansard/shared';
+import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
@@ -29,7 +30,15 @@ const CHANCELLOR_ONLY_TYPES = new Set([
  * Flow:
  * 1. User runs /vote create
  * 2. Bot shows a modal with: title, description, type, method, majority type
- * 3. On submit, bot creates the election via the API
+ * 3. On submit, bot creates the election in the DB
+ * 4. If `interface=reactions` was selected:
+ *    - The bot posts the vote embed in the current channel and seeds it
+ *      with the reaction emoji for the chosen method.
+ *    - Players cast votes by clicking reactions; the MessageReactionAdd
+ *      listener (events/messageReactionAdd.ts) records ballots.
+ *    - Reactions mode is only allowed for `yea_nay_abstain` and `fptp`.
+ *      Ranked methods (ranked_choice / stv / approval / two_round_runoff /
+ *      exhaustive_ballot / proportional) reject with an error.
  *
  * Permission:
  * - Any player can create: referendum, party_primary, confidence_vote, custom
@@ -88,6 +97,16 @@ const command: Command = {
               { name: 'Supermajority (2/3)', value: 'supermajority' },
               { name: 'Unanimous', value: 'unanimous' },
             ),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('interface')
+            .setDescription('How players cast votes (defaults to buttons)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Buttons (private/ephemeral)', value: 'buttons' },
+              { name: 'Reactions (public, on the embed)', value: 'reactions' },
+            ),
         ),
     ) as SlashCommandBuilder,
 
@@ -98,10 +117,25 @@ const command: Command = {
     const electionType = interaction.options.getString('type', true);
     const method = interaction.options.getString('method', true);
     const majority = interaction.options.getString('majority') ?? 'simple';
+    const iface = interaction.options.getString('interface') ?? 'buttons';
 
-    // Show modal for title and description
+    // Reject reaction mode early for incompatible methods.
+    // (Only `yea_nay_abstain` and `fptp` map cleanly to a small set of emoji.)
+    if (iface === 'reactions' && !REACTION_COMPATIBLE_METHODS.includes(method as never)) {
+      await interaction.reply({
+        embeds: [
+          errorEmbed(
+            `Reaction-mode voting is only supported for **Yea/Nay/Abstain** and **First Past the Post**. Method \`${method}\` requires the buttons interface.`,
+          ),
+        ],
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Show modal for title and description. Carry the iface choice through customId.
     const modal = new ModalBuilder()
-      .setCustomId(`vote-create:${electionType}:${method}:${majority}`)
+      .setCustomId(`vote-create:${electionType}:${method}:${majority}:${iface}`)
       .setTitle('Create Vote');
 
     const titleInput = new TextInputBuilder()
@@ -141,11 +175,17 @@ const command: Command = {
 /**
  * Handle the vote-create modal submission.
  * Called from the interaction router.
+ *
+ * customId shape: vote-create:<type>:<method>:<majority>:<iface>
+ * `iface` is appended in the slash handler — older customIds without it
+ * are still tolerated by defaulting to `buttons`.
  */
 export async function handleVoteCreateModal(
   interaction: ModalSubmitInteraction,
 ): Promise<void> {
-  const [, electionType, method, majority] = interaction.customId.split(':');
+  const parts = interaction.customId.split(':');
+  const [, electionType, method, majority, ifaceRaw] = parts;
+  const iface = ifaceRaw === 'reactions' ? 'reactions' : 'buttons';
 
   // Re-check permission for restricted types — modal submits don't re-run
   // the slash command's permission logic.
@@ -159,6 +199,21 @@ export async function handleVoteCreateModal(
       });
       return;
     }
+  }
+
+  // Defensive: reject reaction mode for ranked methods on the modal side too,
+  // even though the slash command should have caught it (someone could craft
+  // a modal directly).
+  if (iface === 'reactions' && !REACTION_COMPATIBLE_METHODS.includes(method as never)) {
+    await interaction.reply({
+      embeds: [
+        errorEmbed(
+          `Reaction-mode voting is not supported for method \`${method}\`. Use buttons.`,
+        ),
+      ],
+      ephemeral: true,
+    });
+    return;
   }
 
   const title = interaction.fields.getTextInputValue('title');
@@ -196,6 +251,8 @@ export async function handleVoteCreateModal(
     return;
   }
 
+  const useReactions = iface === 'reactions';
+
   let electionId: string;
   try {
     const [row] = await db
@@ -210,6 +267,7 @@ export async function handleVoteCreateModal(
         votingClosesAt,
         status: 'voting_open',
         createdById: creator.id,
+        useReactions,
       })
       .returning({ id: elections.id });
     electionId = row.id;
@@ -242,22 +300,106 @@ export async function handleVoteCreateModal(
     constitutional_amendment: 'Constitutional Amendment',
   };
 
-  const embed = createEmbed({
-    title: title,
-    description: description ? `> ${description}` : undefined,
+  const baseFields = [
+    { name: 'Type', value: typeLabels[electionType] ?? electionType, inline: true },
+    { name: 'Method', value: methodLabels[method] ?? method, inline: true },
+    { name: 'Closes', value: `<t:${Math.floor(votingClosesAt.getTime() / 1000)}:R>`, inline: true },
+    ...(method === 'yea_nay_abstain'
+      ? [{ name: 'Majority', value: majority.charAt(0).toUpperCase() + majority.slice(1), inline: true }]
+      : []),
+    { name: 'Election ID', value: `\`${electionId}\``, inline: false },
+  ];
+
+  // ---- Buttons mode: just confirm to the creator (existing behaviour) ----
+  if (!useReactions) {
+    const embed = createEmbed({
+      title,
+      description: description ? `> ${description}` : undefined,
+      system: 'voting',
+      fields: baseFields,
+    });
+    await interaction.reply({ embeds: [embed] });
+    return;
+  }
+
+  // ---- Reactions mode: post a public embed in the channel and seed reactions ----
+  const channel = interaction.channel;
+  if (!channel || !('send' in channel)) {
+    await interaction.reply({
+      embeds: [errorEmbed('Reaction-mode voting must be created in a text channel.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const reactionInstructions =
+    method === 'yea_nay_abstain'
+      ? `React with ${REACTION_EMOJI.YEA} for **Yea**, ${REACTION_EMOJI.NAY} for **Nay**, or ${REACTION_EMOJI.ABSTAIN} for **Abstain**.\nYour reaction is removed once recorded; you may change your vote by reacting again.`
+      : `React with the number matching your preferred candidate. Use \`/candidate-list\` to see candidates by position.\n*Note: candidates must be registered before votes are cast — restart the vote if you add candidates after.*`;
+
+  const reactionEmbed = createEmbed({
+    title,
+    description: [
+      description ? `> ${description}\n` : '',
+      '**This is a public reaction vote.**',
+      reactionInstructions,
+    ]
+      .filter(Boolean)
+      .join('\n'),
     system: 'voting',
-    fields: [
-      { name: 'Type', value: typeLabels[electionType] ?? electionType, inline: true },
-      { name: 'Method', value: methodLabels[method] ?? method, inline: true },
-      { name: 'Closes', value: `<t:${Math.floor(votingClosesAt.getTime() / 1000)}:R>`, inline: true },
-      ...(method === 'yea_nay_abstain'
-        ? [{ name: 'Majority', value: majority.charAt(0).toUpperCase() + majority.slice(1), inline: true }]
-        : []),
-      { name: 'Election ID', value: `\`${electionId}\``, inline: false },
-    ],
+    fields: baseFields,
   });
 
-  await interaction.reply({ embeds: [embed] });
+  let posted: Awaited<ReturnType<TextChannel['send']>>;
+  try {
+    posted = await (channel as TextChannel | NewsChannel | ThreadChannel).send({ embeds: [reactionEmbed] });
+  } catch (error) {
+    // Roll back: mark election cancelled so it doesn't sit orphaned.
+    await db
+      .update(elections)
+      .set({ status: 'cancelled', updatedAt: new Date() })
+      .where(eq(elections.id, electionId));
+    const message = error instanceof Error ? error.message : 'Failed to post vote message';
+    await interaction.reply({ embeds: [errorEmbed(message)], ephemeral: true });
+    return;
+  }
+
+  // Persist the message + channel IDs so MessageReactionAdd can match.
+  await db
+    .update(elections)
+    .set({
+      discordMessageId: posted.id,
+      discordChannelId: posted.channelId,
+      updatedAt: new Date(),
+    })
+    .where(eq(elections.id, electionId));
+
+  // Seed reactions. For yea_nay_abstain we add all three immediately; for FPTP
+  // candidates are registered separately and reactions are seeded later via
+  // /candidate-submit completion or a follow-up command.
+  if (method === 'yea_nay_abstain') {
+    try {
+      await posted.react(REACTION_EMOJI.YEA);
+      await posted.react(REACTION_EMOJI.NAY);
+      await posted.react(REACTION_EMOJI.ABSTAIN);
+    } catch (error) {
+      console.error(`[vote-create] failed to seed reactions on ${posted.id}:`, error);
+      // Non-fatal — the election is recorded; staff can re-seed manually.
+    }
+  }
+  // FPTP: candidate emoji are seeded by the candidate-list flow once
+  // candidates are registered (see candidateSubmit.ts — TODO follow-up).
+
+  await interaction.reply({
+    embeds: [
+      createEmbed({
+        title: 'Reaction Vote Posted',
+        description: `The vote has been posted in this channel. Players cast their ballot by reacting.\n\nElection ID: \`${electionId}\``,
+        system: 'voting',
+      }),
+    ],
+    ephemeral: true,
+  });
 }
 
 export default command;

@@ -50,7 +50,7 @@ export interface Election {
   votingOpensAt: string;
   votingClosesAt: string;
   status: string;
-  results?: ElectionResults;
+  results?: ElectionResults | null;
   relatedBillId?: string;
   relatedBillSlug?: string | null;
   createdById: string;
@@ -62,9 +62,15 @@ export interface Election {
 
 interface ElectionFilters {
   status?: string;
+  /** 'active' | 'past' | 'all' — convenience grouping (ignored if status set). */
+  scope?: 'active' | 'past' | 'all';
   type?: string;
   method?: string;
   forOffice?: string;
+  /** ISO date string lower bound on createdAt. */
+  since?: string;
+  /** ISO date string upper bound on createdAt. */
+  until?: string;
   page?: number;
   limit?: number;
 }
@@ -74,9 +80,12 @@ interface ElectionFilters {
 export function useElections(filters?: ElectionFilters) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
+  if (filters?.scope) params.set('scope', filters.scope);
   if (filters?.type) params.set('type', filters.type);
   if (filters?.method) params.set('method', filters.method);
   if (filters?.forOffice) params.set('forOffice', filters.forOffice);
+  if (filters?.since) params.set('since', filters.since);
+  if (filters?.until) params.set('until', filters.until);
   if (filters?.page) params.set('page', String(filters.page));
   if (filters?.limit) params.set('limit', String(filters.limit));
   const qs = params.toString();

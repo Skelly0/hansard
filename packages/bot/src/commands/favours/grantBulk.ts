@@ -1,5 +1,6 @@
 import {
   SlashCommandBuilder,
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { eq, and, asc, isNull } from 'drizzle-orm';
@@ -16,6 +17,7 @@ import { FavourTransactionType } from '@hansard/shared';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { autocompleteFavourCategory } from './_categoryAutocomplete.js';
 import type { Command } from '../../client.js';
 
 const command: Command = {
@@ -81,6 +83,12 @@ const command: Command = {
       .from(favourCategories)
       .where(eq(favourCategories.isActive, true))
       .orderBy(asc(favourCategories.sortOrder));
+    if (allCategories.length === 0) {
+      await interaction.editReply({
+        embeds: [errorEmbed('No favour categories defined. Staff must run `/favour-category-create` first.')],
+      });
+      return;
+    }
     const category = allCategories.find((c) => c.name.toLowerCase() === categoryName.toLowerCase())
       ?? allCategories.find((c) => c.name.toLowerCase().includes(categoryName.toLowerCase()));
     if (!category) {
@@ -190,6 +198,10 @@ const command: Command = {
     ].filter(Boolean).join('\n');
 
     await interaction.editReply({ embeds: [successEmbed('Bulk Favour Grant', description)] });
+  },
+
+  async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    await autocompleteFavourCategory(interaction);
   },
 };
 

@@ -2,6 +2,7 @@ import {
   Events,
   type Client,
   type Interaction,
+  type AutocompleteInteraction,
   ChatInputCommandInteraction,
   ButtonInteraction,
   ModalSubmitInteraction,
@@ -109,11 +110,41 @@ async function handleSelectMenu(interaction: StringSelectMenuInteraction): Promi
   console.log(`Unhandled select menu interaction: ${interaction.customId}`);
 }
 
+async function handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
+  const command = commands.get(interaction.commandName);
+  if (!command?.autocomplete) {
+    // No handler registered — respond with empty list so Discord doesn't hang.
+    if (!interaction.responded) {
+      try {
+        await interaction.respond([]);
+      } catch {
+        // Token may already be expired; nothing useful to do.
+      }
+    }
+    return;
+  }
+
+  try {
+    await command.autocomplete(interaction);
+  } catch (error) {
+    console.error(`Error in autocomplete for /${interaction.commandName}:`, error);
+    if (!interaction.responded) {
+      try {
+        await interaction.respond([]);
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+}
+
 export function registerInteractionCreateEvent(client: Client): void {
   client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     try {
       if (interaction.isChatInputCommand()) {
         await handleCommand(interaction);
+      } else if (interaction.isAutocomplete()) {
+        await handleAutocomplete(interaction);
       } else if (interaction.isButton()) {
         await handleButton(interaction);
       } else if (interaction.isModalSubmit()) {

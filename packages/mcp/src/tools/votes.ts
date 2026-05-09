@@ -24,8 +24,8 @@ export const registerVoteTools: RegisterToolsFn = (server, ctx) => {
     },
     safeHandler(async (args) => {
       const svc = new VoteService(ctx.db);
-      const elections = await svc.listElections(args as Parameters<VoteService['listElections']>[0]);
-      return jsonResult({ count: elections.length, elections });
+      const { data: elections, total } = await svc.listElections(args as Parameters<VoteService['listElections']>[0]);
+      return jsonResult({ count: elections.length, total, elections });
     }),
   );
 

@@ -5,7 +5,7 @@
  * runoff generation, NPC confirmation, and certification (with auto
  * office-appointment on certified position elections).
  */
-import { eq, and, desc, inArray, isNull } from 'drizzle-orm';
+import { eq, and, inArray, isNull, sql, gte, lte } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import { elections, candidates, ballots, bills, players, officeHolders } from '@hansard/db';
 import type {
@@ -47,13 +47,42 @@ export interface CreateElectionInput {
 
 export interface ListElectionsFilter {
   status?: ElectionStatus;
+  /**
+   * Convenience grouping:
+   *   - 'active'  = anything still in motion (draft → npc_pending)
+   *   - 'past'    = closed votes (tallied, certified, cancelled)
+   *   - 'all' or undefined = no status grouping filter
+   * Ignored if `status` is set (explicit wins).
+   */
+  scope?: 'active' | 'past' | 'all';
   type?: ElectionType;
   method?: VotingMethod;
   forOfficeId?: string;
   createdById?: string;
+  /** ISO date string — only return elections created on/after this. */
+  since?: string;
+  /** ISO date string — only return elections created on/before this. */
+  until?: string;
   limit?: number;
   offset?: number;
+  /** 1-based page number; if provided, overrides `offset`. */
+  page?: number;
 }
+
+/** Statuses considered "active" for the scope filter. */
+const ACTIVE_STATUSES: ElectionStatus[] = [
+  'draft',
+  'nominations_open',
+  'nominations_closed',
+  'voting_open',
+  'voting_closed',
+  'tallied',
+  'runoff_needed',
+  'npc_pending',
+];
+
+/** Statuses considered "past" / archived for the scope filter. */
+const PAST_STATUSES: ElectionStatus[] = ['certified', 'cancelled'];
 
 export interface CastBallotInput {
   electionId: string;
@@ -272,7 +301,12 @@ export class VoteService {
     const conditions = [];
 
     if (filters.status) {
+      // Explicit status wins over scope grouping.
       conditions.push(eq(elections.status, filters.status));
+    } else if (filters.scope === 'active') {
+      conditions.push(inArray(elections.status, ACTIVE_STATUSES));
+    } else if (filters.scope === 'past') {
+      conditions.push(inArray(elections.status, PAST_STATUSES));
     }
     if (filters.type) {
       conditions.push(eq(elections.type, filters.type));
@@ -286,19 +320,41 @@ export class VoteService {
     if (filters.createdById) {
       conditions.push(eq(elections.createdById, filters.createdById));
     }
+    if (filters.since) {
+      const sinceDate = new Date(filters.since);
+      if (!Number.isNaN(sinceDate.getTime())) {
+        conditions.push(gte(elections.createdAt, sinceDate));
+      }
+    }
+    if (filters.until) {
+      const untilDate = new Date(filters.until);
+      if (!Number.isNaN(untilDate.getTime())) {
+        conditions.push(lte(elections.createdAt, untilDate));
+      }
+    }
 
-    const baseQuery = this.db
-      .select()
-      .from(elections)
-      .orderBy(desc(elections.createdAt))
-      .limit(filters.limit ?? 50)
-      .offset(filters.offset ?? 0);
+    const limit = Math.max(1, Math.min(filters.limit ?? 50, 200));
+    const offset = filters.page && filters.page > 0
+      ? (filters.page - 1) * limit
+      : Math.max(0, filters.offset ?? 0);
 
-    const rows = conditions.length > 0
-      ? await baseQuery.where(and(...conditions))
-      : await baseQuery;
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    return this.enrichElectionsWithSlugs(rows);
+    // Sort by recency: prefer the most recent meaningful timestamp
+    // (votingClosesAt for past votes, createdAt for everything else).
+    const orderExpr = sql`COALESCE(${elections.votingClosesAt}, ${elections.createdAt}) DESC`;
+
+    const [rows, totalRow] = await Promise.all([
+      whereClause
+        ? this.db.select().from(elections).where(whereClause).orderBy(orderExpr).limit(limit).offset(offset)
+        : this.db.select().from(elections).orderBy(orderExpr).limit(limit).offset(offset),
+      whereClause
+        ? this.db.select({ count: sql<number>`count(*)::int` }).from(elections).where(whereClause)
+        : this.db.select({ count: sql<number>`count(*)::int` }).from(elections),
+    ]);
+
+    const enriched = await this.enrichElectionsWithSlugs(rows);
+    return { data: enriched, total: totalRow[0]?.count ?? enriched.length };
   }
 
   async getElectionResults(id: string) {
@@ -318,23 +374,51 @@ export class VoteService {
     // Respect sealed results — only show after voting_closed or later
     const config = election.config as ElectionConfig;
     if (config.sealedResults && election.status === 'voting_open') {
-      return { sealed: true, status: election.status };
+      return { sealed: true, status: election.status, results: null };
     }
 
+    // Return the ElectionResults shape inline so the web hook (typed as
+    // ElectionResults) can read finalTallies/winners/passed directly.
+    // Also include status + a sealed=false flag for callers that care.
+    const results = (election.results as ElectionResults | null) ?? null;
+    if (!results) {
+      return { sealed: false, status: election.status, results: null };
+    }
     return {
+      ...results,
       sealed: false,
       status: election.status,
-      results: election.results,
     };
   }
 
   async getTurnout(id: string) {
-    const ballotCount = await this.db
-      .select()
+    const [election] = await this.db
+      .select({ results: elections.results })
+      .from(elections)
+      .where(eq(elections.id, id))
+      .limit(1);
+
+    const ballotRows = await this.db
+      .select({ id: ballots.id })
       .from(ballots)
       .where(eq(ballots.electionId, id));
 
-    return { electionId: id, totalBallots: ballotCount.length };
+    const voted = ballotRows.length;
+    // We don't have a true eligible-voter cohort yet (eligibility filters are
+    // a TODO on the schema), so fall back to the recorded turnout numerator
+    // from the latest tally if present. Otherwise treat votes cast as the
+    // denominator so the page renders meaningful numbers.
+    const recordedTurnout = (election?.results as ElectionResults | null)?.turnout;
+    const eligible = recordedTurnout && recordedTurnout > 0 ? recordedTurnout : voted;
+    const turnoutPct = eligible > 0 ? (voted / eligible) * 100 : 0;
+
+    return {
+      electionId: id,
+      eligible,
+      voted,
+      turnoutPct,
+      totalBallots: voted, // legacy field — kept for any older consumers
+    };
   }
 
   async getEligibility(electionId: string, playerId: string) {

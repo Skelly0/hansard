@@ -44,11 +44,16 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const query = request.query as Record<string, string>;
       return service.listElections({
         status: query.status as any,
+        scope: query.scope as any,
         type: query.type as any,
         method: query.method as any,
         forOfficeId: query.forOfficeId,
+        createdById: query.createdById,
+        since: query.since,
+        until: query.until,
         limit: query.limit ? parseInt(query.limit, 10) : undefined,
         offset: query.offset ? parseInt(query.offset, 10) : undefined,
+        page: query.page ? parseInt(query.page, 10) : undefined,
       });
     },
   );

@@ -7,6 +7,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 COPY packages/api/package.json packages/api/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
+COPY packages/api/package.json packages/api/
 COPY packages/bot/package.json packages/bot/
 RUN pnpm install --frozen-lockfile
 
@@ -15,6 +16,7 @@ COPY tsconfig.base.json ./
 COPY packages/api/ packages/api/
 COPY packages/db/ packages/db/
 COPY packages/shared/ packages/shared/
+COPY packages/api/ packages/api/
 COPY packages/bot/ packages/bot/
 
 # Run

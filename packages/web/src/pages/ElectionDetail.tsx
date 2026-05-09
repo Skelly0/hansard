@@ -220,6 +220,16 @@ export function ElectionDetail() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Results area */}
         <div className="lg:col-span-2">
+          {/* Cancelled note even if no results were ever tallied */}
+          {!results && election.status === 'cancelled' && (
+            <div className="card border-l-status-rejected mb-4">
+              <p className="text-label-ui text-text-tertiary mb-1">Vote Cancelled</p>
+              <p className="text-body-sm text-text-secondary">
+                This vote was cancelled before completion. No final tally was recorded.
+              </p>
+            </div>
+          )}
+
           {/* Results visualization */}
           {results && (
             <div className="mb-6">
@@ -245,6 +255,28 @@ export function ElectionDetail() {
                       {results.passed ? 'Motion Passed' : 'Motion Failed'}
                     </Tag>
                   )}
+                </div>
+              )}
+
+              {/* Pass/fail callout for yea/nay motions where no "winner" list
+                  is built (e.g. tallied with passed=false and no candidates). */}
+              {(!results.winners || results.winners.length === 0) &&
+                results.passed !== undefined && (
+                <div className="card border-l-accent-primary mb-4">
+                  <p className="text-label-ui text-text-tertiary mb-1">Final Outcome</p>
+                  <Tag color={results.passed ? 'passed' : 'rejected'}>
+                    {results.passed ? 'Motion Passed' : 'Motion Failed'}
+                  </Tag>
+                </div>
+              )}
+
+              {/* Cancelled state — show a clear note instead of empty bars */}
+              {election.status === 'cancelled' && (
+                <div className="card border-l-status-rejected mb-4">
+                  <p className="text-label-ui text-text-tertiary mb-1">Vote Cancelled</p>
+                  <p className="text-body-sm text-text-secondary">
+                    This vote was cancelled before completion. No final tally was recorded.
+                  </p>
                 </div>
               )}
 

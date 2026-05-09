@@ -1,4 +1,4 @@
-import type { APIInteractionGuildMember, GuildMember } from 'discord.js';
+import { GuildMember, type APIInteractionGuildMember } from 'discord.js';
 
 /**
  * Staff role name — checked against member roles.
@@ -17,20 +17,30 @@ type InteractionMember = APIInteractionGuildMember | GuildMember | null | undefi
  * 2. (Future) Whether the member has `isStaff` set in the DB
  *
  * Returns true if either condition is met.
+ *
+ * Accepts the full `interaction.member` union — `APIInteractionGuildMember`
+ * only carries role IDs (no names), so without a `Guild` lookup we cannot
+ * resolve the staff role name there. In practice the bot has the
+ * `GUILD_MEMBERS` intent so call sites always receive a real `GuildMember`;
+ * the API-only branch is a safe fallback.
  */
 export async function isStaff(member: InteractionMember): Promise<boolean> {
   if (!member) {
     return false;
   }
 
-  const roles = member.roles;
-  const hasStaffRole = Array.isArray(roles)
-    ? STAFF_ROLE_ID !== undefined && roles.includes(STAFF_ROLE_ID)
-    : roles.cache.some(
-        (role) => role.name === STAFF_ROLE_NAME || role.id === STAFF_ROLE_ID,
-      );
+  // Role-based check — only resolvable on a full GuildMember (cache has names).
+  if (member instanceof GuildMember) {
+    const hasStaffRole = member.roles.cache.some(
+      (role) => role.name === STAFF_ROLE_NAME || role.id === STAFF_ROLE_ID,
+    );
 
-  if (hasStaffRole) {
+    if (hasStaffRole) {
+      return true;
+    }
+  }
+
+  if (STAFF_ROLE_ID && Array.isArray(member.roles) && member.roles.includes(STAFF_ROLE_ID)) {
     return true;
   }
 

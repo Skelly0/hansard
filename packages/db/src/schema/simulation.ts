@@ -1,4 +1,5 @@
 import { pgTable, uuid, varchar, integer, boolean, timestamp, text, jsonb } from 'drizzle-orm/pg-core';
+import type { AgingConfig } from '@hansard/shared';
 import { players } from './players';
 
 // The simulation clock tracks in-game time independently of real time.
@@ -15,6 +16,9 @@ export const simulationClock = pgTable('simulation_clock', {
   // Configuration
   tickUnit: varchar('tick_unit', { length: 32 }).default('month').notNull(),  // 'day' | 'week' | 'month' | 'year'
   startDate: varchar('start_date', { length: 32 }).notNull(),
+
+  // Aging / mortality knobs. Null = use defaults from simulationService.
+  agingConfig: jsonb('aging_config').$type<AgingConfig>(),
 
   // Season metadata
   seasonName: varchar('season_name', { length: 128 }).notNull(),

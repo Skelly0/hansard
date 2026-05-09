@@ -1,5 +1,6 @@
 import {
   SlashCommandBuilder,
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { eq, and, isNull, asc } from 'drizzle-orm';
@@ -8,6 +9,7 @@ import { PlayerEventType } from '@hansard/shared';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { autocompleteOffice } from './_officeAutocomplete.js';
 import type { Command } from '../../client.js';
 
 const command: Command = {
@@ -209,6 +211,10 @@ const command: Command = {
     const embed = successEmbed('Appointment Confirmed', description);
 
     await interaction.editReply({ embeds: [embed] });
+  },
+
+  async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    await autocompleteOffice(interaction);
   },
 };
 

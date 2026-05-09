@@ -11,6 +11,7 @@
   "dependencies": {
     "@hansard/api": "workspace:*",
     "discord.js": "^14.16.0",
+    "@hansard/api": "workspace:*",
     "@hansard/db": "workspace:*",
     "@hansard/shared": "workspace:*",
     "dotenv": "^16.4.0",

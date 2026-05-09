@@ -4,8 +4,8 @@ import {
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { players, parties, factions, playerEventLog } from '@hansard/db';
-import { PlayerEventType } from '@hansard/shared';
+import { players, parties, factions, playerEventLog, simulationClock } from '@hansard/db';
+import { PlayerEventType, birthDateForAge } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
@@ -94,8 +94,9 @@ async function handleCharacterCreate(interaction: ChatInputCommandInteraction): 
     return;
   }
 
-  const currentYear = new Date().getFullYear();
-  const birthDate = `${currentYear - startingAge}-01-01`;
+  const [clock] = await db.select().from(simulationClock).limit(1);
+  const simNow = clock?.currentDate ?? `${new Date().getUTCFullYear()}-01-01`;
+  const birthDate = birthDateForAge(simNow, startingAge);
 
   try {
     let playerId: string;

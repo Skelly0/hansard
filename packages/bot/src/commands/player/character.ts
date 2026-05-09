@@ -25,7 +25,9 @@ import {
   favourBalances,
   favourCategories,
   playerEventLog,
+  simulationClock,
 } from '@hansard/db';
+import { birthDateForAge } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import type { Command } from '../../client.js';
 
@@ -463,6 +465,10 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       .where(eq(players.discordId, interaction.user.id))
       .limit(1);
 
+    const [clock] = await db.select().from(simulationClock).limit(1);
+    const simNow = clock?.currentDate ?? `${new Date().getUTCFullYear()}-01-01`;
+    const birthDate = birthDateForAge(simNow, startingAge);
+
     let playerId: string;
 
     if (existingPlayer.length > 0) {
@@ -476,6 +482,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
           characterPortraitUrl: portraitUrl,
           startingAge,
           currentAge: startingAge,
+          birthDate,
           factionId: selectedFactionId,
           partyId: selectedPartyId,
           isActive: true,
@@ -493,6 +500,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
           characterPortraitUrl: portraitUrl,
           startingAge,
           currentAge: startingAge,
+          birthDate,
           factionId: selectedFactionId,
           partyId: selectedPartyId,
         })

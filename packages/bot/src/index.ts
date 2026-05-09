@@ -1,53 +1,14 @@
 import 'dotenv/config';
 
-import { readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { client, commands, type Command } from './client.js';
+import { client, commands } from './client.js';
+import { loadCommands } from './commandLoader.js';
 import { registerReadyEvent } from './events/ready.js';
 import { registerInteractionCreateEvent } from './events/interactionCreate.js';
 import { registerMessageReactionAddEvent } from './events/messageReactionAdd.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-/**
- * Recursively collect all .ts/.js files from a directory.
- */
-function collectCommandFiles(dir: string): string[] {
-  const results: string[] = [];
-
-  for (const entry of readdirSync(dir)) {
-    const fullPath = join(dir, entry);
-    const stat = statSync(fullPath);
-
-    if (stat.isDirectory()) {
-      results.push(...collectCommandFiles(fullPath));
-    } else if (entry.endsWith('.ts') || entry.endsWith('.js')) {
-      results.push(fullPath);
-    }
-  }
-
-  return results;
-}
-
-/** Dynamically load all command modules from the commands directory (recursively). */
-async function loadCommands(): Promise<void> {
-  const commandsDir = join(__dirname, 'commands');
-  const commandFiles = collectCommandFiles(commandsDir);
-
-  for (const filePath of commandFiles) {
-    const module = (await import(filePath)) as { default: Command };
-    const command = module.default;
-
-    if (!command?.data?.name) {
-      console.warn(`Skipping ${filePath} — no valid command export found.`);
-      continue;
-    }
-
-    commands.set(command.data.name, command);
-    console.log(`Loaded command: /${command.data.name}`);
-  }
-}
 
 /** Main boot sequence. */
 async function main(): Promise<void> {
@@ -64,7 +25,7 @@ async function main(): Promise<void> {
   registerMessageReactionAddEvent(client);
 
   // Load commands
-  await loadCommands();
+  await loadCommands(join(__dirname, 'commands'), commands);
 
   // Login
   await client.login(token);

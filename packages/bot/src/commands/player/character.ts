@@ -28,6 +28,11 @@ import {
   simulationClock,
 } from '@hansard/db';
 import { birthDateForAge } from '@hansard/shared';
+import { calculateStartingAgeFavourBonus } from '@hansard/api/services/playerService';
+import {
+  grantStartingFactionFavours,
+  type StartingFactionFavourGrant,
+} from '@hansard/api/services/favourService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import type { Command } from '../../client.js';
 
@@ -36,22 +41,6 @@ import type { Command } from '../../client.js';
 const MIN_STARTING_AGE = 18;
 const MAX_STARTING_AGE = 70;
 const DEFAULT_STARTING_AGE = 30;
-
-const FAVOUR_BONUS_TIERS = [
-  { minAge: 35, totalFavours: 1 },
-  { minAge: 45, totalFavours: 2 },
-  { minAge: 60, totalFavours: 3 },
-];
-
-function getFavourBonus(age: number): number {
-  let bonus = 0;
-  for (const tier of FAVOUR_BONUS_TIERS) {
-    if (age >= tier.minAge) {
-      bonus = tier.totalFavours;
-    }
-  }
-  return bonus;
-}
 
 // ─── Health display ────────────────────────────────────────────────────────
 
@@ -366,7 +355,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   }
 
   // Step 5: Confirmation
-  const favourBonus = getFavourBonus(startingAge);
+  const favourBonus = calculateStartingAgeFavourBonus(startingAge);
 
   const confirmEmbed = createEmbed({
     title: 'Character Summary',
@@ -392,7 +381,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       ...(favourBonus > 0
         ? [{
             name: 'Starting Favour Bonus',
-            value: `**${favourBonus}** bonus favours for starting at age ${startingAge}.\n*Distribution handled by staff.*`,
+            value: `**${favourBonus}** bonus favours for starting at age ${startingAge}.\n*Applied automatically to the matching favour category for your faction.*`,
           }]
         : []),
     ],
@@ -468,52 +457,70 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     const simNow = clock?.currentDate ?? `${new Date().getUTCFullYear()}-01-01`;
     const birthDate = birthDateForAge(simNow, startingAge);
 
-    let playerId: string;
+    const creationResult = await db.transaction(async (tx) => {
+      let playerId = '';
+      let startingFavourGrant: StartingFactionFavourGrant | null = null;
 
-    if (existingPlayer.length > 0) {
-      playerId = existingPlayer[0].id;
-      await db
-        .update(players)
-        .set({
-          discordUsername: interaction.user.username,
-          characterName,
-          characterBio,
-          characterPortraitUrl: portraitUrl,
-          startingAge,
-          currentAge: startingAge,
-          birthDate,
-          factionId: selectedFactionId,
-          partyId: selectedPartyId,
-          isActive: true,
-          lastActiveAt: new Date(),
-        })
-        .where(eq(players.id, playerId));
-    } else {
-      const [newPlayer] = await db
-        .insert(players)
-        .values({
-          discordId: interaction.user.id,
-          discordUsername: interaction.user.username,
-          characterName,
-          characterBio,
-          characterPortraitUrl: portraitUrl,
-          startingAge,
-          currentAge: startingAge,
-          birthDate,
-          factionId: selectedFactionId,
-          partyId: selectedPartyId,
-        })
-        .returning({ id: players.id });
-      playerId = newPlayer.id;
-    }
+      if (existingPlayer.length > 0) {
+        playerId = existingPlayer[0].id;
+        await tx
+          .update(players)
+          .set({
+            discordUsername: interaction.user.username,
+            characterName,
+            characterBio,
+            characterPortraitUrl: portraitUrl,
+            startingAge,
+            currentAge: startingAge,
+            birthDate,
+            factionId: selectedFactionId,
+            partyId: selectedPartyId,
+            startingFavoursGranted: false,
+            isActive: true,
+            lastActiveAt: new Date(),
+          })
+          .where(eq(players.id, playerId));
+      } else {
+        const [newPlayer] = await tx
+          .insert(players)
+          .values({
+            discordId: interaction.user.id,
+            discordUsername: interaction.user.username,
+            characterName,
+            characterBio,
+            characterPortraitUrl: portraitUrl,
+            startingAge,
+            currentAge: startingAge,
+            birthDate,
+            factionId: selectedFactionId,
+            partyId: selectedPartyId,
+            startingFavoursGranted: false,
+          })
+          .returning({ id: players.id });
+        playerId = newPlayer.id;
+      }
 
-    // Log registration event
-    await db.insert(playerEventLog).values({
-      playerId,
-      eventType: 'registration',
-      description: `${characterName} registered (age ${startingAge}, faction: ${selectedFactionName}${selectedPartyName ? `, party: ${selectedPartyName}` : ''}).`,
-      newValue: { characterName, startingAge, factionName: selectedFactionName, partyName: selectedPartyName },
+      // Log registration event
+      await tx.insert(playerEventLog).values({
+        playerId,
+        eventType: 'registration',
+        description: `${characterName} registered (age ${startingAge}, faction: ${selectedFactionName}${selectedPartyName ? `, party: ${selectedPartyName}` : ''}).`,
+        newValue: { characterName, startingAge, factionName: selectedFactionName, partyName: selectedPartyName },
+      });
+
+      if (favourBonus > 0) {
+        startingFavourGrant = await grantStartingFactionFavours(tx, playerId, selectedFactionId, favourBonus);
+        if (startingFavourGrant) {
+          await tx
+            .update(players)
+            .set({ startingFavoursGranted: true })
+            .where(eq(players.id, playerId));
+        }
+      }
+
+      return { playerId, startingFavourGrant };
     });
+    const { playerId, startingFavourGrant } = creationResult;
 
     // Assign Discord roles
     const member = interaction.guild?.members.cache.get(interaction.user.id)
@@ -556,7 +563,13 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
         `**Age:** ${startingAge}`,
         `**Faction:** ${selectedFactionName}`,
         `**Party:** ${selectedPartyName ?? 'Independent'}`,
-        ...(favourBonus > 0 ? [`\n*${favourBonus} starting favour bonus will be applied by staff.*`] : []),
+        ...(favourBonus > 0
+          ? [
+              startingFavourGrant
+                ? `\n*${favourBonus} starting favour bonus applied to ${startingFavourGrant.categoryName}.*`
+                : `\n*${favourBonus} starting favour bonus recorded, but no active favour category matched ${selectedFactionName}.*`,
+            ]
+          : []),
       ].join('\n'),
     );
 

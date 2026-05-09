@@ -6,6 +6,11 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, parties, factions, playerEventLog, simulationClock } from '@hansard/db';
 import { PlayerEventType, birthDateForAge } from '@hansard/shared';
+import { calculateStartingAgeFavourBonus } from '@hansard/api/services/playerService';
+import {
+  grantStartingFactionFavours,
+  type StartingFactionFavourGrant,
+} from '@hansard/api/services/favourService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
@@ -97,58 +102,78 @@ async function handleCharacterCreate(interaction: ChatInputCommandInteraction): 
   const [clock] = await db.select().from(simulationClock).limit(1);
   const simNow = clock?.currentDate ?? `${new Date().getUTCFullYear()}-01-01`;
   const birthDate = birthDateForAge(simNow, startingAge);
+  const favourBonus = calculateStartingAgeFavourBonus(startingAge);
 
   try {
-    let playerId: string;
-    if (existing) {
-      playerId = existing.id;
-      await db
-        .update(players)
-        .set({
-          discordUsername: targetUser.username,
-          characterName,
-          characterBio,
-          characterPortraitUrl: portraitUrl,
-          startingAge,
-          currentAge: startingAge,
-          birthDate,
-          factionId,
-          partyId,
-          isActive: true,
-        })
-        .where(eq(players.id, playerId));
-    } else {
-      const [created] = await db
-        .insert(players)
-        .values({
-          discordId: targetUser.id,
-          discordUsername: targetUser.username,
-          characterName,
-          characterBio,
-          characterPortraitUrl: portraitUrl,
-          startingAge,
-          currentAge: startingAge,
-          birthDate,
-          factionId,
-          partyId,
-        })
-        .returning({ id: players.id });
-      playerId = created.id;
-    }
-
     const [staffPlayer] = await db
       .select({ id: players.id })
       .from(players)
       .where(eq(players.discordId, interaction.user.id))
       .limit(1);
 
-    await db.insert(playerEventLog).values({
-      playerId,
-      eventType: PlayerEventType.REGISTRATION,
-      description: `${characterName} registered by staff (age ${startingAge}, faction: ${factionDisplay}, party: ${partyDisplay}).`,
-      newValue: { characterName, startingAge, factionId, partyId, createdByStaff: true },
-      triggeredById: staffPlayer?.id ?? null,
+    const creationResult = await db.transaction(async (tx) => {
+      let playerId = '';
+      let startingFavourGrant: StartingFactionFavourGrant | null = null;
+
+      if (existing) {
+        playerId = existing.id;
+        await tx
+          .update(players)
+          .set({
+            discordUsername: targetUser.username,
+            characterName,
+            characterBio,
+            characterPortraitUrl: portraitUrl,
+            startingAge,
+            currentAge: startingAge,
+            birthDate,
+            factionId,
+            partyId,
+            startingFavoursGranted: false,
+            isActive: true,
+          })
+          .where(eq(players.id, playerId));
+      } else {
+        const [created] = await tx
+          .insert(players)
+          .values({
+            discordId: targetUser.id,
+            discordUsername: targetUser.username,
+            characterName,
+            characterBio,
+            characterPortraitUrl: portraitUrl,
+            startingAge,
+            currentAge: startingAge,
+            birthDate,
+            factionId,
+            partyId,
+            startingFavoursGranted: false,
+          })
+          .returning({ id: players.id });
+        playerId = created.id;
+      }
+
+      await tx.insert(playerEventLog).values({
+        playerId,
+        eventType: PlayerEventType.REGISTRATION,
+        description: `${characterName} registered by staff (age ${startingAge}, faction: ${factionDisplay}, party: ${partyDisplay}).`,
+        newValue: { characterName, startingAge, factionId, partyId, createdByStaff: true },
+        triggeredById: staffPlayer?.id ?? null,
+      });
+
+      if (favourBonus > 0) {
+        startingFavourGrant = await grantStartingFactionFavours(tx, playerId, factionId, favourBonus);
+        if (startingFavourGrant) {
+          await tx
+            .update(players)
+            .set({ startingFavoursGranted: true })
+            .where(eq(players.id, playerId));
+        }
+      }
+
+      return { playerId, startingFavourGrant };
     });
+    const { startingFavourGrant } = creationResult;
 
     const embed = successEmbed(
       'Character Created (Staff)',
@@ -157,6 +182,13 @@ async function handleCharacterCreate(interaction: ChatInputCommandInteraction): 
         `**Age:** ${startingAge}`,
         `**Faction:** ${factionDisplay}`,
         `**Party:** ${partyDisplay}`,
+        ...(favourBonus > 0
+          ? [
+              startingFavourGrant
+                ? `**Starting Favours:** ${favourBonus} applied to ${startingFavourGrant.categoryName}`
+                : `**Starting Favours:** ${favourBonus} recorded; no active favour category matched ${factionDisplay}`,
+            ]
+          : []),
       ].join('\n'),
     );
     if (portraitUrl) embed.setThumbnail(portraitUrl);

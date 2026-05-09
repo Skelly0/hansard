@@ -18,6 +18,7 @@ import type {
   ElectionConfig,
 } from '@hansard/shared';
 import { PlayerEventType, birthDateForAge } from '@hansard/shared';
+import { grantStartingFactionFavours } from './favourService.js';
 
 // ============================================================
 // Types for service inputs
@@ -111,6 +112,7 @@ export function calculateStartingAgeFavourBonus(age: number): number {
 /**
  * Create a new player character.
  * Inserts the player record, calculates starting age favour bonus,
+ * applies it to the selected faction's matching favour category when present,
  * and logs a registration event.
  */
 export async function createCharacter(db: Database, data: CreateCharacterInput): Promise<PlayerProfile> {
@@ -122,42 +124,54 @@ export async function createCharacter(db: Database, data: CreateCharacterInput):
 
   const favourBonus = calculateStartingAgeFavourBonus(data.startingAge);
 
-  const [player] = await db.insert(players).values({
-    discordId: data.discordId,
-    discordUsername: data.discordUsername,
-    characterName: data.characterName,
-    characterBio: data.characterBio ?? null,
-    characterPortraitUrl: data.characterPortraitUrl ?? null,
-    startingAge: data.startingAge,
-    currentAge: data.startingAge,
-    birthDate,
-    factionId: data.factionId ?? null,
-    partyId: data.partyId ?? null,
-    profileData: data.profileData ?? null,
-    startingFavoursGranted: favourBonus > 0,
-    isAlive: true,
-    isActive: true,
-    isStaff: false,
-    healthStatus: 'healthy',
-    ailments: [],
-  }).returning();
-
-  // Log registration event
-  await db.insert(playerEventLog).values({
-    playerId: player.id,
-    eventType: PlayerEventType.REGISTRATION,
-    description: `${data.characterName} registered as a new character (age ${data.startingAge})`,
-    newValue: {
+  const player = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(players).values({
+      discordId: data.discordId,
+      discordUsername: data.discordUsername,
       characterName: data.characterName,
+      characterBio: data.characterBio ?? null,
+      characterPortraitUrl: data.characterPortraitUrl ?? null,
       startingAge: data.startingAge,
+      currentAge: data.startingAge,
+      birthDate,
       factionId: data.factionId ?? null,
       partyId: data.partyId ?? null,
-      favourBonus,
-    },
-  });
+      profileData: data.profileData ?? null,
+      startingFavoursGranted: false,
+      isAlive: true,
+      isActive: true,
+      isStaff: false,
+      healthStatus: 'healthy',
+      ailments: [],
+    }).returning();
 
-  // TODO: If favourBonus > 0, create favour transactions in the favours table.
-  // This depends on the favour service being built — for now we just flag it.
+    // Log registration event
+    await tx.insert(playerEventLog).values({
+      playerId: created.id,
+      eventType: PlayerEventType.REGISTRATION,
+      description: `${data.characterName} registered as a new character (age ${data.startingAge})`,
+      newValue: {
+        characterName: data.characterName,
+        startingAge: data.startingAge,
+        factionId: data.factionId ?? null,
+        partyId: data.partyId ?? null,
+        favourBonus,
+      },
+    });
+
+    const startingFavourGrant = await grantStartingFactionFavours(tx, created.id, data.factionId, favourBonus);
+    if (!startingFavourGrant) {
+      return created;
+    }
+
+    const [updated] = await tx
+      .update(players)
+      .set({ startingFavoursGranted: true })
+      .where(eq(players.id, created.id))
+      .returning();
+
+    return updated;
+  });
 
   return toPlayerProfile(player);
 }

@@ -157,6 +157,7 @@ export const PlayerEventType = {
   AILMENT_ACQUIRED: 'ailment_acquired',
   AILMENT_RECOVERED: 'ailment_recovered',
   HEALTH_CHANGED: 'health_changed',
+  DEATH_PENDING: 'death_pending',
   DEATH: 'death',
   REGISTRATION: 'registration',
   NAME_CHANGE: 'name_change',

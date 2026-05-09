@@ -132,7 +132,20 @@ async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<
       }
     }
 
-    if (result.ailmentDetails.length === 0 && result.deathDetails.length === 0) {
+    if (result.pendingDeathDetails.length > 0) {
+      lines.push('', '**Death Rolls Triggered:**');
+      for (const d of result.pendingDeathDetails) {
+        lines.push(
+          `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}; grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
+        );
+      }
+    }
+
+    if (
+      result.ailmentDetails.length === 0
+      && result.deathDetails.length === 0
+      && result.pendingDeathDetails.length === 0
+    ) {
       lines.push('', '_No ailments or deaths this tick._');
     }
 
@@ -179,7 +192,20 @@ async function handlePreview(interaction: ChatInputCommandInteraction): Promise<
       }
     }
 
-    if (result.ailmentDetails.length === 0 && result.deathDetails.length === 0) {
+    if (result.pendingDeathDetails.length > 0) {
+      lines.push('', '**Potential Death Rolls:**');
+      for (const d of result.pendingDeathDetails) {
+        lines.push(
+          `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}; would enter grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
+        );
+      }
+    }
+
+    if (
+      result.ailmentDetails.length === 0
+      && result.deathDetails.length === 0
+      && result.pendingDeathDetails.length === 0
+    ) {
       lines.push('', '_No ailments or deaths predicted this tick._');
     }
 

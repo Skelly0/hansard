@@ -74,7 +74,23 @@ const command: Command = {
         }
       }
 
-      if (result.ailmentDetails.length === 0 && result.deathDetails.length === 0) {
+      if (result.pendingDeathDetails.length > 0) {
+        lines.push('', '**Potential Death Rolls:**');
+        for (const d of result.pendingDeathDetails.slice(0, 15)) {
+          lines.push(
+            `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}; would enter grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
+          );
+        }
+        if (result.pendingDeathDetails.length > 15) {
+          lines.push(`_…and ${result.pendingDeathDetails.length - 15} more_`);
+        }
+      }
+
+      if (
+        result.ailmentDetails.length === 0
+        && result.deathDetails.length === 0
+        && result.pendingDeathDetails.length === 0
+      ) {
         lines.push('', '_No ailments or deaths predicted this tick._');
       }
 

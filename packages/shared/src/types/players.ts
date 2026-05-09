@@ -19,6 +19,15 @@ export interface Ailment {
   notes?: string;
 }
 
+export interface PendingDeath {
+  cause: string;
+  triggeredTick: number;
+  triggeredDate: string;
+  eligibleFromTick: number;
+  eligibleFromDate: string;
+  ageAtProc: number | null;
+}
+
 // ============================================================
 // Profile Data (JSONB on players table)
 // ============================================================
@@ -26,6 +35,7 @@ export interface Ailment {
 export interface ProfileData {
   timezone?: string;
   pronouns?: string;
+  pendingDeath?: PendingDeath;
   [key: string]: unknown;
 }
 

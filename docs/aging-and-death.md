@@ -96,21 +96,22 @@ For each tick:
    - **Critical ailments**: each adds `criticalAilmentDeathChance` (default 0.22) to `deathChance`. Cause = first critical ailment's name.
    - **Major-ailment stacks**: 2+ majors → `+0.05 * majorCount`. So 2 majors = +0.10, 3 = +0.15. Cause defaults to `"complications from multiple ailments"` if no critical was set.
    - **Old age**: if `age ≥ deathAgeThreshold` (default 62), `ageDeathChance = 0.003 + (age-62)*0.005`. So at 62: 0.3%, at 65: 1.8%, at 70: 4.3%, at 80: 9.3%. The total `deathChance` is `Math.max(deathChance, ageDeathChance)` — they don't add. If old-age happens to dominate, cause becomes `"natural causes"`. Per-tick figures look small but compound monthly: cumulative survival from 60 → 70 under defaults (old age + ailment stacking) is roughly 1%, so most characters die in the 60–70 window.
-   - Roll `Math.random() < deathChance`. On hit, the tick loop **breaks immediately** for that player — no further ticks rolled.
+   - Roll `Math.random() < deathChance`. On hit, the tick loop **breaks immediately** for that player — no further ticks rolled. Automatic hits do not kill immediately; they create a pending death marker for the next time-advance window.
 
 ### 4c. Persistence — wrapped in `db.transaction`
 
 All of the below happens inside one transaction so a partial advance never strands the world:
 
 - For each living player:
+  - If `profileData.pendingDeath` exists and the next tick is eligible, process that pending death before rolling the player again.
   - If they aged or got new ailments: `UPDATE players SET currentAge, ailments, healthStatus`. `healthStatus` is recomputed from the *worst* severity in the array (`critical > major > minor > healthy`).
   - For each new ailment: `INSERT INTO playerEventLog` with `eventType='ailment_acquired'`, `isAutomatic=true`, the ailment object in `newValue`, and the tick/date when it landed.
-  - If they died: hand off to `processPlayerDeath` (see §5).
+  - If a death roll hits: store `profileData.pendingDeath`, log `eventType='death_pending'`, and return it in `pendingDeathDetails`. The player remains alive and keeps offices until the next advance.
 - Update `simulationClock` with `currentTick = toTick`, `currentDate = toDate`.
-- Insert one `timeAdvanceLog` row summarising the whole advance: `{ deaths: [...playerIds], ailments: [...playerIds], aged: number }`.
+- Insert one `timeAdvanceLog` row summarising the whole advance: `{ deaths: [...playerIds], pendingDeaths: [...playerIds], ailments: [...playerIds], aged: number }`.
 
 ### 4d. Return value
-`AdvanceResult` — same shape as `previewAdvance` returns, with `deathDetails` and `ailmentDetails` arrays the bot uses to render its embed.
+`AdvanceResult` — same shape as `previewAdvance` returns, with `deathDetails`, `pendingDeathDetails`, and `ailmentDetails` arrays the bot uses to render its embed.
 
 ---
 
@@ -126,6 +127,8 @@ It does four things, in order:
 4. **Log an `office_left` event** per vacated office, so dossier and obituary can show "vacated <Office> (died in office)".
 
 `isAutomatic` is set to `true` for time-advance deaths and `false` for `manualDeath` — so the event log can distinguish an act of staff from an act of the dice.
+
+Automatic deaths now pass through a one-advance settle-affairs period first. The proc is recorded as `death_pending` in the event log and as `profileData.pendingDeath` on the player. The next `/time advance` finalizes the death before any further rolls for that player. Manual staff deaths bypass this and still call `processPlayerDeath` immediately.
 
 ---
 
@@ -204,7 +207,7 @@ Returns a structured payload (used by webapp Graveyard / character dossier) plus
 - **Freeform + day/week ticks throw.** The error fires inside `buildPerTickDates` *before* any DB writes, so a misconfigured clock can't half-advance. If the season uses `Year N, Month M` dates, the clock's `tickUnit` must be `month` or `year`.
 - **Mixed-format age calc** silently degrades to year-only. If you migrate the clock from freeform → ISO mid-season, existing players' birthDates stay freeform and their ages will be approximate (year-only) until you also rewrite their birth dates.
 - **Death short-circuits the per-player tick loop** but not the per-player outer loop. Other living players keep being rolled for the remaining ticks even after one player dies mid-advance.
-- **Same-tick ailment + death cascade.** A character can acquire a critical ailment on tick `T` and die from it on the very same tick — the death roll on tick `T` sees the ailment that was just added.
+- **Same-tick ailment + death proc.** A character can acquire a critical ailment on tick `T` and trigger a death roll from it on the same tick — the death roll on tick `T` sees the ailment that was just added. The actual automatic death is still deferred to the next advance.
 - **`currentAge` is denormalized**, not authoritative. Anywhere correctness matters (obituary, dossier age display), prefer `calculateAge(birthDate, simNow)`. The cache exists for speed and for offline display when the clock is unreachable.
 - **`startingFavoursGranted` is sticky.** It's set once at creation and never unset, so re-running creation logic against an existing player won't double-grant. This is the only protection — there's no idempotency token on the favour transaction itself.
 - **No DB unique constraint on ailment condition per player.** Duplicate suppression is enforced in code (both manual and automatic paths). If two parallel `advanceTime` calls ever ran simultaneously (they shouldn't — there's no app-level lock), they could in theory race. The transactional wrapping limits but doesn't formally prevent this.

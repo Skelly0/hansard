@@ -25,6 +25,7 @@ export interface TimeAdvanceEntry {
   advancedBy?: { id: string; characterName: string };
   summary?: {
     deaths: string[];
+    pendingDeaths?: string[];
     ailments: string[];
     aged: number;
   };
@@ -32,13 +33,43 @@ export interface TimeAdvanceEntry {
   createdAt: string;
 }
 
+export interface AdvanceDetail {
+  playerId: string;
+  characterName: string | null;
+  age: number | null;
+  cause: string;
+}
+
+export interface PendingDeathDetail extends AdvanceDetail {
+  triggeredTick: number;
+  triggeredDate: string;
+  eligibleFromTick: number;
+  eligibleFromDate: string;
+}
+
+export interface AilmentDetail {
+  playerId: string;
+  characterName: string | null;
+  condition: string;
+  severity: string;
+}
+
 export interface AdvancePreview {
-  ticksToAdvance: number;
+  preview: true;
+  fromTick: number;
+  toTick: number;
   fromDate: string;
   toDate: string;
-  potentialDeaths: { playerId: string; characterName: string; age: number; probability: number }[];
-  potentialAilments: { playerId: string; characterName: string; age: number; probability: number }[];
-  playersAged: number;
+  summary: {
+    deaths: string[];
+    pendingDeaths?: string[];
+    ailments: string[];
+    aged: number;
+  };
+  deathDetails: AdvanceDetail[];
+  pendingDeathDetails: PendingDeathDetail[];
+  ailmentDetails: AilmentDetail[];
+  aged: number;
 }
 
 // ---- Hooks ----

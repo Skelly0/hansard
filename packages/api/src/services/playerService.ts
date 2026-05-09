@@ -371,6 +371,7 @@ export async function getPlayerHealth(
     PlayerEventType.AILMENT_ACQUIRED,
     PlayerEventType.AILMENT_RECOVERED,
     PlayerEventType.HEALTH_CHANGED,
+    PlayerEventType.DEATH_PENDING,
     PlayerEventType.DEATH,
   ];
 

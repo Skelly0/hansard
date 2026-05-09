@@ -42,10 +42,14 @@ Most characters die between ages 60 and 70. Surviving past 70 is rare.
 
 ## When a character dies
 
-- The character is marked deceased.
+- When an automatic death roll triggers, the character is first marked as having a pending death and remains alive for one more time-advance window. This is the settle-affairs period.
+- On the next `/time advance`, the pending death is processed before the character is rolled again.
+- Once processed, the character is marked deceased.
 - All offices they held are vacated.
 - An obituary is generated from their event log: party history, offices served, cause of death.
 - The character cannot be revived.
+
+Manual staff deaths happen immediately and do not use the settle-affairs period.
 
 ## Staff actions
 

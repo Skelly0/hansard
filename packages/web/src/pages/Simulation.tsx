@@ -183,42 +183,70 @@ function ControlsCard() {
               </div>
 
               {/* Metrics row */}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <MetricCard
-                  label="Potential Deaths"
-                  value={preview.potentialDeaths.length}
-                  color={preview.potentialDeaths.length > 0 ? 'text-status-rejected' : 'text-text-tertiary'}
+                  label="Deaths"
+                  value={preview.deathDetails.length}
+                  color={preview.deathDetails.length > 0 ? 'text-status-rejected' : 'text-text-tertiary'}
+                  borderColor="border-border-subtle"
+                />
+                <MetricCard
+                  label="Death Rolls"
+                  value={preview.pendingDeathDetails.length}
+                  color={preview.pendingDeathDetails.length > 0 ? 'text-status-rejected' : 'text-text-tertiary'}
                   borderColor="border-border-subtle"
                 />
                 <MetricCard
                   label="New Ailments"
-                  value={preview.potentialAilments.length}
-                  color={preview.potentialAilments.length > 0 ? 'text-health-major' : 'text-text-tertiary'}
+                  value={preview.ailmentDetails.length}
+                  color={preview.ailmentDetails.length > 0 ? 'text-health-major' : 'text-text-tertiary'}
                   borderColor="border-border-subtle"
                 />
                 <MetricCard
                   label="Players Aged"
-                  value={preview.playersAged}
+                  value={preview.aged}
                   color="text-accent-simulation"
                   borderColor="border-border-subtle"
                 />
               </div>
 
               {/* Death details */}
-              {preview.potentialDeaths.length > 0 && (
+              {preview.deathDetails.length > 0 && (
                 <div>
                   <p className="text-label-ui text-text-tertiary mb-2">Deaths</p>
                   <div className="space-y-1">
-                    {preview.potentialDeaths.map((d) => (
+                    {preview.deathDetails.map((d) => (
                       <div
                         key={d.playerId}
                         className="flex items-center justify-between bg-status-rejected/[0.05] border border-status-rejected/10 rounded-card px-3 py-2"
                       >
                         <span className="text-body-sm text-text-primary font-medium">
-                          {d.characterName}
+                          {d.characterName ?? 'Unknown'}
                         </span>
                         <span className="font-mono text-xs text-text-tertiary">
-                          age {d.age} &middot; {Math.round(d.probability * 100)}% chance
+                          age {d.age} &middot; {d.cause}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Pending death details */}
+              {preview.pendingDeathDetails.length > 0 && (
+                <div>
+                  <p className="text-label-ui text-text-tertiary mb-2">Death Rolls</p>
+                  <div className="space-y-1">
+                    {preview.pendingDeathDetails.map((d) => (
+                      <div
+                        key={`${d.playerId}-pending-death`}
+                        className="flex items-center justify-between bg-status-rejected/[0.05] border border-status-rejected/10 rounded-card px-3 py-2"
+                      >
+                        <span className="text-body-sm text-text-primary font-medium">
+                          {d.characterName ?? 'Unknown'}
+                        </span>
+                        <span className="font-mono text-xs text-text-tertiary">
+                          grace until tick {d.eligibleFromTick}
                         </span>
                       </div>
                     ))}
@@ -227,20 +255,20 @@ function ControlsCard() {
               )}
 
               {/* Ailment details */}
-              {preview.potentialAilments.length > 0 && (
+              {preview.ailmentDetails.length > 0 && (
                 <div>
                   <p className="text-label-ui text-text-tertiary mb-2">Ailments</p>
                   <div className="space-y-1">
-                    {preview.potentialAilments.map((a) => (
+                    {preview.ailmentDetails.map((a) => (
                       <div
                         key={`${a.playerId}-ailment`}
                         className="flex items-center justify-between bg-health-major/[0.05] border border-health-major/10 rounded-card px-3 py-2"
                       >
                         <span className="text-body-sm text-text-primary font-medium">
-                          {a.characterName}
+                          {a.characterName ?? 'Unknown'}
                         </span>
                         <span className="font-mono text-xs text-text-tertiary">
-                          age {a.age} &middot; {Math.round(a.probability * 100)}% chance
+                          {a.condition} &middot; {a.severity}
                         </span>
                       </div>
                     ))}
@@ -297,6 +325,7 @@ function AdvanceHistoryLog() {
 
 function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
   const deaths = entry.summary?.deaths ?? [];
+  const pendingDeaths = entry.summary?.pendingDeaths ?? [];
   const ailments = entry.summary?.ailments ?? [];
   const aged = entry.summary?.aged ?? 0;
 
@@ -330,6 +359,11 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
             {deaths.length} death{deaths.length !== 1 ? 's' : ''}
           </span>
         )}
+        {pendingDeaths.length > 0 && (
+          <span className="text-status-rejected">
+            {pendingDeaths.length} pending death{pendingDeaths.length !== 1 ? 's' : ''}
+          </span>
+        )}
         {ailments.length > 0 && (
           <span className="text-health-major">
             {ailments.length} ailment{ailments.length !== 1 ? 's' : ''}
@@ -340,7 +374,7 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
             {aged} aged
           </span>
         )}
-        {deaths.length === 0 && ailments.length === 0 && aged === 0 && (
+        {deaths.length === 0 && pendingDeaths.length === 0 && ailments.length === 0 && aged === 0 && (
           <span className="text-text-tertiary italic">Uneventful advance</span>
         )}
       </div>
@@ -350,6 +384,13 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
         <div className="mt-2 flex flex-wrap gap-1.5">
           {deaths.map((name) => (
             <Tag key={name} color="deceased">{name}</Tag>
+          ))}
+        </div>
+      )}
+      {pendingDeaths.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {pendingDeaths.map((name) => (
+            <Tag key={name} color="rejected">{name}</Tag>
           ))}
         </div>
       )}
@@ -703,6 +744,7 @@ function KillModal({
 
 const EVENT_COLOR: Record<string, string> = {
   death: 'deceased',
+  death_pending: 'rejected',
   ailment_acquired: 'pending',
   ailment_recovered: 'passed',
   office_appointed: 'offices',

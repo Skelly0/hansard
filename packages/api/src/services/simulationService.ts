@@ -11,8 +11,11 @@ import {
 import {
   advanceDateByTicks,
   calculateAge,
+  PlayerEventType,
   type AgingConfig,
   type AilmentPoolEntry,
+  type PendingDeath,
+  type ProfileData,
   type TimeAdvanceSummary,
 } from '@hansard/shared';
 
@@ -52,23 +55,37 @@ export interface AdvanceResult {
   toDate: string;
   summary: TimeAdvanceSummary;
   deathDetails: DeathDetail[];
+  pendingDeathDetails: PendingDeathDetail[];
   ailmentDetails: AilmentDetail[];
   aged: number;
 }
 
-interface DeathDetail {
+export interface DeathDetail {
   playerId: string;
   characterName: string | null;
   age: number | null;
   cause: string;
 }
 
-interface AilmentDetail {
+export interface PendingDeathDetail {
+  playerId: string;
+  characterName: string | null;
+  age: number | null;
+  cause: string;
+  triggeredTick: number;
+  triggeredDate: string;
+  eligibleFromTick: number;
+  eligibleFromDate: string;
+}
+
+export interface AilmentDetail {
   playerId: string;
   characterName: string | null;
   condition: string;
   severity: string;
 }
+
+type DbOrTx = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
 
 // ============================================================
 // Helpers
@@ -99,6 +116,74 @@ function rollAilment(config: AgingConfig, playerAge: number): AilmentPoolEntry |
   }
 
   return eligible[eligible.length - 1]!;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getPendingDeath(profileData: unknown): PendingDeath | null {
+  if (!isRecord(profileData)) return null;
+  const pending = profileData.pendingDeath;
+  if (!isRecord(pending)) return null;
+
+  const {
+    cause,
+    triggeredTick,
+    triggeredDate,
+    eligibleFromTick,
+    eligibleFromDate,
+    ageAtProc,
+  } = pending;
+
+  if (
+    typeof cause !== 'string'
+    || typeof triggeredTick !== 'number'
+    || typeof triggeredDate !== 'string'
+    || typeof eligibleFromTick !== 'number'
+    || typeof eligibleFromDate !== 'string'
+    || !(typeof ageAtProc === 'number' || ageAtProc === null)
+  ) {
+    return null;
+  }
+
+  return {
+    cause,
+    triggeredTick,
+    triggeredDate,
+    eligibleFromTick,
+    eligibleFromDate,
+    ageAtProc,
+  };
+}
+
+function withPendingDeath(profileData: unknown, pendingDeath: PendingDeath): ProfileData {
+  return {
+    ...(isRecord(profileData) ? profileData : {}),
+    pendingDeath,
+  };
+}
+
+function withoutPendingDeath(profileData: unknown): ProfileData | null {
+  if (!isRecord(profileData)) return null;
+  const { pendingDeath: _pendingDeath, ...rest } = profileData;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
+function toPendingDeathDetail(
+  player: typeof players.$inferSelect,
+  pendingDeath: PendingDeath,
+): PendingDeathDetail {
+  return {
+    playerId: player.id,
+    characterName: player.characterName,
+    age: pendingDeath.ageAtProc,
+    cause: pendingDeath.cause,
+    triggeredTick: pendingDeath.triggeredTick,
+    triggeredDate: pendingDeath.triggeredDate,
+    eligibleFromTick: pendingDeath.eligibleFromTick,
+    eligibleFromDate: pendingDeath.eligibleFromDate,
+  };
 }
 
 // ============================================================
@@ -297,6 +382,29 @@ function buildPerTickDates(fromDate: string, ticks: number, tickUnit: string): s
   return dates;
 }
 
+async function markPlayerDeathPending(
+  db: DbOrTx,
+  player: typeof players.$inferSelect,
+  pendingDeath: PendingDeath,
+) {
+  await db
+    .update(players)
+    .set({
+      profileData: withPendingDeath(player.profileData, pendingDeath),
+    })
+    .where(eq(players.id, player.id));
+
+  await db.insert(playerEventLog).values({
+    playerId: player.id,
+    eventType: PlayerEventType.DEATH_PENDING,
+    description: `Death roll triggered (${pendingDeath.cause}); death will be processed after the grace tick.`,
+    newValue: pendingDeath,
+    simTick: pendingDeath.triggeredTick,
+    simDate: pendingDeath.triggeredDate,
+    isAutomatic: true,
+  });
+}
+
 /**
  * Advance time by N ticks. Per-tick rolls; transactional persistence.
  */
@@ -319,11 +427,42 @@ export async function advanceTime(
   const livingPlayers = await db.select().from(players).where(eq(players.isAlive, true));
 
   const deathDetails: DeathDetail[] = [];
+  const pendingDeathDetails: PendingDeathDetail[] = [];
   const ailmentDetails: AilmentDetail[] = [];
   let agedCount = 0;
 
   await db.transaction(async (tx) => {
     for (const player of livingPlayers) {
+      const pendingDeath = getPendingDeath(player.profileData);
+      if (pendingDeath) {
+        const deathTick = fromTick + 1;
+        const deathDate = perTickDates[1] ?? toDate;
+
+        if (deathTick >= pendingDeath.eligibleFromTick) {
+          const ageAtDeath = calculateAge(player.birthDate, deathDate) ?? player.currentAge ?? null;
+          await processPlayerDeath(
+            tx,
+            player.id,
+            pendingDeath.cause,
+            deathDate,
+            deathTick,
+            null,
+            true,
+            withoutPendingDeath(player.profileData),
+          );
+          deathDetails.push({
+            playerId: player.id,
+            characterName: player.characterName,
+            age: ageAtDeath,
+            cause: pendingDeath.cause,
+          });
+        } else {
+          pendingDeathDetails.push(toPendingDeathDetail(player, pendingDeath));
+        }
+
+        continue;
+      }
+
       const state: PlayerTickState = {
         id: player.id,
         characterName: player.characterName,
@@ -368,21 +507,17 @@ export async function advanceTime(
       }
 
       if (result.death) {
-        await processPlayerDeath(
-          tx,
-          player.id,
-          result.death.cause,
-          result.death.date,
-          result.death.tick,
-          null,
-          true,
-        );
-        deathDetails.push({
-          playerId: player.id,
-          characterName: player.characterName,
-          age: result.death.age,
+        const pendingDeath: PendingDeath = {
           cause: result.death.cause,
-        });
+          triggeredTick: result.death.tick,
+          triggeredDate: result.death.date,
+          eligibleFromTick: toTick + 1,
+          eligibleFromDate: advanceDateByTicks(toDate, 1, clock.tickUnit),
+          ageAtProc: result.death.age,
+        };
+
+        await markPlayerDeathPending(tx, player, pendingDeath);
+        pendingDeathDetails.push(toPendingDeathDetail(player, pendingDeath));
       }
     }
 
@@ -393,6 +528,7 @@ export async function advanceTime(
 
     const summary: TimeAdvanceSummary = {
       deaths: deathDetails.map(d => d.playerId),
+      pendingDeaths: pendingDeathDetails.map(d => d.playerId),
       ailments: ailmentDetails.map(a => a.playerId),
       aged: agedCount,
     };
@@ -414,10 +550,12 @@ export async function advanceTime(
     toDate,
     summary: {
       deaths: deathDetails.map(d => d.playerId),
+      pendingDeaths: pendingDeathDetails.map(d => d.playerId),
       ailments: ailmentDetails.map(a => a.playerId),
       aged: agedCount,
     },
     deathDetails,
+    pendingDeathDetails,
     ailmentDetails,
     aged: agedCount,
   };
@@ -443,10 +581,30 @@ export async function previewAdvance(
   const livingPlayers = await db.select().from(players).where(eq(players.isAlive, true));
 
   const deathDetails: DeathDetail[] = [];
+  const pendingDeathDetails: PendingDeathDetail[] = [];
   const ailmentDetails: AilmentDetail[] = [];
   let agedCount = 0;
 
   for (const player of livingPlayers) {
+    const pendingDeath = getPendingDeath(player.profileData);
+    if (pendingDeath) {
+      const deathTick = fromTick + 1;
+      const deathDate = perTickDates[1] ?? toDate;
+
+      if (deathTick >= pendingDeath.eligibleFromTick) {
+        deathDetails.push({
+          playerId: player.id,
+          characterName: player.characterName,
+          age: calculateAge(player.birthDate, deathDate) ?? player.currentAge ?? null,
+          cause: pendingDeath.cause,
+        });
+      } else {
+        pendingDeathDetails.push(toPendingDeathDetail(player, pendingDeath));
+      }
+
+      continue;
+    }
+
     const state: PlayerTickState = {
       id: player.id,
       characterName: player.characterName,
@@ -469,12 +627,14 @@ export async function previewAdvance(
     }
 
     if (result.death) {
-      deathDetails.push({
-        playerId: player.id,
-        characterName: player.characterName,
-        age: result.death.age,
+      pendingDeathDetails.push(toPendingDeathDetail(player, {
         cause: result.death.cause,
-      });
+        triggeredTick: result.death.tick,
+        triggeredDate: result.death.date,
+        eligibleFromTick: toTick + 1,
+        eligibleFromDate: advanceDateByTicks(toDate, 1, clock.tickUnit),
+        ageAtProc: result.death.age,
+      }));
     }
   }
 
@@ -485,10 +645,12 @@ export async function previewAdvance(
     toDate,
     summary: {
       deaths: deathDetails.map(d => d.playerId),
+      pendingDeaths: pendingDeathDetails.map(d => d.playerId),
       ailments: ailmentDetails.map(a => a.playerId),
       aged: agedCount,
     },
     deathDetails,
+    pendingDeathDetails,
     ailmentDetails,
     aged: agedCount,
   };
@@ -630,7 +792,16 @@ export async function manualDeath(
   const currentDate = clock?.currentDate ?? 'unknown';
   const currentTick = clock?.currentTick ?? 0;
 
-  await processPlayerDeath(db, playerId, cause, currentDate, currentTick, triggeredById ?? null, false);
+  await processPlayerDeath(
+    db,
+    playerId,
+    cause,
+    currentDate,
+    currentTick,
+    triggeredById ?? null,
+    false,
+    withoutPendingDeath(player.profileData),
+  );
 
   return { player, cause, deathDate: currentDate };
 }
@@ -731,8 +902,6 @@ export async function getHistory(db: Database, limit = 20) {
 // Internal Helpers
 // ============================================================
 
-type DbOrTx = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
-
 /**
  * Process a player's death -- shared between advanceTime and manualDeath.
  *
@@ -750,6 +919,7 @@ async function processPlayerDeath(
   deathTick: number,
   triggeredById: string | null,
   isAutomatic: boolean,
+  profileData?: ProfileData | null,
 ) {
   // Mark player dead
   await db
@@ -759,6 +929,7 @@ async function processPlayerDeath(
       deathDate,
       causeOfDeath,
       healthStatus: 'deceased',
+      ...(profileData !== undefined ? { profileData } : {}),
     })
     .where(eq(players.id, playerId));
 

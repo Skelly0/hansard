@@ -55,6 +55,7 @@ export interface SimulationClock {
 
 export interface TimeAdvanceSummary {
   deaths: string[];
+  pendingDeaths?: string[];
   ailments: string[];
   aged: number;
 }

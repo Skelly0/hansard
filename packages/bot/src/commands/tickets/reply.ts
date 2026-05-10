@@ -5,7 +5,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { players } from '@hansard/db';
 import { TicketService } from '@hansard/api/services/ticketService';
-import { successEmbed, errorEmbed } from '../../utils/embeds.js';
+import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { getTicketViewer } from '../../utils/ticketAccess.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
@@ -85,6 +85,14 @@ const command: Command = {
     }
 
     const authorName = authorPlayer.characterName ?? interaction.user.username;
+    await notifyTicketOwner({
+      ticket,
+      content,
+      authorName,
+      authorPlayerId: authorPlayer.id,
+      interaction,
+    });
+
     await interaction.editReply({
       embeds: [
         successEmbed(
@@ -99,5 +107,57 @@ const command: Command = {
     });
   },
 };
+
+async function notifyTicketOwner({
+  ticket,
+  content,
+  authorName,
+  authorPlayerId,
+  interaction,
+}: {
+  ticket: {
+    number: number;
+    title: string;
+    createdById: string;
+  };
+  content: string;
+  authorName: string;
+  authorPlayerId: string;
+  interaction: ChatInputCommandInteraction;
+}): Promise<void> {
+  if (ticket.createdById === authorPlayerId) {
+    return;
+  }
+
+  try {
+    const [owner] = await db
+      .select()
+      .from(players)
+      .where(eq(players.id, ticket.createdById))
+      .limit(1);
+
+    if (!owner?.discordId || owner.discordId === interaction.user.id) {
+      return;
+    }
+
+    const ownerUser = await interaction.client.users.fetch(owner.discordId);
+    await ownerUser.send({
+      embeds: [
+        createEmbed({
+          title: `Ticket #${ticket.number}: New Reply`,
+          description: [
+            `**Ticket:** ${ticket.title}`,
+            `**From:** ${authorName}`,
+            '',
+            content,
+          ].join('\n'),
+          system: 'tickets',
+        }),
+      ],
+    });
+  } catch (err) {
+    console.error(`Failed to notify owner for ticket #${ticket.number}:`, err);
+  }
+}
 
 export default command;

@@ -71,9 +71,12 @@ const command: Command = {
               ? bill.summary.slice(0, 97) + '...'
               : bill.summary
             : '*No summary*';
+          const title = bill.googleDocUrl
+            ? `[${bill.title}](${bill.googleDocUrl})`
+            : `${bill.title} *(short bill)*`;
 
           return [
-            `**#${bill.billNumber}** — [${bill.title}](${bill.googleDocUrl})`,
+            `**#${bill.billNumber}** — ${title}`,
             `${emoji} ${status}`,
             `> ${summary}`,
             '',

@@ -1,6 +1,8 @@
 import { pgTable, uuid, varchar, text, integer, boolean, timestamp, serial, jsonb, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { players } from './players';
 
+export type BillType = 'google_doc' | 'short';
+
 // === DOCUMENT COLLECTIONS ===
 // Top-level groupings: "Constitution", "Statutes", "Executive Orders", "Worldbuilding", etc.
 export const documentCollections = pgTable('document_collections', {
@@ -45,7 +47,7 @@ export const documents = pgTable('documents', {
 });
 
 // === BILLS ===
-// Players write bills in Google Docs and submit the link via command.
+// Players can submit full Google Doc bills or short text-only bills.
 // The Chancellor (or any player with legislative_leader permission) can also submit on behalf of others.
 // The Chancellor puts bills to a legislature vote when they choose -- no formal queue.
 export const bills = pgTable('bills', {
@@ -57,13 +59,13 @@ export const bills = pgTable('bills', {
   slug: varchar('slug', { length: 256 }).notNull().unique(),
   billNumber: serial('bill_number'),                      // auto-incrementing: Bill #1, #2, etc.
 
-  // === GOOGLE DOC SOURCE ===
-  googleDocUrl: varchar('google_doc_url', { length: 512 }).notNull(),
+  // === SOURCE ===
+  billType: varchar('bill_type', { length: 32 }).$type<BillType>().default('google_doc').notNull(),
+  googleDocUrl: varchar('google_doc_url', { length: 512 }),
   googleDocId: varchar('google_doc_id', { length: 128 }),  // extracted from URL for API access
 
   // === CACHED CONTENT ===
-  // Snapshot of the Google Doc content for search/display/archival.
-  // Google Doc remains the source of truth.
+  // Snapshot of the Google Doc content, or the authoritative text for short bills.
   cachedContent: text('cached_content'),
   cachedAt: timestamp('cached_at', { withTimezone: true, mode: 'date' }),
   summary: text('summary'),                                // player or staff TL;DR

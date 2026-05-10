@@ -10,9 +10,19 @@ import { advanceTime, previewAdvance } from '@hansard/api/services/simulationSer
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import type { Command } from '../../client.js';
 
+type DeathAilment = {
+  condition: string;
+  severity: string;
+};
+
 async function fetchClock() {
   const rows = await db.select().from(simulationClock).limit(1);
   return rows[0] ?? null;
+}
+
+function formatDeathAilments(ailments: DeathAilment[] | undefined): string {
+  if (!ailments || ailments.length === 0) return '';
+  return `; ailments: ${ailments.map(a => `${a.condition} (${a.severity})`).join(', ')}`;
 }
 
 const command: Command = {
@@ -128,7 +138,7 @@ async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<
     if (result.deathDetails.length > 0) {
       lines.push('', '⚰️ **Deaths:**');
       for (const d of result.deathDetails) {
-        lines.push(`• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}`);
+        lines.push(`• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}`);
       }
     }
 
@@ -136,7 +146,7 @@ async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<
       lines.push('', '**Death Rolls Triggered:**');
       for (const d of result.pendingDeathDetails) {
         lines.push(
-          `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}; grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
+          `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}; grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
         );
       }
     }
@@ -188,7 +198,7 @@ async function handlePreview(interaction: ChatInputCommandInteraction): Promise<
     if (result.deathDetails.length > 0) {
       lines.push('', '⚰️ **Potential Deaths:**');
       for (const d of result.deathDetails) {
-        lines.push(`• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}`);
+        lines.push(`• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}`);
       }
     }
 
@@ -196,7 +206,7 @@ async function handlePreview(interaction: ChatInputCommandInteraction): Promise<
       lines.push('', '**Potential Death Rolls:**');
       for (const d of result.pendingDeathDetails) {
         lines.push(
-          `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}; would enter grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
+          `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}; would enter grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
         );
       }
     }

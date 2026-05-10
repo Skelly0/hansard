@@ -8,7 +8,10 @@ function makePlayer(overrides: Record<string, unknown> = {}): any {
     characterName: 'Ada Mortalis',
     birthDate: '1950-01-01',
     currentAge: 76,
-    ailments: [],
+    ailments: [
+      { condition: 'cancer', severity: 'major', acquiredAtTick: 0, acquiredAtAge: 75 },
+      { condition: 'stroke', severity: 'critical', acquiredAtTick: 0, acquiredAtAge: 76 },
+    ],
     profileData: null,
     isAlive: true,
     deathDate: null,
@@ -154,6 +157,10 @@ describe('advanceTime death grace period', () => {
       cause: 'natural causes',
       triggeredTick: 1,
       eligibleFromTick: 2,
+      ailments: [
+        { condition: 'cancer', severity: 'major' },
+        { condition: 'stroke', severity: 'critical' },
+      ],
     });
     expect(player.isAlive).toBe(true);
     expect(player.deathDate).toBeNull();
@@ -162,8 +169,14 @@ describe('advanceTime death grace period', () => {
       triggeredTick: 1,
       triggeredDate: '2026-02-01',
       eligibleFromTick: 2,
+      ailments: [
+        { condition: 'cancer', severity: 'major' },
+        { condition: 'stroke', severity: 'critical' },
+      ],
     });
-    expect(eventLog.some((event) => event.eventType === 'death_pending')).toBe(true);
+    const pendingDeathEvent = eventLog.find((event) => event.eventType === 'death_pending');
+    expect(pendingDeathEvent).toBeTruthy();
+    expect(pendingDeathEvent.description).toContain('ailments: cancer (major), stroke (critical)');
 
     const secondAdvance = await advanceTime(db, 1, 'staff-1');
 
@@ -174,11 +187,23 @@ describe('advanceTime death grace period', () => {
       characterName: 'Ada Mortalis',
       cause: 'natural causes',
       age: 76,
+      ailments: [
+        { condition: 'cancer', severity: 'major' },
+        { condition: 'stroke', severity: 'critical' },
+      ],
     });
     expect(player.isAlive).toBe(false);
     expect(player.deathDate).toBe('2026-03-01');
     expect(player.causeOfDeath).toBe('natural causes');
-    expect(eventLog.some((event) => event.eventType === 'death')).toBe(true);
+    const deathEvent = eventLog.find((event) => event.eventType === 'death');
+    expect(deathEvent).toBeTruthy();
+    expect(deathEvent.description).toContain('ailments: cancer (major), stroke (critical)');
+    expect(deathEvent.newValue).toMatchObject({
+      ailments: [
+        { condition: 'cancer', severity: 'major' },
+        { condition: 'stroke', severity: 'critical' },
+      ],
+    });
   });
 });
 

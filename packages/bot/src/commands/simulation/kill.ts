@@ -13,9 +13,39 @@ import type { Command } from '../../client.js';
 
 const GRAVEYARD_COLOUR = 0x9C9890;
 
+type DeathAilment = {
+  condition: string;
+  severity: string;
+};
+
 // ============================================================
 // Helpers
 // ============================================================
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function summarizeDeathAilments(ailments: unknown): DeathAilment[] {
+  if (!Array.isArray(ailments)) return [];
+
+  const byCondition = new Map<string, DeathAilment>();
+  for (const ailment of ailments) {
+    if (!isRecord(ailment)) continue;
+    const { condition, severity } = ailment;
+    if (typeof condition !== 'string' || typeof severity !== 'string') continue;
+
+    const normalized = condition.trim();
+    if (!normalized) continue;
+    byCondition.set(normalized.toLowerCase(), { condition: normalized, severity });
+  }
+
+  return [...byCondition.values()];
+}
+
+function formatDeathAilments(ailments: DeathAilment[]): string {
+  return ailments.map(a => `${a.condition} (${a.severity})`).join(', ');
+}
 
 async function fetchClock() {
   const rows = await db.select().from(simulationClock).limit(1);
@@ -28,15 +58,18 @@ async function processPlayerDeath(
   deathDate: string,
   deathTick: number,
   triggeredById: string | null,
+  deathAilments: DeathAilment[] = [],
 ) {
+  const ailmentsText = formatDeathAilments(deathAilments);
+
   await db.update(players).set({
     isAlive: false, deathDate, causeOfDeath, healthStatus: 'deceased',
   }).where(eq(players.id, playerId));
 
   await db.insert(playerEventLog).values({
     playerId, eventType: 'death',
-    description: `Died of ${causeOfDeath}`,
-    newValue: { causeOfDeath, deathDate },
+    description: `Died of ${causeOfDeath}${ailmentsText ? `; ailments: ${ailmentsText}` : ''}`,
+    newValue: { causeOfDeath, deathDate, ailments: deathAilments },
     simTick: deathTick, simDate: deathDate,
     triggeredById, isAutomatic: false,
   });
@@ -113,12 +146,19 @@ async function generateObituary(playerId: string) {
     narrativeParts.push(`Died of ${player.causeOfDeath}.`);
   }
 
+  const ailments = summarizeDeathAilments(player.ailments);
+  const ailmentsText = formatDeathAilments(ailments);
+  if (ailmentsText) {
+    narrativeParts.push(`Ailments at death: ${ailmentsText}.`);
+  }
+
   return {
     characterName: player.characterName ?? 'Unknown',
     birthDate: player.birthDate ?? 'unknown',
     deathDate: player.deathDate ?? 'unknown',
     age: player.currentAge,
     causeOfDeath: player.causeOfDeath ?? 'unknown causes',
+    ailments,
     partyHistory: partyChanges,
     officesHeld,
     narrative: narrativeParts.join(' '),
@@ -132,6 +172,7 @@ function buildObituaryEmbed(obituary: {
   deathDate: string;
   age: number | null;
   causeOfDeath: string;
+  ailments: DeathAilment[];
   partyHistory: { description: string; date: string | null }[];
   officesHeld: { description: string; date: string | null; eventType: string }[];
   narrative: string;
@@ -151,6 +192,11 @@ function buildObituaryEmbed(obituary: {
 
   fields.push({ name: 'Cause of Death', value: obituary.causeOfDeath, inline: true });
   fields.push({ name: 'Age', value: obituary.age != null ? `${obituary.age}` : 'Unknown', inline: true });
+
+  const ailmentsText = formatDeathAilments(obituary.ailments);
+  if (ailmentsText) {
+    fields.push({ name: 'Ailments', value: ailmentsText.slice(0, 1024), inline: false });
+  }
 
   if (obituary.partyHistory.length > 0) {
     const partyLines = obituary.partyHistory.map(
@@ -232,6 +278,7 @@ const command: Command = {
       const clock = await fetchClock();
       const currentDate = clock?.currentDate ?? 'unknown';
       const currentTick = clock?.currentTick ?? 0;
+      const deathAilments = summarizeDeathAilments(targetPlayer.ailments);
 
       // Kill the character
       await processPlayerDeath(
@@ -240,6 +287,7 @@ const command: Command = {
         currentDate,
         currentTick,
         staffPlayer?.id ?? null,
+        deathAilments,
       );
 
       // Generate obituary
@@ -260,6 +308,7 @@ const command: Command = {
       }
 
       // Reply in the command channel
+      const ailmentsText = formatDeathAilments(obituary.ailments);
       const confirmEmbed = createEmbed({
         title: 'Character Killed',
         description: [
@@ -267,6 +316,7 @@ const command: Command = {
           '',
           `**Cause:** ${cause}`,
           `**Age:** ${obituary.age ?? 'unknown'}`,
+          ...(ailmentsText ? [`**Ailments:** ${ailmentsText}`] : []),
           '',
           graveyardChannelId
             ? `Obituary posted to <#${graveyardChannelId}>.`

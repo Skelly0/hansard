@@ -38,6 +38,7 @@ export interface AdvanceDetail {
   characterName: string | null;
   age: number | null;
   cause: string;
+  ailments: DeathAilmentDetail[];
 }
 
 export interface PendingDeathDetail extends AdvanceDetail {
@@ -45,6 +46,11 @@ export interface PendingDeathDetail extends AdvanceDetail {
   triggeredDate: string;
   eligibleFromTick: number;
   eligibleFromDate: string;
+}
+
+export interface DeathAilmentDetail {
+  condition: string;
+  severity: string;
 }
 
 export interface AilmentDetail {

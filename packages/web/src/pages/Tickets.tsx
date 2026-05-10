@@ -69,15 +69,23 @@ export function Tickets() {
     },
     {
       key: 'title',
-      header: 'Title',
+      header: 'Ticket',
+      minWidth: '320px',
       render: (row) => (
-        <Link
-          to="/tickets/$id"
-          params={{ id: row.id }}
-          className="text-text-primary hover:text-accent-primary transition-colors font-medium"
-        >
-          {row.title}
-        </Link>
+        <div className="max-w-3xl">
+          <Link
+            to="/tickets/$id"
+            params={{ id: row.id }}
+            className="text-text-primary hover:text-accent-primary transition-colors font-medium"
+          >
+            {row.title}
+          </Link>
+          {row.description && (
+            <p className="mt-1 text-body-sm text-text-secondary whitespace-pre-wrap break-words">
+              {row.description}
+            </p>
+          )}
+        </div>
       ),
     },
     {

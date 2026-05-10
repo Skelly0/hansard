@@ -130,9 +130,7 @@ const command: Command = {
 
     const embed = createEmbed({
       title: `Ticket #${ticket.number}: ${ticket.title}`,
-      description: ticket.description.length > 300
-        ? ticket.description.slice(0, 300) + '...'
-        : ticket.description,
+      description: ticket.description,
       system: 'tickets',
       fields,
     });

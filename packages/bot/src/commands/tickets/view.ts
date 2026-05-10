@@ -47,7 +47,7 @@ const command: Command = {
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const ticketNumber = interaction.options.getInteger('number', true);
 
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const { viewer } = await getTicketViewer(interaction);
     const ticket = viewer

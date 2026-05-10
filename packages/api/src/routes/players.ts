@@ -15,6 +15,7 @@ import {
   getPlayerHealth,
   getPlayerOfficeHistory,
   getPlayerVotingRecord,
+  sanitizePlayerProfile,
   calculateStartingAgeFavourBonus,
   type CreateCharacterInput,
   type UpdateCharacterInput,
@@ -67,6 +68,17 @@ function uniqueViolationContext(err: unknown): string | null {
   return `${error.message ?? ''} ${error.detail ?? ''} ${error.constraint ?? ''}`;
 }
 
+function viewerFor(request: FastifyRequest) {
+  return {
+    userId: request.session.user!.id,
+    isStaff: !!request.player?.isStaff,
+  };
+}
+
+function canViewPrivatePlayerData(request: FastifyRequest, playerId: string): boolean {
+  return !!request.player?.isStaff || request.session.user!.id === playerId;
+}
+
 // ============================================================
 // Plugin
 // ============================================================
@@ -101,7 +113,8 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         listPlayers(fastify.db, filters),
         countPlayers(fastify.db, filters),
       ]);
-      return { data: players, total };
+      const viewer = viewerFor(request);
+      return { data: players.map((player) => sanitizePlayerProfile(player, viewer)), total };
     },
   );
 
@@ -118,27 +131,33 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'Player not found' });
       }
       const voteViewer = { userId: request.session.user!.id, isStaff: !!request.player?.isStaff };
+      const canViewPrivate = canViewPrivatePlayerData(request, id);
 
       const [offices, billResult, votes, favourBalances, events] = await Promise.all([
         getPlayerOfficeHistory(fastify.db, id),
         listBills(fastify.db, { authorId: id, limit: 100 }),
         getPlayerVotingRecord(fastify.db, id, voteViewer),
-        getPlayerBalances(fastify.db, id),
-        getPlayerEvents(fastify.db, id, { limit: 50 }),
+        canViewPrivate ? getPlayerBalances(fastify.db, id) : Promise.resolve([]),
+        getPlayerEvents(fastify.db, id, { limit: 50 }, voteViewer),
       ]);
 
-      return {
-        ...player,
+      const response: Record<string, unknown> = {
+        ...sanitizePlayerProfile(player, voteViewer),
         offices,
         bills: billResult.bills,
         votes,
-        favours: favourBalances.map((balance) => ({
+        events,
+      };
+
+      if (canViewPrivate) {
+        response.favours = favourBalances.map((balance) => ({
           categoryId: balance.categoryId,
           categoryName: balance.categoryName,
           balance: balance.balance,
-        })),
-        events,
-      };
+        }));
+      }
+
+      return response;
     },
   );
 
@@ -236,7 +255,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
 
       const nameChanged = body.characterName !== undefined;
       return {
-        player: updated,
+        player: sanitizePlayerProfile(updated, viewerFor(request)),
         nameChangeflagged: nameChanged,
         message: nameChanged
           ? 'Character updated. Name change has been flagged for staff review.'
@@ -269,7 +288,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         if (!updated) {
           return reply.status(404).send({ error: 'Player not found' });
         }
-        return { player: updated, message: 'Left party. Now independent.' };
+        return { player: sanitizePlayerProfile(updated, viewerFor(request)), message: 'Left party. Now independent.' };
       }
 
       try {
@@ -277,7 +296,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         if (!updated) {
           return reply.status(404).send({ error: 'Player not found' });
         }
-        return { player: updated, message: 'Party changed.' };
+        return { player: sanitizePlayerProfile(updated, viewerFor(request)), message: 'Party changed.' };
       } catch (err) {
         if (err instanceof Error && err.message.startsWith('Party not found')) {
           return reply.status(404).send({ error: err.message });
@@ -308,7 +327,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       if (q.limit) filters.limit = parseInt(q.limit, 10);
       if (q.offset) filters.offset = parseInt(q.offset, 10);
 
-      const events = await getPlayerEvents(fastify.db, id, filters);
+      const events = await getPlayerEvents(fastify.db, id, filters, viewerFor(request));
       return events;
     },
   );
@@ -320,7 +339,10 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     '/api/players/:id/health',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const health = await getPlayerHealth(fastify.db, request.params.id);
+      if (!canViewPrivatePlayerData(request, request.params.id)) {
+        return reply.status(403).send({ error: 'Cannot view another player’s health records' });
+      }
+      const health = await getPlayerHealth(fastify.db, request.params.id, viewerFor(request));
       if (!health) {
         return reply.status(404).send({ error: 'Player not found' });
       }
@@ -402,6 +424,9 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       const player = await getPlayer(fastify.db, id);
       if (!player) {
         return reply.status(404).send({ error: 'Player not found' });
+      }
+      if (!canViewPrivatePlayerData(request, id)) {
+        return reply.status(403).send({ error: 'Cannot view another player’s favour history' });
       }
       const [balances, transactions] = await Promise.all([
         getPlayerBalances(fastify.db, id),

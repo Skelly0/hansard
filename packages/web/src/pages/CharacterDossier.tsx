@@ -11,6 +11,7 @@ import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { useAuth } from '../api/hooks/useAuth';
 import type { PlayerDossier, PlayerEvent } from '../api/hooks/usePlayers';
 
 // ---------------------------------------------------------------------------
@@ -28,14 +29,14 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'history', label: 'History' },
 ];
 
-function healthDotClass(status: string): string {
+function healthDotClass(status?: string | null): string {
   const map: Record<string, string> = {
     healthy: 'bg-[var(--health-healthy)]',
     minor: 'bg-[var(--health-minor)]',
     major: 'bg-[var(--health-major)]',
     critical: 'bg-[var(--health-critical)]',
   };
-  return map[status] || map.healthy;
+  return status ? map[status] || map.healthy : 'bg-border-default';
 }
 
 function formatDate(iso?: string): string {
@@ -54,6 +55,7 @@ function formatDate(iso?: string): string {
 export function CharacterDossier() {
   const { id } = useParams({ strict: false }) as { id: string };
   const { data: player, isLoading, isError } = usePlayer(id);
+  const { user, isStaff } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [bioExpanded, setBioExpanded] = useState(false);
 
@@ -78,6 +80,9 @@ export function CharacterDossier() {
 
   const displayName = player.characterName || player.discordUsername;
   const isDeceased = !player.isAlive;
+  const canViewFavours = isStaff || user?.id === player.id;
+  const visibleTabs = canViewFavours ? TABS : TABS.filter((tab) => tab.key !== 'favours');
+  const currentTab = activeTab === 'favours' && !canViewFavours ? 'overview' : activeTab;
 
   const bioExcerptLength = 280;
   const hasBioOverflow = (player.characterBio?.length ?? 0) > bioExcerptLength;
@@ -122,7 +127,7 @@ export function CharacterDossier() {
               className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                 isDeceased ? 'bg-status-deceased' : healthDotClass(player.healthStatus)
               }`}
-              title={isDeceased ? 'Deceased' : player.healthStatus}
+              title={isDeceased ? 'Deceased' : player.healthStatus ?? 'Private'}
             />
           </div>
 
@@ -183,12 +188,12 @@ export function CharacterDossier() {
       {/* ── Tabs ── */}
       <div className="border-b border-border-subtle mb-6">
         <nav className="flex gap-0 -mb-px">
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
               className={`text-label-ui px-4 py-2.5 border-b-2 transition-colors ${
-                activeTab === tab.key
+                currentTab === tab.key
                   ? 'border-accent-primary text-text-primary'
                   : 'border-transparent text-text-tertiary hover:text-text-secondary hover:border-border-subtle'
               }`}
@@ -200,12 +205,12 @@ export function CharacterDossier() {
       </div>
 
       {/* ── Tab content ── */}
-      {activeTab === 'overview' && <OverviewTab player={player} />}
-      {activeTab === 'offices' && <OfficesTab playerId={player.id} inlineOffices={player.offices} />}
-      {activeTab === 'legislation' && <LegislationTab playerId={player.id} inlineBills={player.bills} />}
-      {activeTab === 'votes' && <VotesTab playerId={player.id} inlineVotes={player.votes} />}
-      {activeTab === 'favours' && <FavoursTab player={player} />}
-      {activeTab === 'history' && <HistoryTab playerId={player.id} inlineEvents={player.events} />}
+      {currentTab === 'overview' && <OverviewTab player={player} />}
+      {currentTab === 'offices' && <OfficesTab playerId={player.id} inlineOffices={player.offices} />}
+      {currentTab === 'legislation' && <LegislationTab playerId={player.id} inlineBills={player.bills} />}
+      {currentTab === 'votes' && <VotesTab playerId={player.id} inlineVotes={player.votes} />}
+      {currentTab === 'favours' && canViewFavours && <FavoursTab player={player} />}
+      {currentTab === 'history' && <HistoryTab playerId={player.id} inlineEvents={player.events} />}
     </div>
   );
 }
@@ -243,7 +248,7 @@ function OverviewTab({ player }: { player: PlayerDossier }) {
           />
           <StatCard
             label="Health"
-            value={player.isAlive ? player.healthStatus : 'Deceased'}
+            value={player.isAlive ? player.healthStatus ?? 'Private' : 'Deceased'}
           />
           <StatCard
             label="Bills authored"

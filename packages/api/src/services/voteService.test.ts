@@ -18,6 +18,25 @@ function makeNpcConfirmDb(election: any, updated = { id: 'election-1', status: '
   };
 }
 
+function makeTurnoutDb(election: any, ballotRows = [{ id: 'ballot-1' }, { id: 'ballot-2' }]) {
+  const electionLimit = vi.fn().mockResolvedValue(election ? [election] : []);
+  const electionWhere = vi.fn().mockReturnValue({ limit: electionLimit });
+  const electionFrom = vi.fn().mockReturnValue({ where: electionWhere });
+
+  const ballotsWhere = vi.fn().mockResolvedValue(ballotRows);
+  const ballotsFrom = vi.fn().mockReturnValue({ where: ballotsWhere });
+
+  const select = vi.fn()
+    .mockReturnValueOnce({ from: electionFrom })
+    .mockReturnValueOnce({ from: ballotsFrom });
+
+  return {
+    db: { select },
+    select,
+    ballotsWhere,
+  };
+}
+
 const validNpcElection = {
   id: 'election-1',
   title: 'Minister Appointment',
@@ -87,5 +106,47 @@ describe('VoteService.enterNpcConfirmation guards', () => {
 
     expect(result).toEqual({ id: 'election-1', status: 'tallied' });
     expect(update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('VoteService.getTurnout privacy', () => {
+  it.each([
+    ['sealed', { sealedResults: true }],
+    ['anonymous', { anonymousBallots: true }],
+  ])('hides live %s turnout from non-staff viewers', async (_name, config) => {
+    const { db, select, ballotsWhere } = makeTurnoutDb({
+      results: null,
+      status: 'voting_open',
+      config,
+      createdById: 'creator-player',
+    });
+
+    const result = await new VoteService(db as any).getTurnout('election-1', {
+      userId: 'viewer-player',
+      isStaff: false,
+    });
+
+    expect(result).toBeNull();
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(ballotsWhere).not.toHaveBeenCalled();
+  });
+
+  it('allows staff to view live sealed turnout', async () => {
+    const { db } = makeTurnoutDb({
+      results: { turnout: 4 },
+      status: 'voting_open',
+      config: { sealedResults: true },
+      createdById: 'creator-player',
+    }, [{ id: 'ballot-1' }, { id: 'ballot-2' }]);
+
+    await expect(new VoteService(db as any).getTurnout('election-1', {
+      userId: 'staff-player',
+      isStaff: true,
+    })).resolves.toMatchObject({
+      electionId: 'election-1',
+      eligible: 4,
+      voted: 2,
+      totalBallots: 2,
+    });
   });
 });

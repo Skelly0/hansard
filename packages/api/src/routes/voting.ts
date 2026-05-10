@@ -32,6 +32,10 @@ export default async function votingRoutes(fastify: FastifyInstance) {
   const getService = () => {
     return new VoteService(fastify.db);
   };
+  const getViewer = (request: { session: { user?: { id: string } }; player?: { isStaff?: boolean } }) => ({
+    userId: request.session.user!.id,
+    isStaff: !!request.player?.isStaff,
+  });
 
   // ------------------------------------------------------------------
   // LIST elections
@@ -54,7 +58,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
         limit: query.limit ? parseInt(query.limit, 10) : undefined,
         offset: query.offset ? parseInt(query.offset, 10) : undefined,
         page: query.page ? parseInt(query.page, 10) : undefined,
-      });
+      }, getViewer(request));
     },
   );
 
@@ -67,7 +71,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const service = getService();
       const { id } = request.params as { id: string };
-      const election = await service.getElection(id);
+      const election = await service.getElection(id, getViewer(request));
       if (!election) {
         return reply.status(404).send({ error: 'Election not found' });
       }
@@ -126,7 +130,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const body = request.body as any;
 
       // Only creator or staff can update
-      const election = await service.getElection(id);
+      const election = await service.getElection(id, getViewer(request));
       if (!election) {
         return reply.status(404).send({ error: 'Election not found' });
       }
@@ -201,7 +205,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const service = getService();
       const { id } = request.params as { id: string };
-      const result = await service.getElectionResults(id);
+      const result = await service.getElectionResults(id, getViewer(request));
       if (!result) {
         return reply.status(404).send({ error: 'Election not found' });
       }
@@ -220,6 +224,10 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const user = request.session.user!;
       const { id } = request.params as { id: string };
       const body = request.body as any;
+      const election = await service.getElection(id, getViewer(request));
+      if (!election) {
+        return reply.status(404).send({ error: 'Election not found' });
+      }
 
       // Self-registration only, unless staff is nominating someone else.
       const targetPlayerId = body.playerId ?? user.id;
@@ -256,7 +264,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const user = request.session.user!;
       const { id, playerId } = request.params as { id: string; playerId: string };
 
-      const election = await service.getElection(id);
+      const election = await service.getElection(id, getViewer(request));
       if (!election) {
         return reply.status(404).send({ error: 'Election not found' });
       }
@@ -287,6 +295,10 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const user = request.session.user!;
       const { id } = request.params as { id: string };
       const body = request.body as any;
+      const election = await service.getElection(id, getViewer(request));
+      if (!election) {
+        return reply.status(404).send({ error: 'Election not found' });
+      }
 
       try {
         const ballot = await service.castBallot({
@@ -311,7 +323,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const service = getService();
       const user = request.session.user!;
       const { id } = request.params as { id: string };
-      return service.getEligibility(id, user.id);
+      return service.getEligibility(id, user.id, getViewer(request));
     },
   );
 
@@ -321,10 +333,14 @@ export default async function votingRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/api/elections/:id/turnout',
     { preHandler: [requireAuth] },
-    async (request) => {
+    async (request, reply) => {
       const service = getService();
       const { id } = request.params as { id: string };
-      return service.getTurnout(id);
+      const result = await service.getTurnout(id, getViewer(request));
+      if (!result) {
+        return reply.status(404).send({ error: 'Election not found' });
+      }
+      return result;
     },
   );
 
@@ -406,7 +422,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
     async (request) => {
       const service = getService();
       const { id } = request.params as { id: string };
-      return service.getRounds(id);
+      return service.getRounds(id, getViewer(request));
     },
   );
 }

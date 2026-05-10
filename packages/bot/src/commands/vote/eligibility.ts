@@ -6,6 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import { ballots, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
@@ -34,6 +35,7 @@ const command: Command = {
     await interaction.deferReply({ ephemeral: true });
 
     const electionRef = interaction.options.getString('election', true);
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
 
     // Look up player by Discord ID
     const [player] = await db
@@ -55,7 +57,7 @@ const command: Command = {
 
     const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
-    if (!election) {
+    if (!election || (election.status === 'draft' && !actorIsStaff)) {
       await interaction.editReply({
         embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
       });

@@ -15,7 +15,8 @@ export default async function partyRoutes(fastify: FastifyInstance) {
     '/api/parties',
     { preHandler: [requireAuth] },
     async (request) => {
-      const includeInactive = request.query.includeInactive === '1' || request.query.includeInactive === 'true';
+      const requestedInactive = request.query.includeInactive === '1' || request.query.includeInactive === 'true';
+      const includeInactive = !!request.player?.isStaff && requestedInactive;
       return getParties(fastify.db, { includeInactive });
     },
   );
@@ -27,6 +28,9 @@ export default async function partyRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const party = await getPartyById(fastify.db, request.params.id);
       if (!party) return reply.status(404).send({ error: 'Party not found' });
+      if (!party.isActive && !request.player?.isStaff) {
+        return reply.status(404).send({ error: 'Party not found' });
+      }
       return party;
     },
   );

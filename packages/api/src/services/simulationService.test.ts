@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { simulationClock, timeAdvanceLog, players, playerEventLog, officeHolders } from '@hansard/db';
-import { advanceTime, DEFAULT_AGING_CONFIG } from './simulationService';
+import { advanceTime, DEFAULT_AGING_CONFIG, sanitizeTimeAdvanceLog } from './simulationService';
 
 function makePlayer(overrides: Record<string, unknown> = {}): any {
   return {
@@ -142,5 +142,44 @@ describe('advanceTime death grace period', () => {
     expect(player.deathDate).toBe('2026-03-01');
     expect(player.causeOfDeath).toBe('natural causes');
     expect(eventLog.some((event) => event.eventType === 'death')).toBe(true);
+  });
+});
+
+describe('simulation history privacy', () => {
+  it('redacts per-player event IDs from time advance summaries for non-staff viewers', () => {
+    const row = {
+      id: 'advance-1',
+      notes: 'Private staff context',
+      summary: {
+        deaths: ['dead-player'],
+        pendingDeaths: ['pending-player'],
+        ailments: ['ailing-player'],
+        aged: 4,
+      },
+    };
+
+    const result = sanitizeTimeAdvanceLog(row, { isStaff: false });
+
+    expect(result.summary).toEqual({
+      deaths: [],
+      pendingDeaths: [],
+      ailments: [],
+      aged: 4,
+    });
+    expect(result.notes).toBeNull();
+  });
+
+  it('keeps raw summaries for staff viewers', () => {
+    const row = {
+      id: 'advance-1',
+      summary: {
+        deaths: ['dead-player'],
+        pendingDeaths: ['pending-player'],
+        ailments: ['ailing-player'],
+        aged: 4,
+      },
+    };
+
+    expect(sanitizeTimeAdvanceLog(row, { isStaff: true })).toBe(row);
   });
 });

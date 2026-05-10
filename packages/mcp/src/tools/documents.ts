@@ -17,7 +17,10 @@ export const registerDocumentTools: RegisterToolsFn = (server, ctx) => {
       },
     },
     safeHandler(async (args) => {
-      const result = await listDocuments(ctx.db, args as Parameters<typeof listDocuments>[1]);
+      const session = await ctx.session.get();
+      const result = await listDocuments(ctx.db, args as Parameters<typeof listDocuments>[1], {
+        isStaff: session.isStaff,
+      });
       return jsonResult(result);
     }),
   );
@@ -29,7 +32,8 @@ export const registerDocumentTools: RegisterToolsFn = (server, ctx) => {
       inputSchema: { slug: z.string().min(1) },
     },
     safeHandler(async ({ slug }) => {
-      const doc = await getDocument(ctx.db, slug);
+      const session = await ctx.session.get();
+      const doc = await getDocument(ctx.db, slug, { isStaff: session.isStaff });
       if (!doc) return errorResult(`No document with slug "${slug}".`);
       return jsonResult(doc);
     }),
@@ -47,7 +51,10 @@ export const registerDocumentTools: RegisterToolsFn = (server, ctx) => {
       },
     },
     safeHandler(async ({ query, collectionId, limit, offset }) => {
-      const result = await searchDocuments(ctx.db, query, collectionId, limit, offset);
+      const session = await ctx.session.get();
+      const result = await searchDocuments(ctx.db, query, collectionId, limit, offset, {
+        isStaff: session.isStaff,
+      });
       return jsonResult(result);
     }),
   );

@@ -14,6 +14,7 @@ import {
   favourCategories,
 } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const HEALTH_DISPLAY: Record<string, string> = {
@@ -37,9 +38,10 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const searchName = interaction.options.getString('name', true).trim();
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
 
     // Case-insensitive partial search on characterName
     const results = await db
@@ -121,18 +123,24 @@ const command: Command = {
         and(eq(officeHolders.playerId, player.id), isNull(officeHolders.endDate)),
       );
 
-    // Favour balances — brief stats
-    const balances = await db
-      .select({
-        categoryName: favourCategories.name,
-        categoryEmoji: favourCategories.emoji,
-        balance: favourBalances.balance,
-      })
-      .from(favourBalances)
-      .innerJoin(favourCategories, eq(favourBalances.categoryId, favourCategories.id))
-      .where(eq(favourBalances.playerId, player.id));
+    const canViewPrivate = actorIsStaff || player.discordId === interaction.user.id;
 
-    const totalFavours = balances.reduce((sum, b) => sum + b.balance, 0);
+    // Favour balances are private to the player and staff.
+    const balances = canViewPrivate
+      ? await db
+          .select({
+            categoryName: favourCategories.name,
+            categoryEmoji: favourCategories.emoji,
+            balance: favourBalances.balance,
+          })
+          .from(favourBalances)
+          .innerJoin(favourCategories, eq(favourBalances.categoryId, favourCategories.id))
+          .where(eq(favourBalances.playerId, player.id))
+      : [];
+
+    const totalFavours = canViewPrivate
+      ? balances.reduce((sum, b) => sum + b.balance, 0)
+      : 0;
 
     const officeText = activeOffices.length > 0
       ? activeOffices.map((o) => `**${o.officeName}** (${o.officeTier})`).join('\n')
@@ -153,7 +161,9 @@ const command: Command = {
       ? `${totalFavours} total across ${balances.length} categor${balances.length === 1 ? 'y' : 'ies'}`
       : '*No favour balances*';
 
-    const healthDisplay = HEALTH_DISPLAY[player.healthStatus] ?? player.healthStatus;
+    const healthDisplay = canViewPrivate
+      ? HEALTH_DISPLAY[player.healthStatus] ?? player.healthStatus
+      : 'Private';
     const age = player.currentAge ?? player.startingAge ?? '?';
 
     const bio = player.characterBio
@@ -162,26 +172,31 @@ const command: Command = {
         : player.characterBio
       : undefined;
 
+    const fields = [
+      { name: 'Discord User', value: `<@${player.discordId}>`, inline: true },
+      { name: 'Age', value: String(age), inline: true },
+      { name: 'Health', value: healthDisplay, inline: true },
+      { name: 'Faction', value: factionName, inline: true },
+      { name: 'Party', value: partyName, inline: true },
+      {
+        name: 'Status',
+        value: player.isAlive ? '\u{1F7E2} Alive' : '\u{26B0}\u{FE0F} Deceased',
+        inline: true,
+      },
+      { name: 'Current Offices', value: officeText },
+      { name: 'Discord Roles', value: rolesText },
+    ];
+
+    if (canViewPrivate) {
+      fields.push({ name: 'Favours', value: favoursBrief, inline: true });
+    }
+
     const embed = createEmbed({
       title: player.characterName ?? 'Unknown',
       description: bio ? `> ${bio}` : undefined,
       system: 'players',
       thumbnail: player.characterPortraitUrl ?? undefined,
-      fields: [
-        { name: 'Discord User', value: `<@${player.discordId}>`, inline: true },
-        { name: 'Age', value: String(age), inline: true },
-        { name: 'Health', value: healthDisplay, inline: true },
-        { name: 'Faction', value: factionName, inline: true },
-        { name: 'Party', value: partyName, inline: true },
-        {
-          name: 'Status',
-          value: player.isAlive ? '\u{1F7E2} Alive' : '\u{26B0}\u{FE0F} Deceased',
-          inline: true,
-        },
-        { name: 'Current Offices', value: officeText },
-        { name: 'Discord Roles', value: rolesText },
-        { name: 'Favours', value: favoursBrief, inline: true },
-      ],
+      fields,
     });
 
     await interaction.editReply({ embeds: [embed] });

@@ -37,7 +37,7 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const electionRef = interaction.options.getString('election', true);
     const statement = interaction.options.getString('statement') ?? undefined;

@@ -19,6 +19,9 @@ import {
  * Favour routes plugin — categories, balances, and transactions.
  */
 export default async function favourRoutes(fastify: FastifyInstance) {
+  const canViewPlayerFavours = (request: { session: { user?: { id: string } }; player?: { isStaff?: boolean } }, playerId: string) =>
+    !!request.player?.isStaff || request.session.user?.id === playerId;
+
   // ============================================================
   // Categories
   // ============================================================
@@ -28,7 +31,8 @@ export default async function favourRoutes(fastify: FastifyInstance) {
     '/api/favours/categories',
     { preHandler: [requireAuth] },
     async (request) => {
-      const includeInactive = request.query.includeInactive === '1' || request.query.includeInactive === 'true';
+      const includeInactive = !!request.player?.isStaff
+        && (request.query.includeInactive === '1' || request.query.includeInactive === 'true');
       return getCategories(fastify.db, { includeInactive });
     },
   );
@@ -99,7 +103,10 @@ export default async function favourRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: { playerId: string } }>(
     '/api/favours/balances/:playerId',
     { preHandler: [requireAuth] },
-    async (request) => {
+    async (request, reply) => {
+      if (!canViewPlayerFavours(request, request.params.playerId)) {
+        return reply.status(403).send({ error: 'Cannot view another player’s favour balances' });
+      }
       return getPlayerBalances(fastify.db, request.params.playerId);
     },
   );
@@ -116,7 +123,7 @@ export default async function favourRoutes(fastify: FastifyInstance) {
   // GET /api/favours/leaderboard/:categoryId — top players in a category
   fastify.get<{ Params: { categoryId: string }; Querystring: { limit?: string } }>(
     '/api/favours/leaderboard/:categoryId',
-    { preHandler: [requireAuth] },
+    { preHandler: [requireAuth, requireStaff] },
     async (request) => {
       const limit = request.query.limit ? parseInt(request.query.limit, 10) : 20;
       return getLeaderboard(fastify.db, request.params.categoryId, limit);
@@ -225,7 +232,10 @@ export default async function favourRoutes(fastify: FastifyInstance) {
   }>(
     '/api/favours/history/:playerId',
     { preHandler: [requireAuth] },
-    async (request) => {
+    async (request, reply) => {
+      if (!canViewPlayerFavours(request, request.params.playerId)) {
+        return reply.status(403).send({ error: 'Cannot view another player’s favour history' });
+      }
       return getHistory(fastify.db, request.params.playerId, {
         categoryId: request.query.categoryId,
         limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,

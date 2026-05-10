@@ -3,11 +3,12 @@ import {
   EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, desc, and, gte, inArray, type SQL } from 'drizzle-orm';
+import { eq, desc, and, gte, inArray, ne, type SQL } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { elections } from '@hansard/db';
 import { createEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const RESULTS_PER_PAGE = 6;
@@ -133,14 +134,18 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const scope = (interaction.options.getString('scope') ?? 'all') as 'active' | 'past' | 'all';
     const status = interaction.options.getString('status');
     const type = interaction.options.getString('type');
     const range = interaction.options.getString('range') ?? 'all';
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
 
     const conditions: SQL[] = [];
+    if (!actorIsStaff) {
+      conditions.push(ne(elections.status, 'draft'));
+    }
 
     if (status) {
       conditions.push(eq(elections.status, status));

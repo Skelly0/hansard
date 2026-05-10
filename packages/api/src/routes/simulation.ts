@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and, inArray, type SQL } from 'drizzle-orm';
 import { simulationClock, playerEventLog, players } from '@hansard/db';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireStaff } from '../middleware/requireStaff.js';
 import * as simService from '../services/simulationService.js';
+import { PUBLIC_PLAYER_EVENT_TYPES } from '../services/playerService.js';
 
 /**
  * Simulation routes — clock management, time advance, ailments, death.
@@ -80,7 +81,9 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth] },
     async (request) => {
       const { limit = 20 } = request.query as { limit?: number };
-      return simService.getHistory(fastify.db, Math.min(limit, 100));
+      return simService.getHistory(fastify.db, Math.min(limit, 100), {
+        isStaff: !!request.player?.isStaff,
+      });
     },
   );
 
@@ -198,6 +201,14 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth] },
     async (request) => {
       const limit = Math.min(parseInt(request.query.limit ?? '50', 10) || 50, 200);
+      const conditions: SQL[] = [];
+      if (request.query.eventType) {
+        conditions.push(eq(playerEventLog.eventType, request.query.eventType));
+      }
+      if (!request.player?.isStaff) {
+        conditions.push(inArray(playerEventLog.eventType, PUBLIC_PLAYER_EVENT_TYPES));
+      }
+
       const rows = await fastify.db
         .select({
           id: playerEventLog.id,
@@ -213,6 +224,7 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
         })
         .from(playerEventLog)
         .leftJoin(players, eq(playerEventLog.playerId, players.id))
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(playerEventLog.createdAt))
         .limit(limit);
       return rows;

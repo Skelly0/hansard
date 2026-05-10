@@ -5,7 +5,7 @@
  * runoff generation, NPC confirmation, and certification (with auto
  * office-appointment on certified position elections).
  */
-import { eq, and, inArray, isNull, sql, gte, lte } from 'drizzle-orm';
+import { eq, and, inArray, isNull, sql, gte, lte, or, ne } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import { elections, candidates, ballots, bills, players, officeHolders } from '@hansard/db';
 import type {
@@ -69,6 +69,11 @@ export interface ListElectionsFilter {
   page?: number;
 }
 
+export interface ElectionViewer {
+  userId: string;
+  isStaff: boolean;
+}
+
 /** Statuses considered "active" for the scope filter. */
 const ACTIVE_STATUSES: ElectionStatus[] = [
   'draft',
@@ -124,6 +129,19 @@ export interface NpcConfirmInput {
 
 export class VoteService {
   constructor(private db: Database) {}
+
+  private canViewElection(
+    election: { status: string; createdById: string },
+    viewer?: ElectionViewer,
+  ): boolean {
+    if (!viewer || viewer.isStaff) return true;
+    return election.status !== 'draft' || election.createdById === viewer.userId;
+  }
+
+  private visibleElectionCondition(viewer?: ElectionViewer) {
+    if (!viewer || viewer.isStaff) return undefined;
+    return or(ne(elections.status, 'draft'), eq(elections.createdById, viewer.userId));
+  }
 
   private async getEligibilityForElection(
     election: typeof elections.$inferSelect,
@@ -264,7 +282,7 @@ export class VoteService {
   // Read
   // ----------------------------------------------------------
 
-  async getElection(id: string) {
+  async getElection(id: string, viewer?: ElectionViewer) {
     const [election] = await this.db
       .select()
       .from(elections)
@@ -272,6 +290,7 @@ export class VoteService {
       .limit(1);
 
     if (!election) return null;
+    if (!this.canViewElection(election, viewer)) return null;
 
     const [electionCandidates, relatedBillSlug] = await Promise.all([
       this.db.select().from(candidates).where(eq(candidates.electionId, id)),
@@ -309,8 +328,12 @@ export class VoteService {
     }));
   }
 
-  async listElections(filters: ListElectionsFilter = {}) {
+  async listElections(filters: ListElectionsFilter = {}, viewer?: ElectionViewer) {
     const conditions = [];
+    const visibility = this.visibleElectionCondition(viewer);
+    if (visibility) {
+      conditions.push(visibility);
+    }
 
     if (filters.status) {
       // Explicit status wins over scope grouping.
@@ -369,19 +392,21 @@ export class VoteService {
     return { data: enriched, total: totalRow[0]?.count ?? enriched.length };
   }
 
-  async getElectionResults(id: string) {
+  async getElectionResults(id: string, viewer?: ElectionViewer) {
     const [election] = await this.db
       .select({
         results: elections.results,
         status: elections.status,
         config: elections.config,
         method: elections.method,
+        createdById: elections.createdById,
       })
       .from(elections)
       .where(eq(elections.id, id))
       .limit(1);
 
     if (!election) return null;
+    if (!this.canViewElection(election, viewer)) return null;
 
     // Respect sealed results — only show after voting_closed or later
     const config = election.config as ElectionConfig;
@@ -403,12 +428,31 @@ export class VoteService {
     };
   }
 
-  async getTurnout(id: string) {
+  async getTurnout(id: string, viewer?: ElectionViewer) {
     const [election] = await this.db
-      .select({ results: elections.results })
+      .select({
+        results: elections.results,
+        status: elections.status,
+        config: elections.config,
+        createdById: elections.createdById,
+      })
       .from(elections)
       .where(eq(elections.id, id))
       .limit(1);
+
+    if (!election || !this.canViewElection(election, viewer)) {
+      return null;
+    }
+
+    const config = election.config as ElectionConfig;
+    if (
+      viewer
+      && !viewer.isStaff
+      && election.status === 'voting_open'
+      && (config.sealedResults || config.anonymousBallots)
+    ) {
+      return null;
+    }
 
     const ballotRows = await this.db
       .select({ id: ballots.id })
@@ -433,7 +477,7 @@ export class VoteService {
     };
   }
 
-  async getEligibility(electionId: string, playerId: string) {
+  async getEligibility(electionId: string, playerId: string, viewer?: ElectionViewer) {
     const [election] = await this.db
       .select()
       .from(elections)
@@ -441,10 +485,13 @@ export class VoteService {
       .limit(1);
 
     if (!election) return { eligible: false, reason: 'Election not found' };
+    if (!this.canViewElection(election, viewer)) {
+      return { eligible: false, reason: 'Election not found' };
+    }
     return this.getEligibilityForElection(election, playerId);
   }
 
-  async getRounds(id: string) {
+  async getRounds(id: string, viewer?: ElectionViewer) {
     // Get the parent and all child elections (runoff rounds)
     const [parent] = await this.db
       .select()
@@ -453,6 +500,7 @@ export class VoteService {
       .limit(1);
 
     if (!parent) return [];
+    if (!this.canViewElection(parent, viewer)) return [];
 
     // Get all elections in this chain
     const rootId = parent.parentElectionId ?? parent.id;
@@ -464,7 +512,7 @@ export class VoteService {
 
     // Include the root
     if (parent.parentElectionId == null) {
-      return [parent, ...allRounds];
+      return [parent, ...allRounds].filter((election) => this.canViewElection(election, viewer));
     }
 
     // If we were given a child, fetch the root too
@@ -474,7 +522,8 @@ export class VoteService {
       .where(eq(elections.id, rootId))
       .limit(1);
 
-    return root ? [root, ...allRounds] : allRounds;
+    return (root ? [root, ...allRounds] : allRounds)
+      .filter((election) => this.canViewElection(election, viewer));
   }
 
   // ----------------------------------------------------------

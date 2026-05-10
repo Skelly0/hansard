@@ -1,4 +1,4 @@
-import { eq, and, desc, isNull, isNotNull, ilike, or, inArray, count, type SQL } from 'drizzle-orm';
+import { eq, and, desc, isNull, isNotNull, ilike, or, inArray, count, ne, type SQL } from 'drizzle-orm';
 import {
   players,
   playerEventLog,
@@ -77,6 +77,28 @@ export interface PlayerVoteRecordEntry {
 export interface PlayerVoteRecordViewer {
   userId: string;
   isStaff: boolean;
+}
+
+export interface PlayerPrivacyViewer {
+  userId: string;
+  isStaff: boolean;
+}
+
+export const PUBLIC_PLAYER_EVENT_TYPES = [
+  PlayerEventType.PARTY_CHANGE,
+  PlayerEventType.FACTION_CHANGE,
+  PlayerEventType.OFFICE_APPOINTED,
+  PlayerEventType.OFFICE_LEFT,
+  PlayerEventType.DEATH,
+  PlayerEventType.REGISTRATION,
+  PlayerEventType.NAME_CHANGE,
+];
+
+export function canViewPrivatePlayerData(
+  targetPlayerId: string,
+  viewer?: PlayerPrivacyViewer,
+): boolean {
+  return !viewer || viewer.isStaff || viewer.userId === targetPlayerId;
 }
 
 // ============================================================
@@ -390,11 +412,19 @@ export async function getPlayerEvents(
   db: Database,
   playerId: string,
   filters: PlayerEventFilters = {},
+  viewer?: PlayerPrivacyViewer,
 ): Promise<PlayerEvent[]> {
   const conditions: SQL[] = [eq(playerEventLog.playerId, playerId)];
 
   if (filters.eventType) {
     conditions.push(eq(playerEventLog.eventType, filters.eventType));
+  }
+  if (viewer && !viewer.isStaff) {
+    conditions.push(
+      viewer.userId === playerId
+        ? ne(playerEventLog.eventType, PlayerEventType.DEATH_PENDING)
+        : inArray(playerEventLog.eventType, PUBLIC_PLAYER_EVENT_TYPES),
+    );
   }
 
   const limit = filters.limit ?? 50;
@@ -408,7 +438,7 @@ export async function getPlayerEvents(
     .limit(limit)
     .offset(offset);
 
-  return results.map(toPlayerEvent);
+  return sanitizePlayerEvents(results.map(toPlayerEvent), viewer);
 }
 
 /**
@@ -417,17 +447,27 @@ export async function getPlayerEvents(
 export async function getPlayerHealth(
   db: Database,
   playerId: string,
-): Promise<{ healthStatus: string; ailments: Ailment[]; events: PlayerEvent[] } | null> {
+  viewer?: PlayerPrivacyViewer,
+): Promise<{ healthStatus: PlayerProfile['healthStatus']; ailments: Ailment[]; events: PlayerEvent[] } | null> {
   const player = await getPlayer(db, playerId);
   if (!player) return null;
+  if (!canViewPrivatePlayerData(playerId, viewer)) {
+    return {
+      healthStatus: player.isAlive ? null : player.healthStatus,
+      ailments: [],
+      events: [],
+    };
+  }
 
-  const healthEventTypes = [
+  const healthEventTypes: PlayerEventType[] = [
     PlayerEventType.AILMENT_ACQUIRED,
     PlayerEventType.AILMENT_RECOVERED,
     PlayerEventType.HEALTH_CHANGED,
-    PlayerEventType.DEATH_PENDING,
     PlayerEventType.DEATH,
   ];
+  if (!viewer || viewer.isStaff) {
+    healthEventTypes.push(PlayerEventType.DEATH_PENDING);
+  }
 
   // Filter to health-related event types in SQL so the LIMIT 50 actually
   // returns up to 50 health events (not 50 events of any type).
@@ -446,7 +486,7 @@ export async function getPlayerHealth(
   return {
     healthStatus: player.healthStatus,
     ailments: player.ailments,
-    events: healthEvents.map(toPlayerEvent),
+    events: sanitizePlayerEvents(healthEvents.map(toPlayerEvent), viewer),
   };
 }
 
@@ -565,6 +605,44 @@ function toPlayerEvent(row: typeof playerEventLog.$inferSelect): PlayerEvent {
     isAutomatic: row.isAutomatic,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+export function sanitizePlayerProfile(
+  profile: PlayerProfile,
+  viewer?: PlayerPrivacyViewer,
+): PlayerProfile {
+  if (!viewer || viewer.isStaff) return profile;
+  const canViewOwnHealth = viewer.userId === profile.id;
+
+  return {
+    ...profile,
+    healthStatus: canViewOwnHealth || !profile.isAlive ? profile.healthStatus : null,
+    ailments: canViewOwnHealth ? profile.ailments : [],
+    staffRole: null,
+    profileData: null,
+  };
+}
+
+export function sanitizePlayerEvents(
+  events: PlayerEvent[],
+  viewer?: PlayerPrivacyViewer,
+): PlayerEvent[] {
+  if (!viewer || viewer.isStaff) return events;
+  const withoutStaffOnlyEvents = events.filter(
+    (event) => event.eventType !== PlayerEventType.DEATH_PENDING,
+  );
+  if (withoutStaffOnlyEvents.every((event) => event.playerId === viewer.userId)) {
+    return withoutStaffOnlyEvents;
+  }
+
+  const publicTypes = new Set<string>(PUBLIC_PLAYER_EVENT_TYPES);
+  return withoutStaffOnlyEvents
+    .filter((event) => publicTypes.has(event.eventType))
+    .map((event) => ({
+      ...event,
+      oldValue: null,
+      newValue: null,
+    }));
 }
 
 function formatBallotChoice(vote: typeof ballots.$inferSelect.vote): string {

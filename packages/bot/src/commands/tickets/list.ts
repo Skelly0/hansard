@@ -63,7 +63,7 @@ const command: Command = {
     const statusFilter = interaction.options.getString('status');
     const assigneeUser = interaction.options.getUser('assignee');
 
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const { viewer } = await getTicketViewer(interaction);
     if (!viewer) {

@@ -5,7 +5,7 @@ import {
   getLeaderboard,
   getHistory,
 } from '@hansard/api/services/favourService';
-import { jsonResult, safeHandler, type RegisterToolsFn } from './types.js';
+import { jsonResult, errorResult, safeHandler, type RegisterToolsFn } from './types.js';
 
 export const registerFavourTools: RegisterToolsFn = (server, ctx) => {
   server.registerTool(
@@ -46,6 +46,10 @@ export const registerFavourTools: RegisterToolsFn = (server, ctx) => {
       },
     },
     safeHandler(async ({ categoryId, limit }) => {
+      const session = await ctx.session.get();
+      if (!session.isStaff) {
+        return errorResult('Only staff can view favour leaderboards.');
+      }
       const rows = await getLeaderboard(ctx.db, categoryId, limit);
       return jsonResult({ count: rows.length, leaderboard: rows });
     }),

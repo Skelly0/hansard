@@ -2,10 +2,12 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, ilike, asc } from 'drizzle-orm';
+import { eq, ilike } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { ballots, bills, players } from '@hansard/db';
+import { bills } from '@hansard/db';
+import { getVoters as getBillVoters } from '@hansard/api/services/billService';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 /**
@@ -63,12 +65,13 @@ const command: Command = {
         .setName('bill')
         .setDescription('Bill number (e.g. B-001) or title')
         .setRequired(true),
-    ) as SlashCommandBuilder,
+  ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const billArg = interaction.options.getString('bill', true);
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
 
     const bill = await resolveBill(billArg);
     if (!bill) {
@@ -87,35 +90,30 @@ const command: Command = {
       return;
     }
 
-    // Pull ballots for the linked election, joining players for character names
-    const rows = await db
-      .select({
-        voterId: ballots.voterId,
-        vote: ballots.vote,
-        castAt: ballots.castAt,
-        characterName: players.characterName,
-        discordId: players.discordId,
-      })
-      .from(ballots)
-      .leftJoin(players, eq(ballots.voterId, players.id))
-      .where(eq(ballots.electionId, bill.playerVoteId))
-      .orderBy(asc(ballots.castAt));
+    const voters = await getBillVoters(db, bill.slug, {
+      userId: interaction.user.id,
+      isStaff: actorIsStaff,
+    });
+    if (!voters) {
+      await interaction.editReply({
+        embeds: [errorEmbed(`Could not load voters for Bill #B-${padded}.`)],
+      });
+      return;
+    }
 
     const yeas: string[] = [];
     const nays: string[] = [];
     const abstains: string[] = [];
     const other: string[] = [];
 
-    for (const row of rows) {
-      const vote = row.vote as { type?: string; choice?: string };
-      const name = row.characterName ?? 'Unknown';
-      const tag = row.discordId ? `${name} (<@${row.discordId}>)` : name;
-      const choice = vote?.choice;
+    for (const row of voters.playerVotes) {
+      const tag = row.characterName ?? 'Unknown';
+      const choice = row.choice;
 
       if (choice === 'yea') yeas.push(tag);
       else if (choice === 'nay') nays.push(tag);
       else if (choice === 'abstain') abstains.push(tag);
-      else other.push(`${tag} _(${choice ?? vote?.type ?? 'unknown'})_`);
+      else other.push(`${tag} _(${choice ?? 'unknown'})_`);
     }
 
     const formatList = (list: string[]): string =>
@@ -155,7 +153,10 @@ const command: Command = {
       description: [
         `**${bill.title}**`,
         `**Total ballots cast:** ${total}`,
-        `**Election:** \`${bill.playerVoteId}\``,
+        voters.playerVotes.length === 0 && !actorIsStaff
+          ? '_Named ballots are hidden until the linked vote is public._'
+          : null,
+        actorIsStaff ? `**Election:** \`${bill.playerVoteId}\`` : null,
       ].join('\n'),
       fields,
     });

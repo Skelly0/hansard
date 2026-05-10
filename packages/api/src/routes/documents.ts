@@ -21,6 +21,9 @@ import { computeDiff } from '../services/diffService.js';
  */
 export default async function documentRoutes(fastify: FastifyInstance) {
   const db = (fastify as any).db as Database;
+  const getViewer = (request: { player?: { isStaff?: boolean } }) => ({
+    isStaff: !!request.player?.isStaff,
+  });
 
   // ============================================================
   // GET /api/documents/search — Full-text search (before :slug)
@@ -49,6 +52,7 @@ export default async function documentRoutes(fastify: FastifyInstance) {
         collection,
         limit ? parseInt(limit, 10) : undefined,
         offset ? parseInt(offset, 10) : undefined,
+        getViewer(request),
       );
     },
   );
@@ -60,8 +64,8 @@ export default async function documentRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/api/documents/collections',
     { preHandler: [requireAuth] },
-    async () => {
-      return getCollections(db);
+    async (request) => {
+      return getCollections(db, getViewer(request));
     },
   );
 
@@ -139,7 +143,7 @@ export default async function documentRoutes(fastify: FastifyInstance) {
         search,
         limit: parsedLimit,
         offset: parsedOffset,
-      });
+      }, getViewer(request));
       return { data: result.documents, total: result.total };
     },
   );
@@ -152,7 +156,7 @@ export default async function documentRoutes(fastify: FastifyInstance) {
     '/api/documents/:slug',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const doc = await getDocument(db, request.params.slug);
+      const doc = await getDocument(db, request.params.slug, getViewer(request));
       if (!doc) {
         return reply.status(404).send({ error: 'Document not found' });
       }
@@ -168,7 +172,7 @@ export default async function documentRoutes(fastify: FastifyInstance) {
     '/api/documents/:slug/versions',
     { preHandler: [requireAuth] },
     async (request) => {
-      return getVersionHistory(db, request.params.slug);
+      return getVersionHistory(db, request.params.slug, getViewer(request));
     },
   );
 
@@ -183,7 +187,7 @@ export default async function documentRoutes(fastify: FastifyInstance) {
     '/api/documents/:slug/diff',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const versions = await getVersionHistory(db, request.params.slug);
+      const versions = await getVersionHistory(db, request.params.slug, getViewer(request));
 
       if (versions.length === 0) {
         return reply.status(404).send({ error: 'Document not found or has no versions' });

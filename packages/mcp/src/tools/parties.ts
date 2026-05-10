@@ -12,7 +12,8 @@ export const registerPartyTools: RegisterToolsFn = (server, ctx) => {
       },
     },
     safeHandler(async ({ includeInactive }) => {
-      const parties = await getParties(ctx.db, { includeInactive });
+      const session = await ctx.session.get();
+      const parties = await getParties(ctx.db, { includeInactive: session.isStaff && includeInactive });
       return jsonResult({ count: parties.length, parties });
     }),
   );
@@ -24,8 +25,12 @@ export const registerPartyTools: RegisterToolsFn = (server, ctx) => {
       inputSchema: { id: z.string().uuid() },
     },
     safeHandler(async ({ id }) => {
+      const session = await ctx.session.get();
       const party = await getPartyById(ctx.db, id);
       if (!party) return errorResult(`No party with id ${id}.`);
+      if (!session.isStaff && !party.isActive) {
+        return errorResult(`No party with id ${id}.`);
+      }
       return jsonResult(party);
     }),
   );

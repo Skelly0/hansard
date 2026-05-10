@@ -78,7 +78,13 @@ const command: Command = {
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     const results = await db
-      .select()
+      .select({
+        id: bills.id,
+        billNumber: bills.billNumber,
+        title: bills.title,
+        status: bills.status,
+        submittedAt: bills.submittedAt,
+      })
       .from(bills)
       .where(whereClause)
       .orderBy(desc(bills.submittedAt))

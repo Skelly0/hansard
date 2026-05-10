@@ -283,7 +283,10 @@ const command: Command = {
           policyAreas,
           coSponsorIds: [],
         })
-        .returning();
+        .returning({
+          id: bills.id,
+          billNumber: bills.billNumber,
+        });
 
       await logSubmittedBill(bill.id, player.id);
 

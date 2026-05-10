@@ -5,6 +5,7 @@
 // --- Bill Lifecycle ---
 export const BillStatus = {
   SUBMITTED: 'submitted',
+  WITHDRAWN: 'withdrawn',
   VOTING: 'voting',
   PLAYER_PASSED: 'player_passed',
   PLAYER_REJECTED: 'player_rejected',

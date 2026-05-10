@@ -13,7 +13,7 @@ import { QueryErrorState } from '../components/shared/QueryErrorState';
 import type { Bill } from '../api/hooks/useBills';
 
 const BILL_STATUSES = [
-  'all', 'submitted', 'voting', 'player_passed', 'player_rejected',
+  'all', 'submitted', 'withdrawn', 'voting', 'player_passed', 'player_rejected',
   'npc_pending', 'npc_passed', 'npc_rejected', 'enacted', 'active',
   'amended', 'repealed',
 ];

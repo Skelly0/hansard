@@ -56,6 +56,7 @@ export function statusToTagColor(status: string): string {
     open: 'open',
     draft: 'open',
     submitted: 'open',
+    withdrawn: 'closed',
     nominations_open: 'open',
     nominations_closed: 'pending',
     voting_open: 'active',

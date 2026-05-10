@@ -15,6 +15,7 @@ const RESULTS_PER_PAGE = 8;
 
 const STATUS_CHOICES = [
   { name: 'Submitted', value: 'submitted' },
+  { name: 'Withdrawn', value: 'withdrawn' },
   { name: 'Voting', value: 'voting' },
   { name: 'Player Passed', value: 'player_passed' },
   { name: 'Player Rejected', value: 'player_rejected' },

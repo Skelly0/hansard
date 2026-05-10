@@ -16,6 +16,7 @@ export function extractDocId(url: string): string | null {
 export function formatBillStatus(status: string): string {
   const statusMap: Record<string, string> = {
     submitted: 'Submitted',
+    withdrawn: 'Withdrawn',
     voting: 'In Vote',
     player_passed: 'Passed (Player House)',
     player_rejected: 'Rejected (Player House)',
@@ -37,6 +38,7 @@ export function formatBillStatus(status: string): string {
 export function statusEmoji(status: string): string {
   const emojiMap: Record<string, string> = {
     submitted: '\u{1F4E5}',      // inbox tray
+    withdrawn: '\u{21A9}\u{FE0F}', // leftwards arrow with hook
     voting: '\u{1F5F3}\u{FE0F}', // ballot box
     player_passed: '\u{2705}',    // check
     player_rejected: '\u{274C}',  // cross

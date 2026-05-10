@@ -30,6 +30,7 @@ const BILL_STAGES = [
 function getStageIndex(status: string): number {
   const map: Record<string, number> = {
     submitted: 0,
+    withdrawn: 0,
     voting: 1,
     player_passed: 2,
     player_rejected: 2,

@@ -151,16 +151,24 @@ These defaults centre most natural deaths in the **60–70 window** under monthl
 
 ### Default ailment pool
 
-Weighted random pick, filtered by `minAge`. Once acquired, an ailment can't be re-rolled onto the same player.
+Weighted random pick, filtered by `minAge`. Once acquired, an ailment can't be re-rolled onto the same player. The default season is set in 2075, so ordinary curable conditions are excluded; the automatic pool uses normal but dangerous conditions that plausibly remain life-threatening.
 
-- **gout** — minor, weight 3, no min age.
-- **fever** — minor, weight 3, no min age.
-- **pneumonia** — major, weight 2, no min age.
-- **tuberculosis** — major, weight 1, no min age.
+- **cancer** — major, weight 3, no min age.
 - **heart disease** — major, weight 2, min age 55.
+- **kidney disease** — major, weight 2, min age 55.
+- **liver disease** — major, weight 1, min age 55.
+- **pulmonary fibrosis** — major, weight 1, min age 55.
+- **chronic obstructive pulmonary disease** — major, weight 1, min age 60.
+- **Parkinson's disease** — major, weight 1, min age 60.
+- **dementia** — major, weight 1, min age 65.
 - **stroke** — critical, weight 1, min age 60.
+- **sepsis** — critical, weight 1, min age 60.
+- **pulmonary embolism** — critical, weight 1, min age 60.
+- **ruptured aneurysm** — critical, weight 1, min age 60.
+- **heart failure** — critical, weight 1, min age 65.
+- **organ failure** — critical, weight 1, min age 70.
 
-Total pool weight depends on age (eligibility filter): ages 50–54 see weight 9, 55–59 see 11, 60+ see 12. Stroke is the only critical in the default pool, so under defaults you can't acquire a critical ailment before 60.
+Total pool weight depends on age (eligibility filter): ages 50–54 see weight 3, 55–59 see weight 9, 60–64 see 15, 65–69 see 17, and 70+ see 18. Critical ailments remain age-gated to 60+, so under defaults you can't acquire a critical ailment before 60.
 
 ---
 

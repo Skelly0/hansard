@@ -16,16 +16,12 @@ Time only advances when staff run `/time advance`. Each advance ticks every livi
 
 ## Ailments
 
-From age 50, every tick rolls a chance of acquiring an ailment. The chance grows with age.
+From age 50, every tick rolls a chance of acquiring a serious ailment. The chance grows with age. Because the setting is 2075, ordinary curable conditions are not in the automatic pool; these are normal but dangerous conditions that can still end a life.
 
 Possible ailments:
 
-- **gout** — minor.
-- **fever** — minor.
-- **pneumonia** — major.
-- **tuberculosis** — major.
-- **heart disease** — major; cannot occur before age 55.
-- **stroke** — critical; cannot occur before age 60.
+- **Major:** cancer, heart disease (age 55+), kidney disease (age 55+), liver disease (age 55+), pulmonary fibrosis (age 55+), chronic obstructive pulmonary disease (age 60+), Parkinson's disease (age 60+), dementia (age 65+).
+- **Critical:** stroke (age 60+), sepsis (age 60+), pulmonary embolism (age 60+), ruptured aneurysm (age 60+), heart failure (age 65+), organ failure (age 70+).
 
 You cannot acquire the same ailment twice. Staff can also assign any other ailment manually, with any severity.
 

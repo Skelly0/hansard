@@ -10,8 +10,11 @@ import {
   ChannelType,
   TextChannel,
   type ChatInputCommandInteraction,
+  type Message,
+  type MessageCreateOptions,
   type StringSelectMenuInteraction,
   type ModalSubmitInteraction,
+  type ThreadChannel,
 } from 'discord.js';
 import { asc, eq } from 'drizzle-orm';
 import {
@@ -372,33 +375,33 @@ const command: Command = {
       try {
         const channel = await interaction.guild.channels.fetch(ticketChannelId);
 
-        if (channel instanceof TextChannel) {
+        const summaryEmbeds = buildTicketSummaryEmbeds(ticketData);
+        const actionRow = buildTicketActionRow(ticketNumber);
+        const threadName = buildTicketThreadName(ticketNumber, title);
+        const reason = `Ticket #${ticketNumber} created by ${creatorDiscordUsername}`;
+
+        if (isTextTicketChannel(channel)) {
           const thread = await channel.threads.create({
-            name: `#${ticketNumber} — ${title.slice(0, 80)}`,
+            name: threadName,
             type: ChannelType.PrivateThread,
-            reason: `Ticket #${ticketNumber} created by ${creatorDiscordUsername}`,
+            reason,
           });
 
           threadId = thread.id;
           threadChannelId = channel.id;
 
-          // Add the ticket creator to the thread.
-          await thread.members.add(creatorDiscordId);
           await sendTicketStaffPing(thread, interaction.guild, ticketNumber);
-
-          // Pin the summary embed.
-          const summaryEmbeds = buildTicketSummaryEmbeds(ticketData);
-          const actionRow = buildTicketActionRow(ticketNumber);
-          const pinMessage = await thread.send({
-            embeds: summaryEmbeds.slice(0, 10),
-            components: [actionRow],
-          });
-          await pinMessage.pin();
-
-          // Send initial description as message pages.
-          for (const content of buildTicketOpeningMessages(ticketData.createdBy.displayName, description)) {
-            await thread.send({ content });
-          }
+          await sendTicketSummaryMessage(thread, summaryEmbeds, actionRow, ticketNumber);
+          await sendOpeningTicketMessage(
+            thread,
+            ticketData.createdBy.displayName,
+            description,
+            ticketNumber,
+          );
+        } else if (channel) {
+          console.warn(
+            `Ticket channel ${ticketChannelId} has unsupported type ${'type' in channel ? channel.type : 'unknown'}; expected text channel.`,
+          );
         }
       } catch (err) {
         console.error('Failed to create ticket thread (ticket persisted):', err);
@@ -440,6 +443,54 @@ const command: Command = {
     await modalInteraction.editReply({ embeds: [confirmEmbed] });
   },
 };
+
+function buildTicketThreadName(ticketNumber: number, title: string): string {
+  return `#${ticketNumber} — ${title.slice(0, 80)}`;
+}
+
+function isTextTicketChannel(channel: unknown): channel is TextChannel {
+  return channel instanceof TextChannel;
+}
+
+async function sendTicketSummaryMessage(
+  thread: Pick<ThreadChannel, 'send'>,
+  summaryEmbeds: ReturnType<typeof buildTicketSummaryEmbeds>,
+  actionRow: ReturnType<typeof buildTicketActionRow>,
+  ticketNumber: number,
+): Promise<void> {
+  let summaryMessage: Message | null = null;
+
+  try {
+    summaryMessage = await thread.send({
+      embeds: summaryEmbeds.slice(0, 10),
+      components: [actionRow],
+    } satisfies MessageCreateOptions);
+  } catch (err) {
+    console.error(`Failed to post summary for ticket #${ticketNumber}:`, err);
+    return;
+  }
+
+  try {
+    await summaryMessage.pin();
+  } catch (err) {
+    console.error(`Failed to pin summary for ticket #${ticketNumber}:`, err);
+  }
+}
+
+async function sendOpeningTicketMessage(
+  thread: Pick<ThreadChannel, 'send'>,
+  creatorDisplayName: string,
+  description: string,
+  ticketNumber: number,
+): Promise<void> {
+  try {
+    for (const content of buildTicketOpeningMessages(creatorDisplayName, description)) {
+      await thread.send({ content });
+    }
+  } catch (err) {
+    console.error(`Failed to post opener for ticket #${ticketNumber}:`, err);
+  }
+}
 
 async function handleCategories(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });

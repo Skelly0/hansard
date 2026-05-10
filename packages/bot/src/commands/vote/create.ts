@@ -77,6 +77,14 @@ function formatBillDisplay(bill: Pick<SubmittedBillSelectRow, 'title' | 'billNum
   return `B-${String(bill.billNumber).padStart(3, '0')} - ${bill.title}`;
 }
 
+export function buildReactionVoteInstructions(method: string): string {
+  if (method === 'yea_nay_abstain') {
+    return `React with ${REACTION_EMOJI.YEA} for **Yea**, ${REACTION_EMOJI.NAY} for **Nay**, or ${REACTION_EMOJI.ABSTAIN} for **Abstain**.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.`;
+  }
+
+  return 'React with the number matching your preferred candidate. Use `/candidate-list` to see candidates by position.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.\n*Note: candidates must be registered before votes are cast -- restart the vote if you add candidates after.*';
+}
+
 function buildVoteCreateModal(
   customId: string,
   defaults: { title?: string; description?: string | null; durationHours?: number } = {},
@@ -460,10 +468,7 @@ async function handleLegislativeBillVoteCreate(
   }).catch(() => undefined);
 
   if (channel && 'send' in channel) {
-    const reactionInstructions =
-      options.method === 'yea_nay_abstain'
-        ? `React with ${REACTION_EMOJI.YEA} for **Yea**, ${REACTION_EMOJI.NAY} for **Nay**, or ${REACTION_EMOJI.ABSTAIN} for **Abstain**.\nYour reaction is removed once recorded; you may change your vote by reacting again.`
-        : `React with the number matching your preferred candidate. Use \`/candidate-list\` to see candidates by position.\n*Note: candidates must be registered before votes are cast -- restart the vote if you add candidates after.*`;
+    const reactionInstructions = buildReactionVoteInstructions(options.method);
 
     const billSource = await buildLinkedBillSourceDisplay(db, {
       type: 'legislative_vote',
@@ -725,10 +730,7 @@ export async function handleVoteCreateModal(
     return;
   }
 
-  const reactionInstructions =
-    method === 'yea_nay_abstain'
-      ? `React with ${REACTION_EMOJI.YEA} for **Yea**, ${REACTION_EMOJI.NAY} for **Nay**, or ${REACTION_EMOJI.ABSTAIN} for **Abstain**.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.`
-      : `React with the number matching your preferred candidate. Use \`/candidate-list\` to see candidates by position.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.\n*Note: candidates must be registered before votes are cast — restart the vote if you add candidates after.*`;
+  const reactionInstructions = buildReactionVoteInstructions(method);
 
   const reactionEmbed = createEmbed({
     title,

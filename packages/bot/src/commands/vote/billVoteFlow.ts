@@ -6,6 +6,7 @@ import {
   type ElectionConfig,
   type MajorityType,
   type VotingMethod,
+  SUPERMAJORITY_PASS_THRESHOLD,
 } from '@hansard/shared';
 
 export interface SubmittedBillSelectRow {
@@ -109,7 +110,7 @@ export function buildLegislativeVoteConfig(
   if (method === 'yea_nay_abstain') {
     config.majorityType = majority as MajorityType;
     if (majority === 'supermajority') {
-      config.passThreshold = 0.667;
+      config.passThreshold = SUPERMAJORITY_PASS_THRESHOLD;
     }
   }
 

@@ -70,6 +70,12 @@ const openElection = {
   config: { majorityType: 'simple', passThreshold: 0.5 },
 };
 
+function ballot(choice: 'yea' | 'nay' | 'abstain') {
+  return {
+    vote: { type: 'yea_nay_abstain', choice },
+  };
+}
+
 function updateReturning(rows: unknown[]) {
   return {
     set: vi.fn(() => ({
@@ -136,5 +142,56 @@ describe('/vote-close reaction-mode embeds', () => {
 
     expect(edit).toHaveBeenCalled();
     expect(removeAll).not.toHaveBeenCalled();
+  });
+
+  it('passes reaction-mode supermajorities at exactly two-thirds of yea and nay votes', async () => {
+    const election = {
+      ...openElection,
+      status: 'voting_closed',
+      config: { majorityType: 'supermajority', passThreshold: 0.667 },
+    };
+    const edit = vi.fn().mockResolvedValue(undefined);
+    mocks.findElectionByReference.mockResolvedValue({
+      election: openElection,
+      errorMessage: null,
+      reference: { kind: 'title', value: openElection.title },
+    });
+    mocks.db.update.mockReturnValue(updateReturning([election]));
+    mocks.db.select.mockReturnValue(selectWhere([
+      ballot('yea'),
+      ballot('yea'),
+      ballot('nay'),
+      ballot('abstain'),
+      ballot('abstain'),
+    ]));
+    mocks.client.channels.fetch.mockResolvedValue({
+      messages: {
+        fetch: vi.fn().mockResolvedValue({ edit }),
+      },
+    });
+
+    await command.execute(makeInteraction() as any);
+
+    const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
+    expect(resultEmbed?.data.description).toContain('**PASSED**');
+    expect(resultEmbed?.data.fields?.[0]?.value).toContain('Abstain: **2**');
+  });
+
+  it('does not pass tied simple-majority reaction votes', async () => {
+    const edit = vi.fn().mockResolvedValue(undefined);
+    mocks.db.select.mockReturnValue(selectWhere([
+      ballot('yea'),
+      ballot('nay'),
+    ]));
+    mocks.client.channels.fetch.mockResolvedValue({
+      messages: {
+        fetch: vi.fn().mockResolvedValue({ edit }),
+      },
+    });
+
+    await command.execute(makeInteraction() as any);
+
+    const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
+    expect(resultEmbed?.data.description).toContain('**REJECTED**');
   });
 });

@@ -35,7 +35,7 @@ export const elections = pgTable('elections', {
     // === MAJORITY & THRESHOLD ===
     quorumRequired?: number;
     quorumType?: 'absolute' | 'percentage';
-    passThreshold?: number;              // 0.5 = simple majority, 0.667 = supermajority, 0.75 = three-quarters
+    passThreshold?: number;              // 0.5 = simple majority, 2/3 = supermajority, 0.75 = three-quarters
     majorityType?: 'simple' | 'absolute' | 'supermajority' | 'qualified' | 'unanimous';
     // 'simple' = more yea than nay (of those who vote)
     // 'absolute' = more than half of ALL eligible voters (not just those who voted)

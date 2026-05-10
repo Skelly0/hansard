@@ -329,6 +329,7 @@ export async function changeParty(
   playerId: string,
   newPartyId: string,
   triggeredById?: string,
+  options: { allowInviteOnly?: boolean } = {},
 ): Promise<PlayerProfile | null> {
   const existing = await getPlayer(db, playerId);
   if (!existing) return null;
@@ -345,6 +346,9 @@ export async function changeParty(
   const [newParty] = await db.select().from(parties).where(eq(parties.id, newPartyId)).limit(1);
   if (!newParty) {
     throw new Error(`Party not found: ${newPartyId}`);
+  }
+  if (newParty.isInviteOnly && !options.allowInviteOnly) {
+    throw new Error(`Party "${newParty.name}" is invite-only`);
   }
   newPartyName = newParty.name;
 

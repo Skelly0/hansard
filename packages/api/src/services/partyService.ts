@@ -23,6 +23,7 @@ function toParty(row: typeof parties.$inferSelect): Party {
     ideology: row.ideology,
     colour: row.colour,
     discordRoleId: row.discordRoleId,
+    isInviteOnly: row.isInviteOnly,
     isActive: row.isActive,
     foundedAt: row.foundedAt.toISOString(),
     dissolvedAt: row.dissolvedAt ? row.dissolvedAt.toISOString() : null,
@@ -167,6 +168,7 @@ export async function createParty(
       ideology: data.ideology ?? null,
       colour: data.colour ?? null,
       discordRoleId: data.discordRoleId ?? null,
+      isInviteOnly: data.isInviteOnly ?? false,
       isActive: true,
     })
     .returning();
@@ -202,6 +204,7 @@ export async function updateParty(
   if (data.ideology !== undefined) updates.ideology = data.ideology;
   if (data.colour !== undefined) updates.colour = data.colour;
   if (data.discordRoleId !== undefined) updates.discordRoleId = data.discordRoleId;
+  if (data.isInviteOnly !== undefined) updates.isInviteOnly = data.isInviteOnly;
   if (data.isActive !== undefined) {
     updates.isActive = data.isActive;
     if (data.isActive === false) {

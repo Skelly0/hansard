@@ -26,6 +26,9 @@ const command: Command = {
     )
     .addRoleOption((opt) =>
       opt.setName('discord-role').setDescription('Discord role to map to this party').setRequired(false),
+    )
+    .addBooleanOption((opt) =>
+      opt.setName('invite-only').setDescription('Require staff assignment instead of public self-join').setRequired(false),
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -47,6 +50,7 @@ const command: Command = {
     const colour = interaction.options.getString('colour')?.trim() || null;
     const factionId = interaction.options.getString('faction-id')?.trim() || null;
     const discordRole = interaction.options.getRole('discord-role');
+    const isInviteOnly = interaction.options.getBoolean('invite-only') ?? false;
 
     if (colour && !/^#[0-9a-fA-F]{6}$/.test(colour)) {
       await interaction.editReply({ embeds: [errorEmbed('Colour must be a 6-digit hex like `#b94a48`.')] });
@@ -63,6 +67,7 @@ const command: Command = {
           colour,
           factionId,
           discordRoleId: discordRole?.id ?? null,
+          isInviteOnly,
           isActive: true,
         })
         .returning();
@@ -72,6 +77,7 @@ const command: Command = {
         party.ideology ? `*${party.ideology}*` : '',
         party.colour ? `Colour: \`${party.colour}\`` : '',
         party.discordRoleId ? `Role: <@&${party.discordRoleId}>` : '',
+        party.isInviteOnly ? 'Access: invite-only' : 'Access: open join',
         `\nID: \`${party.id}\``,
       ].filter(Boolean).join('\n');
 

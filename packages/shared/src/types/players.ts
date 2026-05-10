@@ -131,6 +131,7 @@ export interface Party {
   ideology: string | null;
   colour: string | null;
   discordRoleId: string | null;
+  isInviteOnly: boolean;
   isActive: boolean;
   foundedAt: string;
   dissolvedAt: string | null;
@@ -144,6 +145,7 @@ export interface CreatePartyInput {
   ideology?: string | null;
   colour?: string | null;
   discordRoleId?: string | null;
+  isInviteOnly?: boolean;
 }
 
 export interface UpdatePartyInput {
@@ -154,6 +156,7 @@ export interface UpdatePartyInput {
   ideology?: string | null;
   colour?: string | null;
   discordRoleId?: string | null;
+  isInviteOnly?: boolean;
   isActive?: boolean;
 }
 

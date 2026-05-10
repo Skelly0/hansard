@@ -292,7 +292,9 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        const updated = await changeParty(fastify.db, id, partyId, triggeredById);
+        const updated = await changeParty(fastify.db, id, partyId, triggeredById, {
+          allowInviteOnly: !!request.player?.isStaff,
+        });
         if (!updated) {
           return reply.status(404).send({ error: 'Player not found' });
         }
@@ -300,6 +302,9 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       } catch (err) {
         if (err instanceof Error && err.message.startsWith('Party not found')) {
           return reply.status(404).send({ error: err.message });
+        }
+        if (err instanceof Error && /invite-only/i.test(err.message)) {
+          return reply.status(403).send({ error: err.message });
         }
         throw err;
       }

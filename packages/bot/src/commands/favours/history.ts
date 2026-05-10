@@ -7,6 +7,7 @@ import { eq, and, desc, asc, type SQL } from 'drizzle-orm';
 import { favourTransactions, favourCategories, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
+import { isStaff } from '../../utils/permissions.js';
 import { autocompleteFavourCategory } from './_categoryAutocomplete.js';
 import type { Command } from '../../client.js';
 
@@ -26,6 +27,15 @@ const command: Command = {
 
     const targetUser = interaction.options.getUser('user') ?? interaction.user;
     const categoryFilter = interaction.options.getString('category') ?? null;
+    const member = interaction.member;
+    const actorIsStaff = !!member && (await isStaff(member as any));
+
+    if (targetUser.id !== interaction.user.id && !actorIsStaff) {
+      await interaction.editReply({
+        embeds: [errorEmbed('Only staff can view another player’s favour history.')],
+      });
+      return;
+    }
 
     // Look up the target player
     const [targetPlayer] = await db

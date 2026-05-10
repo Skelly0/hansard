@@ -86,7 +86,7 @@ const command: Command = {
 };
 
 async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ ephemeral: true });
 
   const targetUser = interaction.options.getUser('user', true);
   const condition = interaction.options.getString('condition', true);
@@ -168,7 +168,7 @@ async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void
 }
 
 async function handleRemove(interaction: ChatInputCommandInteraction): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ ephemeral: true });
 
   const targetUser = interaction.options.getUser('user', true);
   const condition = interaction.options.getString('condition', true);

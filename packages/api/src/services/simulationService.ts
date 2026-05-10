@@ -85,6 +85,10 @@ export interface AilmentDetail {
   severity: string;
 }
 
+export interface SimulationPrivacyViewer {
+  isStaff: boolean;
+}
+
 type DbOrTx = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
 
 // ============================================================
@@ -889,13 +893,39 @@ export async function generateObituary(db: Database, playerId: string) {
 /**
  * Get time advance history log.
  */
-export async function getHistory(db: Database, limit = 20) {
+function sanitizeAdvanceSummary(
+  summary: unknown,
+  viewer?: SimulationPrivacyViewer,
+): unknown {
+  if (!viewer || viewer.isStaff || !isRecord(summary)) return summary;
+
+  return {
+    ...summary,
+    deaths: [],
+    pendingDeaths: [],
+    ailments: [],
+  };
+}
+
+export function sanitizeTimeAdvanceLog<T extends { summary: unknown; notes?: unknown }>(
+  row: T,
+  viewer?: SimulationPrivacyViewer,
+): T {
+  if (!viewer || viewer.isStaff) return row;
+  return {
+    ...row,
+    notes: null,
+    summary: sanitizeAdvanceSummary(row.summary, viewer),
+  };
+}
+
+export async function getHistory(db: Database, limit = 20, viewer?: SimulationPrivacyViewer) {
   const rows = await db
     .select()
     .from(timeAdvanceLog)
     .orderBy(timeAdvanceLog.createdAt)
     .limit(limit);
-  return rows;
+  return rows.map((row) => sanitizeTimeAdvanceLog(row, viewer));
 }
 
 // ============================================================

@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { candidates, elections, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 /**
@@ -26,9 +27,10 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const electionId = interaction.options.getString('election_id', true);
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
 
     const [election] = await db
       .select()
@@ -36,7 +38,7 @@ const command: Command = {
       .where(eq(elections.id, electionId))
       .limit(1);
 
-    if (!election) {
+    if (!election || (election.status === 'draft' && !actorIsStaff)) {
       await interaction.editReply({
         embeds: [errorEmbed(`Election \`${electionId}\` not found.`)],
       });

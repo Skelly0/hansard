@@ -7,6 +7,7 @@ import { db } from '../../db.js';
 import { players, playerEventLog } from '@hansard/db';
 import { PlayerEventType } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const HEALTH_DISPLAY: Record<string, string> = {
@@ -43,9 +44,16 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const targetUser = interaction.options.getUser('user', true);
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
+    if (targetUser.id !== interaction.user.id && !actorIsStaff) {
+      await interaction.editReply({
+        embeds: [errorEmbed('Only staff can view another player’s health records.')],
+      });
+      return;
+    }
 
     const [player] = await db
       .select()
@@ -66,13 +74,15 @@ const command: Command = {
     // plus health-related events from the event log.
     const ailments = (player.ailments as AilmentEntry[] | null) ?? [];
 
-    const healthEventTypes = [
+    const healthEventTypes: PlayerEventType[] = [
       PlayerEventType.AILMENT_ACQUIRED,
       PlayerEventType.AILMENT_RECOVERED,
       PlayerEventType.HEALTH_CHANGED,
-      PlayerEventType.DEATH_PENDING,
       PlayerEventType.DEATH,
     ];
+    if (actorIsStaff) {
+      healthEventTypes.push(PlayerEventType.DEATH_PENDING);
+    }
 
     const healthEvents = await db
       .select()

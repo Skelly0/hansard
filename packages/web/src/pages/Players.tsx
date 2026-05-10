@@ -9,14 +9,14 @@ import { QueryErrorState } from '../components/shared/QueryErrorState';
 import type { Player } from '../api/hooks/usePlayers';
 
 /** Health status to dot colour mapping */
-function healthDotClass(status: string): string {
+function healthDotClass(status?: string | null): string {
   const map: Record<string, string> = {
     healthy: 'bg-[var(--health-healthy)]',
     minor: 'bg-[var(--health-minor)]',
     major: 'bg-[var(--health-major)]',
     critical: 'bg-[var(--health-critical)]',
   };
-  return map[status] || map.healthy;
+  return status ? map[status] || map.healthy : 'bg-border-default';
 }
 
 /** Skeleton for a single player card while loading */
@@ -220,7 +220,7 @@ function PlayerCard({ player }: { player: Player }) {
                 className={`w-2 h-2 rounded-full flex-shrink-0 ${
                   isDeceased ? 'bg-status-deceased' : healthDotClass(player.healthStatus)
                 }`}
-                title={isDeceased ? 'Deceased' : player.healthStatus}
+                title={isDeceased ? 'Deceased' : player.healthStatus ?? 'Private'}
               />
             </div>
 

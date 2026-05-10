@@ -3,15 +3,26 @@ import {
   EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, desc } from 'drizzle-orm';
+import { eq, and, desc, inArray, ne, type SQL } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog } from '@hansard/db';
+import { PlayerEventType } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 /** Number of events per page. */
 const EVENTS_PER_PAGE = 8;
+const PUBLIC_PLAYER_EVENT_TYPES: PlayerEventType[] = [
+  PlayerEventType.PARTY_CHANGE,
+  PlayerEventType.FACTION_CHANGE,
+  PlayerEventType.OFFICE_APPOINTED,
+  PlayerEventType.OFFICE_LEFT,
+  PlayerEventType.DEATH,
+  PlayerEventType.REGISTRATION,
+  PlayerEventType.NAME_CHANGE,
+];
 
 /** Emoji mapping for event types. */
 const EVENT_TYPE_EMOJI: Record<string, string> = {
@@ -42,9 +53,11 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const targetUser = interaction.options.getUser('user') ?? interaction.user;
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
+    const actorIsSelf = targetUser.id === interaction.user.id;
 
     // Fetch the player
     const playerRows = await db
@@ -69,10 +82,19 @@ const command: Command = {
     const player = playerRows[0];
 
     // Fetch all events for this player, ordered by most recent
+    const conditions: SQL[] = [eq(playerEventLog.playerId, player.id)];
+    if (!actorIsStaff) {
+      conditions.push(
+        actorIsSelf
+          ? ne(playerEventLog.eventType, PlayerEventType.DEATH_PENDING)
+          : inArray(playerEventLog.eventType, PUBLIC_PLAYER_EVENT_TYPES),
+      );
+    }
+
     const events = await db
       .select()
       .from(playerEventLog)
-      .where(eq(playerEventLog.playerId, player.id))
+      .where(and(...conditions))
       .orderBy(desc(playerEventLog.createdAt));
 
     if (events.length === 0) {

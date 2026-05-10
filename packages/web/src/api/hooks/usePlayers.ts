@@ -20,7 +20,7 @@ export interface Player {
   deathDate?: string;
   causeOfDeath?: string;
   isAlive: boolean;
-  healthStatus: string;
+  healthStatus: string | null;
   ailments?: {
     condition: string;
     severity: 'minor' | 'major' | 'critical';
@@ -133,7 +133,7 @@ export function usePlayerOffices(id?: string) {
 export function usePlayerHealth(id?: string) {
   return useQuery({
     queryKey: ['players', id, 'health'],
-    queryFn: () => api.get<{ healthStatus: string; ailments: Player['ailments'] }>(`/players/${id}/health`),
+    queryFn: () => api.get<{ healthStatus: string | null; ailments: Player['ailments'] }>(`/players/${id}/health`),
     enabled: !!id,
   });
 }

@@ -3,15 +3,25 @@ import {
   EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, and, desc, gte, type SQL } from 'drizzle-orm';
+import { eq, and, desc, gte, inArray, type SQL } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog } from '@hansard/db';
 import { PlayerEventType } from '@hansard/shared';
 import { createEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const PAGE_SIZE = 10;
+const PUBLIC_PLAYER_EVENT_TYPES: PlayerEventType[] = [
+  PlayerEventType.PARTY_CHANGE,
+  PlayerEventType.FACTION_CHANGE,
+  PlayerEventType.OFFICE_APPOINTED,
+  PlayerEventType.OFFICE_LEFT,
+  PlayerEventType.DEATH,
+  PlayerEventType.REGISTRATION,
+  PlayerEventType.NAME_CHANGE,
+];
 
 const EVENT_TYPE_EMOJI: Record<string, string> = {
   registration: '\u{1F4DD}',
@@ -61,15 +71,17 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const eventType = interaction.options.getString('type');
     const limit = interaction.options.getInteger('limit') ?? 25;
     const since = interaction.options.getString('since')?.trim() || null;
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
 
     const conditions: SQL[] = [];
     if (eventType) conditions.push(eq(playerEventLog.eventType, eventType));
     if (since) conditions.push(gte(playerEventLog.simDate, since));
+    if (!actorIsStaff) conditions.push(inArray(playerEventLog.eventType, PUBLIC_PLAYER_EVENT_TYPES));
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 

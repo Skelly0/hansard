@@ -3,11 +3,11 @@ import {
   EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { ilike, or, desc } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { documents } from '@hansard/db';
+import { searchDocuments } from '@hansard/api/services/documentService';
 import { createEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const RESULTS_PER_PAGE = 5;
@@ -22,26 +22,14 @@ const command: Command = {
         .setDescription('Search term (searches title and content)')
         .setRequired(true)
         .setMaxLength(200),
-    ) as SlashCommandBuilder,
+  ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const query = interaction.options.getString('query', true);
-    const searchPattern = `%${query}%`;
-
-    const results = await db
-      .select()
-      .from(documents)
-      .where(
-        or(
-          ilike(documents.title, searchPattern),
-          ilike(documents.content, searchPattern),
-          ilike(documents.cachedContent, searchPattern),
-        ),
-      )
-      .orderBy(desc(documents.updatedAt))
-      .limit(25);
+    const viewer = { isStaff: !!interaction.member && (await isStaff(interaction.member as any)) };
+    const { documents: results } = await searchDocuments(db, query, undefined, 25, 0, viewer);
 
     if (results.length === 0) {
       await interaction.editReply({
@@ -62,7 +50,7 @@ const command: Command = {
 
       const description = chunk
         .map((doc) => {
-          const tags = (doc.tags as string[] | null) ?? [];
+          const tags = doc.tags ?? [];
           const tagStr = tags.length > 0 ? ` \u2014 ${tags.map((t) => `\`${t}\``).join(', ')}` : '';
           const preview = doc.content
             ? doc.content.length > 120

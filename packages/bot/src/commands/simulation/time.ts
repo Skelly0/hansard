@@ -95,7 +95,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 }
 
 async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ ephemeral: true });
   const ticks = interaction.options.getInteger('ticks') ?? 1;
 
   try {

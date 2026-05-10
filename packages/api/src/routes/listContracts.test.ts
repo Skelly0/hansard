@@ -80,6 +80,7 @@ vi.mock('../services/playerService.js', () => ({
   getPlayerHealth: vi.fn(),
   getPlayerOfficeHistory: mocks.getPlayerOfficeHistory,
   getPlayerVotingRecord: mocks.getPlayerVotingRecord,
+  sanitizePlayerProfile: vi.fn((player) => player),
   calculateStartingAgeFavourBonus: vi.fn().mockReturnValue(0),
   aggregatePermissionsForPlayer: vi.fn(),
 }));
@@ -165,13 +166,17 @@ describe('list route response contracts', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ data: [{ id: 'd1' }], total: 1 });
-    expect(mocks.listDocuments).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      collectionId: 'c1',
-      authorId: 'p1',
-      search: 'charter',
-      limit: 10,
-      offset: 30,
-    }));
+    expect(mocks.listDocuments).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        collectionId: 'c1',
+        authorId: 'p1',
+        search: 'charter',
+        limit: 10,
+        offset: 30,
+      }),
+      expect.objectContaining({ isStaff: true }),
+    );
   });
 
   it('returns tickets as { data, total }', async () => {

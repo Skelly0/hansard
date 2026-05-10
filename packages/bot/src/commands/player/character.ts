@@ -34,6 +34,7 @@ import {
   type StartingFactionFavourGrant,
 } from '@hansard/api/services/favourService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 // ─── Age Config (will load from simulation config later) ───────────────────
@@ -625,9 +626,11 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 // ─── /character view ───────────────────────────────────────────────────────
 
 async function handleView(interaction: ChatInputCommandInteraction): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ ephemeral: true });
 
   const targetUser = interaction.options.getUser('user') ?? interaction.user;
+  const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
+  const canViewPrivate = actorIsStaff || targetUser.id === interaction.user.id;
 
   const playerRows = await db
     .select()
@@ -672,23 +675,29 @@ async function handleView(interaction: ChatInputCommandInteraction): Promise<voi
     .where(eq(officeHolders.playerId, player.id));
   // TODO: filter where endDate IS NULL once Drizzle isNull is wired
 
-  // Favour balances
-  const balances = await db
-    .select({
-      categoryName: favourCategories.name,
-      categoryEmoji: favourCategories.emoji,
-      balance: favourBalances.balance,
-    })
-    .from(favourBalances)
-    .innerJoin(favourCategories, eq(favourBalances.categoryId, favourCategories.id))
-    .where(eq(favourBalances.playerId, player.id));
+  // Favour balances and health details are private to the player and staff.
+  const balances = canViewPrivate
+    ? await db
+        .select({
+          categoryName: favourCategories.name,
+          categoryEmoji: favourCategories.emoji,
+          balance: favourBalances.balance,
+        })
+        .from(favourBalances)
+        .innerJoin(favourCategories, eq(favourBalances.categoryId, favourCategories.id))
+        .where(eq(favourBalances.playerId, player.id))
+    : [];
 
-  const healthDisplay = HEALTH_DISPLAY[player.healthStatus] ?? player.healthStatus;
+  const healthDisplay = canViewPrivate
+    ? HEALTH_DISPLAY[player.healthStatus] ?? player.healthStatus
+    : 'Private';
 
   const ailments = (player.ailments as { condition: string; severity: string }[] | null) ?? [];
-  const ailmentText = ailments.length > 0
-    ? ailments.map((a) => `${a.condition} (${a.severity})`).join(', ')
-    : 'None';
+  const ailmentText = canViewPrivate
+    ? ailments.length > 0
+      ? ailments.map((a) => `${a.condition} (${a.severity})`).join(', ')
+      : 'None'
+    : 'Private';
 
   const officeText = activeOffices.length > 0
     ? activeOffices.map((o) => `**${o.officeName}** (${o.officeTier})`).join('\n')
@@ -702,22 +711,29 @@ async function handleView(interaction: ChatInputCommandInteraction): Promise<voi
     ? player.characterBio.length > 400 ? player.characterBio.slice(0, 397) + '...' : player.characterBio
     : '*No biography provided.*';
 
+  const fields = [
+    { name: 'Player', value: `<@${targetUser.id}>`, inline: true },
+    { name: 'Age', value: String(player.currentAge ?? player.startingAge ?? '?'), inline: true },
+    { name: 'Health', value: healthDisplay, inline: true },
+    { name: 'Faction', value: factionName, inline: true },
+    { name: 'Party', value: partyName, inline: true },
+    { name: 'Status', value: player.isAlive ? '\u{1F7E2} Alive' : '\u{26B0}\u{FE0F} Deceased', inline: true },
+    { name: 'Offices', value: officeText },
+  ];
+
+  if (canViewPrivate) {
+    fields.push(
+      { name: 'Ailments', value: ailmentText, inline: true },
+      { name: 'Favours', value: favourText },
+    );
+  }
+
   const embed = createEmbed({
     title: player.characterName ?? 'Unknown Character',
     description: `> ${bio}`,
     system: 'players',
     thumbnail: player.characterPortraitUrl ?? undefined,
-    fields: [
-      { name: 'Player', value: `<@${targetUser.id}>`, inline: true },
-      { name: 'Age', value: String(player.currentAge ?? player.startingAge ?? '?'), inline: true },
-      { name: 'Health', value: healthDisplay, inline: true },
-      { name: 'Faction', value: factionName, inline: true },
-      { name: 'Party', value: partyName, inline: true },
-      { name: 'Status', value: player.isAlive ? '\u{1F7E2} Alive' : '\u{26B0}\u{FE0F} Deceased', inline: true },
-      { name: 'Offices', value: officeText },
-      { name: 'Ailments', value: ailmentText, inline: true },
-      { name: 'Favours', value: favourText },
-    ],
+    fields,
   });
 
   if (!player.isAlive) {

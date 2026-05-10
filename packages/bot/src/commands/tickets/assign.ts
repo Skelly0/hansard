@@ -49,7 +49,7 @@ const command: Command = {
     const ticketNumber = interaction.options.getInteger('number', true);
     const assignee = interaction.options.getUser('user', true);
 
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     if (!interaction.guild) {
       await interaction.editReply({

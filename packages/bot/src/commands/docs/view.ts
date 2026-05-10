@@ -5,9 +5,11 @@ import {
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { documents, documentCollections, players } from '@hansard/db';
+import { players } from '@hansard/db';
+import { getCollections, getDocument } from '@hansard/api/services/documentService';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 /** Max characters per embed page for document content. */
@@ -23,18 +25,15 @@ const command: Command = {
         .setDescription('The document slug (e.g. "constitution")')
         .setRequired(true)
         .setMaxLength(256),
-    ) as SlashCommandBuilder,
+  ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const slug = interaction.options.getString('slug', true);
+    const viewer = { isStaff: !!interaction.member && (await isStaff(interaction.member as any)) };
 
-    const [doc] = await db
-      .select()
-      .from(documents)
-      .where(eq(documents.slug, slug))
-      .limit(1);
+    const doc = await getDocument(db, slug, viewer);
 
     if (!doc) {
       await interaction.editReply({
@@ -46,11 +45,7 @@ const command: Command = {
     // Fetch collection name
     let collectionName = 'Unknown';
     if (doc.collectionId) {
-      const [collection] = await db
-        .select({ name: documentCollections.name })
-        .from(documentCollections)
-        .where(eq(documentCollections.id, doc.collectionId))
-        .limit(1);
+      const collection = (await getCollections(db, viewer)).find((c) => c.id === doc.collectionId);
       if (collection) collectionName = collection.name;
     }
 
@@ -68,7 +63,7 @@ const command: Command = {
     }
 
     const content = doc.content ?? doc.cachedContent ?? '*No content available.*';
-    const tags = (doc.tags as string[] | null) ?? [];
+    const tags = doc.tags ?? [];
 
     // Build header fields
     const fields = [

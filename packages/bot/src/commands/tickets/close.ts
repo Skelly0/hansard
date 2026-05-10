@@ -40,7 +40,7 @@ const command: Command = {
     const ticketNumber = interaction.options.getInteger('number', true);
     const reason = interaction.options.getString('reason');
 
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const actorPlayer = await upsertPlayer(interaction.user.id, interaction.user.username);
     if (!actorPlayer) {

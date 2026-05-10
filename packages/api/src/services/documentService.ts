@@ -37,6 +37,10 @@ export interface ListDocumentsFilters {
   offset?: number;
 }
 
+export interface DocumentViewer {
+  isStaff: boolean;
+}
+
 // ============================================================
 // Slug Generation
 // ============================================================
@@ -118,6 +122,22 @@ function toDocumentCollection(row: typeof documentCollections.$inferSelect): Doc
   };
 }
 
+function documentVisibilityConditions(viewer?: DocumentViewer): SQL[] {
+  if (!viewer || viewer.isStaff) return [];
+  return [
+    eq(documents.accessLevel, 'public'),
+    eq(documentCollections.isPublic, true),
+  ];
+}
+
+function canViewDocument(
+  row: typeof documents.$inferSelect,
+  collectionIsPublic: boolean,
+  viewer?: DocumentViewer,
+): boolean {
+  return !viewer || viewer.isStaff || (row.accessLevel === 'public' && collectionIsPublic);
+}
+
 // ============================================================
 // Service Functions
 // ============================================================
@@ -171,15 +191,21 @@ export async function createDocument(
 export async function getDocument(
   db: Database,
   slug: string,
+  viewer?: DocumentViewer,
 ): Promise<Document | null> {
-  const [doc] = await db
-    .select()
+  const [row] = await db
+    .select({
+      document: documents,
+      collectionIsPublic: documentCollections.isPublic,
+    })
     .from(documents)
+    .innerJoin(documentCollections, eq(documents.collectionId, documentCollections.id))
     .where(eq(documents.slug, slug))
     .limit(1);
 
-  if (!doc) return null;
-  return toDocument(doc);
+  if (!row) return null;
+  if (!canViewDocument(row.document, row.collectionIsPublic, viewer)) return null;
+  return toDocument(row.document);
 }
 
 /**
@@ -188,8 +214,9 @@ export async function getDocument(
 export async function listDocuments(
   db: Database,
   filters: ListDocumentsFilters = {},
+  viewer?: DocumentViewer,
 ): Promise<{ documents: Document[]; total: number }> {
-  const conditions: SQL[] = [];
+  const conditions: SQL[] = documentVisibilityConditions(viewer);
 
   if (filters.collectionId) {
     conditions.push(eq(documents.collectionId, filters.collectionId));
@@ -222,8 +249,9 @@ export async function listDocuments(
   const offset = filters.offset ?? 0;
 
   const rows = await db
-    .select()
+    .select({ document: documents })
     .from(documents)
+    .innerJoin(documentCollections, eq(documents.collectionId, documentCollections.id))
     .where(whereClause)
     .orderBy(desc(documents.updatedAt))
     .limit(limit)
@@ -232,10 +260,11 @@ export async function listDocuments(
   const [{ value: total }] = await db
     .select({ value: count() })
     .from(documents)
+    .innerJoin(documentCollections, eq(documents.collectionId, documentCollections.id))
     .where(whereClause);
 
   return {
-    documents: rows.map(toDocument),
+    documents: rows.map((row) => toDocument(row.document)),
     total,
   };
 }
@@ -291,12 +320,9 @@ export async function updateDocument(
 export async function getVersionHistory(
   db: Database,
   slug: string,
+  viewer?: DocumentViewer,
 ): Promise<DocumentVersion[]> {
-  const [doc] = await db
-    .select({ id: documents.id })
-    .from(documents)
-    .where(eq(documents.slug, slug))
-    .limit(1);
+  const doc = await getDocument(db, slug, viewer);
 
   if (!doc) return [];
 
@@ -333,6 +359,7 @@ export async function searchDocuments(
   collectionId?: string,
   limit = 25,
   offset = 0,
+  viewer?: DocumentViewer,
 ): Promise<{ documents: Document[]; total: number }> {
   const searchPattern = `%${query}%`;
 
@@ -342,15 +369,16 @@ export async function searchDocuments(
     ilike(documents.cachedContent, searchPattern),
   );
 
-  const conditions: SQL[] = [];
+  const conditions: SQL[] = documentVisibilityConditions(viewer);
   if (searchConditions) conditions.push(searchConditions);
   if (collectionId) conditions.push(eq(documents.collectionId, collectionId));
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
   const rows = await db
-    .select()
+    .select({ document: documents })
     .from(documents)
+    .innerJoin(documentCollections, eq(documents.collectionId, documentCollections.id))
     .where(whereClause)
     .orderBy(desc(documents.updatedAt))
     .limit(limit)
@@ -359,10 +387,11 @@ export async function searchDocuments(
   const [{ value: total }] = await db
     .select({ value: count() })
     .from(documents)
+    .innerJoin(documentCollections, eq(documents.collectionId, documentCollections.id))
     .where(whereClause);
 
   return {
-    documents: rows.map(toDocument),
+    documents: rows.map((row) => toDocument(row.document)),
     total,
   };
 }
@@ -372,11 +401,14 @@ export async function searchDocuments(
  */
 export async function getCollections(
   db: Database,
+  viewer?: DocumentViewer,
 ): Promise<DocumentCollection[]> {
-  const rows = await db
-    .select()
-    .from(documentCollections)
-    .orderBy(documentCollections.sortOrder);
+  const base = db.select().from(documentCollections);
+  const rows = viewer && !viewer.isStaff
+    ? await base
+        .where(eq(documentCollections.isPublic, true))
+        .orderBy(documentCollections.sortOrder)
+    : await base.orderBy(documentCollections.sortOrder);
 
   return rows.map(toDocumentCollection);
 }

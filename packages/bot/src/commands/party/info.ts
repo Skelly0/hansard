@@ -3,6 +3,7 @@ import { eq, and, asc } from 'drizzle-orm';
 import { parties, players, factions } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 function parseHexColour(hex: string | null | undefined): number | undefined {
@@ -21,10 +22,13 @@ const command: Command = {
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const query = interaction.options.getString('party', true);
-    const all = await db.select().from(parties).orderBy(asc(parties.name));
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
+    const all = actorIsStaff
+      ? await db.select().from(parties).orderBy(asc(parties.name))
+      : await db.select().from(parties).where(eq(parties.isActive, true)).orderBy(asc(parties.name));
     const target =
       all.find((p) => p.name.toLowerCase() === query.toLowerCase()) ??
       all.find((p) => p.shortName?.toLowerCase() === query.toLowerCase()) ??

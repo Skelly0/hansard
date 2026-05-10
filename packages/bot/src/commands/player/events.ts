@@ -2,14 +2,24 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, and, desc, type SQL } from 'drizzle-orm';
+import { eq, and, desc, inArray, ne, type SQL } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog } from '@hansard/db';
 import { PlayerEventType } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const EVENT_LIMIT = 10;
+const PUBLIC_PLAYER_EVENT_TYPES: PlayerEventType[] = [
+  PlayerEventType.PARTY_CHANGE,
+  PlayerEventType.FACTION_CHANGE,
+  PlayerEventType.OFFICE_APPOINTED,
+  PlayerEventType.OFFICE_LEFT,
+  PlayerEventType.DEATH,
+  PlayerEventType.REGISTRATION,
+  PlayerEventType.NAME_CHANGE,
+];
 
 const EVENT_TYPE_EMOJI: Record<string, string> = {
   registration: '\u{1F4DD}',
@@ -51,10 +61,12 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const targetUser = interaction.options.getUser('user', true);
     const eventType = interaction.options.getString('type');
+    const actorIsStaff = !!interaction.member && (await isStaff(interaction.member as any));
+    const actorIsSelf = targetUser.id === interaction.user.id;
 
     const [player] = await db
       .select({
@@ -78,6 +90,13 @@ const command: Command = {
     const conditions: SQL[] = [eq(playerEventLog.playerId, player.id)];
     if (eventType) {
       conditions.push(eq(playerEventLog.eventType, eventType));
+    }
+    if (!actorIsStaff) {
+      conditions.push(
+        actorIsSelf
+          ? ne(playerEventLog.eventType, PlayerEventType.DEATH_PENDING)
+          : inArray(playerEventLog.eventType, PUBLIC_PLAYER_EVENT_TYPES),
+      );
     }
 
     const events = await db

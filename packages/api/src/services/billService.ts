@@ -13,6 +13,7 @@ import type {
   BillStatusLogEntry,
   NpcVote,
   EstimatedEffects,
+  ElectionConfig,
 } from '@hansard/shared';
 import { BillStatus } from '@hansard/shared';
 import { extractDocId, cacheDocContent } from './googleDocService.js';
@@ -55,6 +56,11 @@ export interface UpdateBillData {
   policyAreas?: string[];
   crossReferences?: string[];
   collectionId?: string;
+}
+
+export interface BillVoterViewer {
+  userId: string;
+  isStaff: boolean;
 }
 
 // ============================================================
@@ -196,6 +202,22 @@ function toStatusLogEntry(row: typeof billStatusLog.$inferSelect): BillStatusLog
     simDate: row.simDate,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+function canViewLinkedElectionVoters(
+  election: Pick<typeof elections.$inferSelect, 'status' | 'config'>,
+  viewer?: BillVoterViewer,
+): boolean {
+  if (!viewer) return true;
+
+  const config = election.config as ElectionConfig;
+  const detailsArePublic = election.status === 'tallied' || election.status === 'certified';
+
+  if (config.anonymousBallots) return false;
+  if (config.sealedResults && !detailsArePublic) return false;
+  if (viewer.isStaff) return true;
+
+  return detailsArePublic;
 }
 
 // ============================================================
@@ -805,6 +827,7 @@ export async function getBillStatusLog(
 export async function getVoters(
   db: Database,
   slug: string,
+  viewer?: BillVoterViewer,
 ): Promise<{
   playerVotes: {
     voterId: string;
@@ -832,6 +855,22 @@ export async function getVoters(
   }[] = [];
 
   if (bill.playerVoteId) {
+    const [election] = await db
+      .select({
+        status: elections.status,
+        config: elections.config,
+      })
+      .from(elections)
+      .where(eq(elections.id, bill.playerVoteId))
+      .limit(1);
+
+    if (!election || !canViewLinkedElectionVoters(election, viewer)) {
+      return {
+        playerVotes,
+        npcVote: (bill.npcVote as NpcVote) ?? null,
+      };
+    }
+
     const ballotRows = await db
       .select({
         ballot: ballots,

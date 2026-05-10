@@ -5,8 +5,10 @@ import {
   aggregatePermissionsForPlayer,
   listPlayers,
   getPlayerVotingRecord,
+  sanitizePlayerEvents,
+  sanitizePlayerProfile,
 } from './playerService';
-import { FavourTransactionType } from '@hansard/shared';
+import { FavourTransactionType, PlayerEventType } from '@hansard/shared';
 
 // Mock drizzle db: handles
 //   - .insert(players).values().onConflictDoUpdate().returning() (returns inserted)
@@ -455,5 +457,103 @@ describe('getPlayerVotingRecord privacy', () => {
       choice: 'yea',
       castAt: '2026-01-01T00:00:00.000Z',
     });
+  });
+});
+
+describe('player profile/event privacy sanitizers', () => {
+  const profile = {
+    id: 'target-player',
+    discordId: '111',
+    discordUsername: 'target',
+    characterName: 'Target Player',
+    characterBio: null,
+    characterPortraitUrl: null,
+    factionId: null,
+    partyId: null,
+    birthDate: null,
+    startingAge: 40,
+    currentAge: 40,
+    deathDate: null,
+    causeOfDeath: null,
+    isAlive: true,
+    healthStatus: 'critical',
+    ailments: [{
+      condition: 'fever',
+      severity: 'critical',
+      acquiredAtTick: 10,
+      acquiredAtAge: 40,
+      notes: 'staff-only detail',
+    }],
+    startingFavoursGranted: false,
+    isActive: true,
+    isStaff: false,
+    staffRole: 'moderator',
+    registeredAt: '2026-01-01T00:00:00.000Z',
+    lastActiveAt: null,
+    profileData: { pendingDeath: { cause: 'fever' } },
+  } as any;
+
+  it('hides another player health, staff role, and profile data from non-staff viewers', () => {
+    const result = sanitizePlayerProfile(profile, {
+      userId: 'viewer-player',
+      isStaff: false,
+    });
+
+    expect(result.healthStatus).toBeNull();
+    expect(result.ailments).toEqual([]);
+    expect(result.staffRole).toBeNull();
+    expect(result.profileData).toBeNull();
+  });
+
+  it('allows a player to see their own health but not raw profile data', () => {
+    const result = sanitizePlayerProfile(profile, {
+      userId: 'target-player',
+      isStaff: false,
+    });
+
+    expect(result.healthStatus).toBe('critical');
+    expect(result.ailments).toHaveLength(1);
+    expect(result.profileData).toBeNull();
+  });
+
+  it('filters private event types and values for other non-staff players', () => {
+    const events = [
+      {
+        id: 'public',
+        playerId: 'target-player',
+        eventType: PlayerEventType.PARTY_CHANGE,
+        description: 'Joined a party',
+        oldValue: { partyId: 'old' },
+        newValue: { partyId: 'new' },
+        simTick: null,
+        simDate: null,
+        triggeredById: null,
+        isAutomatic: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'private',
+        playerId: 'target-player',
+        eventType: PlayerEventType.DEATH_PENDING,
+        description: 'Death roll triggered',
+        oldValue: null,
+        newValue: { cause: 'fever' },
+        simTick: null,
+        simDate: null,
+        triggeredById: null,
+        isAutomatic: true,
+        createdAt: '2026-01-02T00:00:00.000Z',
+      },
+    ] as any;
+
+    const result = sanitizePlayerEvents(events, {
+      userId: 'viewer-player',
+      isStaff: false,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('public');
+    expect(result[0].oldValue).toBeNull();
+    expect(result[0].newValue).toBeNull();
   });
 });

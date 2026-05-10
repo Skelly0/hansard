@@ -66,7 +66,7 @@ export interface PlayerProfile {
   isAlive: boolean;
 
   // Health
-  healthStatus: HealthStatus;
+  healthStatus: HealthStatus | null;
   ailments: Ailment[];
 
   // Starting favour bonus

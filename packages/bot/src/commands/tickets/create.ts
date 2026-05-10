@@ -25,6 +25,7 @@ import { TicketStatus, TicketPriority } from '@hansard/shared';
 import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { sendTicketStaffPing } from '../../utils/ticketStaffPing.js';
 import type { Command } from '../../client.js';
 import { buildTicketSummaryEmbed, buildTicketActionRow } from '../../components/ticketButtons.js';
 import {
@@ -379,6 +380,7 @@ const command: Command = {
 
           // Add the ticket creator to the thread.
           await thread.members.add(creatorDiscordId);
+          await sendTicketStaffPing(thread, interaction.guild, ticketNumber);
 
           // Pin the summary embed.
           const summaryEmbed = buildTicketSummaryEmbed(ticketData);

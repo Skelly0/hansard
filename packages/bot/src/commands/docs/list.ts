@@ -3,11 +3,11 @@ import {
   EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, desc, and, type SQL } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { documents, documentCollections } from '@hansard/db';
+import { getCollections, listDocuments } from '@hansard/api/services/documentService';
 import { createEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 
 const RESULTS_PER_PAGE = 8;
@@ -22,22 +22,20 @@ const command: Command = {
         .setDescription('Filter by collection name (optional)')
         .setRequired(false)
         .setMaxLength(128),
-    ) as SlashCommandBuilder,
+  ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     const collectionFilter = interaction.options.getString('collection');
+    const viewer = { isStaff: !!interaction.member && (await isStaff(interaction.member as any)) };
+    const collections = await getCollections(db, viewer);
 
     // If a collection name was given, find its ID
     let collectionId: string | null = null;
     let collectionName: string | null = null;
 
     if (collectionFilter) {
-      const collections = await db
-        .select({ id: documentCollections.id, name: documentCollections.name })
-        .from(documentCollections);
-
       // Case-insensitive match
       const match = collections.find(
         (c) => c.name.toLowerCase() === collectionFilter.toLowerCase(),
@@ -62,20 +60,11 @@ const command: Command = {
       collectionName = match.name;
     }
 
-    // Build query
-    const conditions: SQL[] = [];
-    if (collectionId) {
-      conditions.push(eq(documents.collectionId, collectionId));
-    }
-
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const results = await db
-      .select()
-      .from(documents)
-      .where(whereClause)
-      .orderBy(desc(documents.updatedAt))
-      .limit(50);
+    const { documents: results } = await listDocuments(
+      db,
+      { collectionId: collectionId ?? undefined, limit: 50 },
+      viewer,
+    );
 
     if (results.length === 0) {
       await interaction.editReply({
@@ -92,12 +81,7 @@ const command: Command = {
       return;
     }
 
-    // Also fetch all collections for display
-    const allCollections = await db
-      .select({ id: documentCollections.id, name: documentCollections.name })
-      .from(documentCollections);
-
-    const collectionMap = new Map(allCollections.map((c) => [c.id, c.name]));
+    const collectionMap = new Map(collections.map((c) => [c.id, c.name]));
 
     // Build paginated embeds
     const pages: EmbedBuilder[] = [];
@@ -106,7 +90,7 @@ const command: Command = {
 
       const lines = chunk.map((doc) => {
         const cName = collectionMap.get(doc.collectionId) ?? 'Unknown';
-        const tags = (doc.tags as string[] | null) ?? [];
+        const tags = doc.tags ?? [];
         const tagStr = tags.length > 0 ? ` ${tags.map((t) => `\`${t}\``).join(', ')}` : '';
         return `**${doc.title}** (\`${doc.slug}\`)\n\u2003\u2003${cName} \u2014 v${doc.currentVersion}${tagStr}`;
       });

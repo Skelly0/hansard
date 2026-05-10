@@ -12,6 +12,7 @@ import {
   parties,
 } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import { autocompleteFavourCategory } from './_categoryAutocomplete.js';
 import type { Command } from '../../client.js';
 
@@ -31,7 +32,15 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
+
+    const member = interaction.member;
+    if (!member || !(await isStaff(member as any))) {
+      await interaction.editReply({
+        embeds: [errorEmbed('Only staff can view favour leaderboards.')],
+      });
+      return;
+    }
 
     const categoryName = interaction.options.getString('category')?.trim();
 

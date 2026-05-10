@@ -23,8 +23,12 @@ export const registerVoteTools: RegisterToolsFn = (server, ctx) => {
       },
     },
     safeHandler(async (args) => {
+      const session = await ctx.session.get();
       const svc = new VoteService(ctx.db);
-      const { data: elections, total } = await svc.listElections(args as Parameters<VoteService['listElections']>[0]);
+      const { data: elections, total } = await svc.listElections(
+        args as Parameters<VoteService['listElections']>[0],
+        { userId: session.playerId, isStaff: session.isStaff },
+      );
       return jsonResult({ count: elections.length, total, elections });
     }),
   );
@@ -36,8 +40,9 @@ export const registerVoteTools: RegisterToolsFn = (server, ctx) => {
       inputSchema: { id: z.string().uuid() },
     },
     safeHandler(async ({ id }) => {
+      const session = await ctx.session.get();
       const svc = new VoteService(ctx.db);
-      const election = await svc.getElection(id);
+      const election = await svc.getElection(id, { userId: session.playerId, isStaff: session.isStaff });
       if (!election) return errorResult(`No election with id ${id}.`);
       // getElection already attaches `candidates`; no second fetch needed.
       return jsonResult(election);
@@ -51,8 +56,9 @@ export const registerVoteTools: RegisterToolsFn = (server, ctx) => {
       inputSchema: { id: z.string().uuid() },
     },
     safeHandler(async ({ id }) => {
+      const session = await ctx.session.get();
       const svc = new VoteService(ctx.db);
-      const results = await svc.getElectionResults(id);
+      const results = await svc.getElectionResults(id, { userId: session.playerId, isStaff: session.isStaff });
       return jsonResult(results);
     }),
   );

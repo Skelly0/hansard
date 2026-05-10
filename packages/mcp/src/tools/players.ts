@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { getPlayer, listPlayers } from '@hansard/api/services/playerService';
+import { getPlayer, listPlayers, sanitizePlayerProfile } from '@hansard/api/services/playerService';
 import { jsonResult, errorResult, safeHandler, type RegisterToolsFn } from './types.js';
 
 export const registerPlayerTools: RegisterToolsFn = (server, ctx) => {
@@ -13,7 +13,10 @@ export const registerPlayerTools: RegisterToolsFn = (server, ctx) => {
       const session = await ctx.session.get();
       const player = await getPlayer(ctx.db, session.playerId);
       if (!player) return errorResult('Your player record was not found.');
-      return jsonResult(player);
+      return jsonResult(sanitizePlayerProfile(player, {
+        userId: session.playerId,
+        isStaff: session.isStaff,
+      }));
     }),
   );
 
@@ -26,9 +29,13 @@ export const registerPlayerTools: RegisterToolsFn = (server, ctx) => {
       },
     },
     safeHandler(async ({ id }) => {
+      const session = await ctx.session.get();
       const player = await getPlayer(ctx.db, id);
       if (!player) return errorResult(`No player found with id ${id}.`);
-      return jsonResult(player);
+      return jsonResult(sanitizePlayerProfile(player, {
+        userId: session.playerId,
+        isStaff: session.isStaff,
+      }));
     }),
   );
 
@@ -48,8 +55,15 @@ export const registerPlayerTools: RegisterToolsFn = (server, ctx) => {
       },
     },
     safeHandler(async (args) => {
+      const session = await ctx.session.get();
       const players = await listPlayers(ctx.db, args);
-      return jsonResult({ count: players.length, players });
+      return jsonResult({
+        count: players.length,
+        players: players.map((player) => sanitizePlayerProfile(player, {
+          userId: session.playerId,
+          isStaff: session.isStaff,
+        })),
+      });
     }),
   );
 };

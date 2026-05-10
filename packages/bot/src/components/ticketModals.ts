@@ -34,7 +34,7 @@ async function handleCloseModal(interaction: ModalSubmitInteraction): Promise<vo
   const ticketNumber = parseTicketNumber(interaction.customId);
   const reason = interaction.fields.getTextInputValue('close_reason') || null;
 
-  await interaction.deferReply();
+  await interaction.deferReply({ ephemeral: true });
 
   const actor = await upsertPlayer(interaction.user.id, interaction.user.username);
   if (!actor) {
@@ -240,11 +240,11 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
   if (noteChannel && 'send' in noteChannel) {
     try {
       const noteEmbed = createEmbed({
-        title: 'Internal Staff Note',
+        title: 'Internal Staff Note Added',
         description: [
           `**By:** ${interaction.user}`,
           '',
-          note,
+          'An internal note was added to the ticket record.',
         ].join('\n'),
         system: 'tickets',
         colour: 0x9C9890, // muted grey for internal notes

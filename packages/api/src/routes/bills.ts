@@ -32,6 +32,10 @@ import { aggregatePermissionsForPlayer } from '../services/playerService.js';
  */
 export default async function billRoutes(fastify: FastifyInstance) {
   const db = (fastify as any).db as Database;
+  const getViewer = (request: { session: { user?: { id: string } }; player?: { isStaff?: boolean } }) => ({
+    userId: request.session.user!.id,
+    isStaff: !!request.player?.isStaff,
+  });
 
   // ============================================================
   // GET /api/bills/search — Full-text search (must be before :slug)
@@ -188,7 +192,7 @@ export default async function billRoutes(fastify: FastifyInstance) {
     '/api/bills/:slug/voters',
     { preHandler: [requireAuth] },
     async (request, reply) => {
-      const result = await getVoters(db, request.params.slug);
+      const result = await getVoters(db, request.params.slug, getViewer(request));
       if (!result) {
         return reply.status(404).send({ error: 'Bill not found' });
       }

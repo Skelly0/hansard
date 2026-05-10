@@ -12,8 +12,11 @@ export const registerSimulationTools: RegisterToolsFn = (server, ctx) => {
       },
     },
     safeHandler(async ({ historyLimit }) => {
+      const session = await ctx.session.get();
       const clock = await getClock(ctx.db);
-      const history = await getHistory(ctx.db, historyLimit ?? 20);
+      const history = await getHistory(ctx.db, historyLimit ?? 20, {
+        isStaff: session.isStaff,
+      });
       return jsonResult({ clock, history });
     }),
   );

@@ -73,6 +73,11 @@ const command: Command = {
       reasons.push(`Voting is not open (status: \`${election.status}\`).`);
     }
 
+    if (eligible && player.isAlive === false) {
+      eligible = false;
+      reasons.push('Dead characters cannot vote.');
+    }
+
     if (eligible) {
       const existing = await db
         .select()

@@ -3,6 +3,7 @@ import { parties } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { refreshPartyJoinMessage } from '../../utils/partyJoinMessage.js';
 import type { Command } from '../../client.js';
 
 const command: Command = {
@@ -72,6 +73,26 @@ const command: Command = {
         })
         .returning();
 
+      let boardRefreshNotice = '';
+      if (!party.isInviteOnly) {
+        try {
+          const refreshed = await refreshPartyJoinMessage(interaction.client);
+          if (!refreshed) {
+            boardRefreshNotice = [
+              '',
+              'Party join board refresh failed: no current join board was found.',
+              'Run `pnpm --filter @hansard/bot post:party-join` to post a new one.',
+            ].join('\n');
+          }
+        } catch (error) {
+          console.warn(`[party-create] failed to refresh party join board after creating ${party.id}:`, error);
+          boardRefreshNotice = [
+            '',
+            'Party join board refresh failed; run `pnpm --filter @hansard/bot post:party-join` to refresh it manually.',
+          ].join('\n');
+        }
+      }
+
       const lines = [
         `**${party.name}**${party.shortName ? ` (${party.shortName})` : ''}`,
         party.ideology ? `*${party.ideology}*` : '',
@@ -79,6 +100,7 @@ const command: Command = {
         party.discordRoleId ? `Role: <@&${party.discordRoleId}>` : '',
         party.isInviteOnly ? 'Access: invite-only' : 'Access: open join',
         `\nID: \`${party.id}\``,
+        boardRefreshNotice,
       ].filter(Boolean).join('\n');
 
       await interaction.editReply({ embeds: [successEmbed('Party Founded', lines)] });

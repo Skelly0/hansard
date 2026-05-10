@@ -41,6 +41,37 @@ const MIN_STARTING_AGE = 18;
 const MAX_STARTING_AGE = 70;
 const DEFAULT_STARTING_AGE = 30;
 const CHARACTER_ALREADY_EXISTS_ERROR = 'CHARACTER_ALREADY_EXISTS';
+const DISCORD_ATTACHMENT_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
+
+function isDiscordAttachmentUrl(url: URL): boolean {
+  return DISCORD_ATTACHMENT_HOSTS.has(url.hostname.toLowerCase())
+    && url.pathname.startsWith('/attachments/');
+}
+
+function encodeMarkdownLinkUrl(url: string): string {
+  return url.replace(/\(/g, '%28').replace(/\)/g, '%29');
+}
+
+function normalizePortraitUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+
+  try {
+    const url = new URL(trimmed);
+
+    if (isDiscordAttachmentUrl(url)) {
+      url.search = '';
+      url.hash = '';
+    }
+
+    return encodeMarkdownLinkUrl(url.href);
+  } catch {
+    return trimmed;
+  }
+}
+
+function viewImageLink(url: string): string {
+  return `[View Image](${encodeMarkdownLinkUrl(url)})`;
+}
 
 // ─── Health display ────────────────────────────────────────────────────────
 
@@ -213,17 +244,21 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       if (!resolved) {
         resolved = true;
         buttonCollector.stop();
+        let shouldDeleteMessage = true;
 
         const attachment = msg.attachments.first();
         if (attachment?.contentType?.startsWith('image/')) {
-          resolve(attachment.url);
+          shouldDeleteMessage = false;
+          resolve(normalizePortraitUrl(attachment.url));
         } else if (msg.content.match(/^https?:\/\/.+\.(png|jpg|jpeg|gif|webp)/i)) {
-          resolve(msg.content.trim());
+          resolve(normalizePortraitUrl(msg.content));
         } else {
           resolve(null);
         }
 
-        try { await msg.delete(); } catch { /* may lack perms */ }
+        if (shouldDeleteMessage) {
+          try { await msg.delete(); } catch { /* may lack perms */ }
+        }
       }
     });
 
@@ -373,7 +408,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       },
       {
         name: 'Portrait',
-        value: portraitUrl ? `[View Image](${portraitUrl})` : '*None*',
+        value: portraitUrl ? viewImageLink(portraitUrl) : '*None*',
         inline: true,
       },
       ...(favourBonus > 0
@@ -783,15 +818,17 @@ async function handleEdit(interaction: ChatInputCommandInteraction): Promise<voi
   }
 
   const newBio = modalSubmit.fields.getTextInputValue('character_bio').trim() || null;
-  const newPortrait = modalSubmit.fields.getTextInputValue('character_portrait').trim() || null;
+  const newPortraitRaw = modalSubmit.fields.getTextInputValue('character_portrait').trim() || null;
 
-  if (newPortrait && !newPortrait.match(/^https?:\/\/.+/i)) {
+  if (newPortraitRaw && !newPortraitRaw.match(/^https?:\/\/.+/i)) {
     await modalSubmit.reply({
       embeds: [errorEmbed('Portrait URL must start with `http://` or `https://`.')],
       ephemeral: true,
     });
     return;
   }
+
+  const newPortrait = newPortraitRaw ? normalizePortraitUrl(newPortraitRaw) : null;
 
   const changes: string[] = [];
   const updateData: Record<string, unknown> = { lastActiveAt: new Date() };

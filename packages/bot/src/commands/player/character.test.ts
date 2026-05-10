@@ -81,6 +81,92 @@ describe('/character create', () => {
     vi.clearAllMocks();
   });
 
+  it('keeps direct-upload portrait messages because the portrait URL depends on the source attachment', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const uploadedMsg = {
+      author: { id: 'discord-user-1' },
+      attachments: {
+        first: vi.fn(() => ({
+          contentType: 'image/png',
+          url: 'https://cdn.discordapp.com/attachments/111/222/Portrait_(1).png?ex=65d903de&is=65c68ede&hm=abc123&',
+        })),
+      },
+      content: '',
+      delete: vi.fn(),
+    };
+
+    const messageCollector = {
+      on: vi.fn((event: string, handler: (msg: typeof uploadedMsg) => void) => {
+        if (event === 'collect') {
+          queueMicrotask(() => handler(uploadedMsg));
+        }
+        return messageCollector;
+      }),
+      stop: vi.fn(),
+    };
+
+    const buttonCollector = {
+      on: vi.fn(() => buttonCollector),
+      stop: vi.fn(),
+    };
+
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => buttonCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({
+          customId: 'char_cancel_discord-user-1',
+          update: vi.fn(),
+        }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      channel: {
+        createMessageCollector: vi.fn(() => messageCollector),
+      },
+      options: { getSubcommand: vi.fn().mockReturnValue('create') },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const confirmPayload = modalSubmit.editReply.mock.calls
+      .map(([payload]) => payload)
+      .find((payload) => containsText(payload, /Character Summary/));
+
+    expect(uploadedMsg.delete).not.toHaveBeenCalled();
+    expect(containsText(confirmPayload, /\[View Image\]\(https:\/\/cdn\.discordapp\.com\/attachments\/111\/222\/Portrait_%281%29\.png\)/)).toBe(true);
+    expect(containsText(confirmPayload, /ex=65d903de|hm=abc123/)).toBe(false);
+  });
+
   it('acknowledges the submitted modal before checking character name uniqueness', async () => {
     const events: string[] = [];
     let selectCall = 0;

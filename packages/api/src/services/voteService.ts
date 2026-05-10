@@ -157,6 +157,7 @@ export class VoteService {
         characterName: players.characterName,
         factionId: players.factionId,
         partyId: players.partyId,
+        isAlive: players.isAlive,
       })
       .from(players)
       .where(eq(players.id, playerId))
@@ -169,6 +170,9 @@ export class VoteService {
     const config = election.config as ElectionConfig;
     if (!player.characterName) {
       return { eligible: false, reason: 'Character registration is required' };
+    }
+    if (!player.isAlive) {
+      return { eligible: false, reason: 'Dead characters cannot vote' };
     }
 
     if (config.eligibleFactions?.length) {
@@ -740,9 +744,19 @@ export class VoteService {
 
     // Fetch all ballots
     const allBallots = await this.db
-      .select()
+      .select({
+        id: ballots.id,
+        electionId: ballots.electionId,
+        voterId: ballots.voterId,
+        vote: ballots.vote,
+        castAt: ballots.castAt,
+      })
       .from(ballots)
-      .where(eq(ballots.electionId, electionId));
+      .innerJoin(players, eq(players.id, ballots.voterId))
+      .where(and(
+        eq(ballots.electionId, electionId),
+        eq(players.isAlive, true),
+      ));
 
     // Convert to the Ballot shape expected by strategies
     const strategyBallots = allBallots.map((b) => ({

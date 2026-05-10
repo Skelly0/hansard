@@ -180,4 +180,55 @@ describe('MessageReactionAdd reaction voting', () => {
     expect(send).toHaveBeenCalledWith(expect.stringContaining('/character create'));
     expect(remove).not.toHaveBeenCalled();
   });
+
+  it('does not record reaction ballots for dead characters', async () => {
+    mocks.db.select
+      .mockReturnValueOnce(selectLimit([{
+        id: 'election-1',
+        title: 'Chancellor Election',
+        method: 'fptp',
+        status: 'voting_open',
+        useReactions: true,
+        config: {},
+      }]))
+      .mockReturnValueOnce(selectOrderBy([
+        { id: 'candidate-row-1', playerId: 'candidate-player-1' },
+      ]))
+      .mockReturnValueOnce(selectLimit([{
+        id: 'dead-player',
+        characterName: 'Ada Vance',
+        factionId: null,
+        partyId: null,
+        isAlive: false,
+      }]));
+
+    let listener: ((reaction: unknown, user: unknown) => Promise<void>) | undefined;
+    registerMessageReactionAddEvent({
+      on: vi.fn((event, callback) => {
+        if (event === Events.MessageReactionAdd) listener = callback;
+      }),
+    } as any);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+    const remove = vi.fn().mockResolvedValue(undefined);
+
+    await listener!(
+      {
+        partial: false,
+        message: { id: 'message-1' },
+        emoji: { name: REACTION_CANDIDATE_EMOJIS[0] },
+        users: { remove },
+      },
+      {
+        id: 'discord-user-1',
+        bot: false,
+        partial: false,
+        send,
+      },
+    );
+
+    expect(mocks.insertValues).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.stringContaining('dead characters cannot vote'));
+    expect(remove).not.toHaveBeenCalled();
+  });
 });

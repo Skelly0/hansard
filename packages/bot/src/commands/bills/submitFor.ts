@@ -195,7 +195,10 @@ const command: Command = {
           policyAreas,
           coSponsorIds: [],
         })
-        .returning();
+        .returning({
+          id: bills.id,
+          billNumber: bills.billNumber,
+        });
 
       await db.insert(billStatusLog).values({
         billId: bill.id,

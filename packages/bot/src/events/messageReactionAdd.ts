@@ -163,6 +163,13 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     );
     return;
   }
+  if (player.isAlive === false) {
+    await notifyByDm(
+      user,
+      `Your reaction on **${election.title}** was not recorded — dead characters cannot vote.`,
+    );
+    return;
+  }
 
   // Eligibility filters — mirror /vote-eligibility logic for faction/party.
   const config = election.config ?? {};

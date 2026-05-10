@@ -8,6 +8,7 @@
     "build": "tsc",
     "test": "vitest",
     "test:run": "vitest run",
+    "post:party-join": "tsx src/scripts/postPartyJoinMessage.ts",
     "start": "tsx src/index.ts"
   },
   "dependencies": {

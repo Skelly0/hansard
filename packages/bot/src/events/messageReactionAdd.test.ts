@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     insert: vi.fn(),
   },
   insertValues: vi.fn(),
+  handlePartyJoinReaction: vi.fn(),
 }));
 
 vi.mock('drizzle-orm', () => ({
@@ -42,6 +43,10 @@ vi.mock('@hansard/db', () => ({
 
 vi.mock('../db.js', () => ({
   db: mocks.db,
+}));
+
+vi.mock('../utils/partyJoinMessage.js', () => ({
+  handlePartyJoinReaction: mocks.handlePartyJoinReaction,
 }));
 
 import { registerMessageReactionAddEvent } from './messageReactionAdd';
@@ -230,5 +235,37 @@ describe('MessageReactionAdd reaction voting', () => {
     expect(mocks.insertValues).not.toHaveBeenCalled();
     expect(send).toHaveBeenCalledWith(expect.stringContaining('dead characters cannot vote'));
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('delegates non-election reactions to the party join reaction handler', async () => {
+    mocks.db.select.mockReturnValueOnce(selectLimit([]));
+    mocks.handlePartyJoinReaction.mockResolvedValue(true);
+
+    let listener: ((reaction: unknown, user: unknown) => Promise<void>) | undefined;
+    registerMessageReactionAddEvent({
+      on: vi.fn((event, callback) => {
+        if (event === Events.MessageReactionAdd) listener = callback;
+      }),
+    } as any);
+
+    const reaction = {
+      partial: false,
+      message: {
+        id: 'party-message',
+        channelId: '1501608247411609646',
+        embeds: [{ title: '🏛️ Join a Party' }],
+      },
+      emoji: { name: '🔵' },
+    };
+    const user = {
+      id: 'discord-user-1',
+      bot: false,
+      partial: false,
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await listener!(reaction, user);
+
+    expect(mocks.handlePartyJoinReaction).toHaveBeenCalledWith(reaction, user);
   });
 });

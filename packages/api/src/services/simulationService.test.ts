@@ -99,6 +99,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('DEFAULT_AGING_CONFIG ailment pool', () => {
+  it('keeps the automatic ailment pool grounded in normal dangerous conditions', () => {
+    const pool = DEFAULT_AGING_CONFIG.ailmentPool;
+    const names = pool.map((ailment) => ailment.name);
+    const uniqueNames = new Set(names);
+
+    expect(uniqueNames.size).toBe(pool.length);
+    expect(pool.every((ailment) => ailment.weight > 0)).toBe(true);
+    expect(names).toEqual(expect.arrayContaining([
+      'cancer',
+      'heart disease',
+      'kidney disease',
+      'liver disease',
+      'pulmonary fibrosis',
+      'chronic obstructive pulmonary disease',
+      'dementia',
+      "Parkinson's disease",
+      'stroke',
+      'heart failure',
+      'sepsis',
+      'pulmonary embolism',
+      'ruptured aneurysm',
+      'organ failure',
+    ]));
+
+    expect(pool.filter((ailment) => ailment.severity === 'minor')).toHaveLength(0);
+    expect(pool.filter((ailment) => ailment.severity === 'major')).toHaveLength(8);
+    expect(pool.filter((ailment) => ailment.severity === 'critical')).toHaveLength(6);
+    expect(pool.some((ailment) => ailment.minAge === 55)).toBe(true);
+    expect(pool.some((ailment) => ailment.minAge === 60)).toBe(true);
+    expect(pool.some((ailment) => ailment.minAge === 65)).toBe(true);
+    expect(pool.some((ailment) => ailment.minAge === 70)).toBe(true);
+    expect(pool.filter((ailment) => ailment.severity === 'critical')
+      .every((ailment) => (ailment.minAge ?? 0) >= 60)).toBe(true);
+  });
+});
+
 describe('advanceTime death grace period', () => {
   it('marks an automatic death roll as pending for one advance before processing death', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);

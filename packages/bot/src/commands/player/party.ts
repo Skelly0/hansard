@@ -1,17 +1,20 @@
 import {
   SlashCommandBuilder,
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, parties, factions, playerEventLog } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
+import { autocompleteParty } from './_partyAutocomplete.js';
 
 async function handleJoin(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
 
-  const partyName = interaction.options.getString('party', true).trim();
+  const partyInput = interaction.options.getString('party', true).trim();
 
   // Find the player
   const playerRows = await db
@@ -31,15 +34,17 @@ async function handleJoin(interaction: ChatInputCommandInteraction): Promise<voi
 
   const player = playerRows[0];
 
-  // Find the target party (case-insensitive match)
+  // Find the target party. Autocomplete submits the party ID; hand-typed input
+  // still works by full name or short name.
   const partyRows = await db
     .select()
     .from(parties)
     .where(eq(parties.isActive, true));
 
   const targetParty = partyRows.find(
-    (p) => p.name.toLowerCase() === partyName.toLowerCase() ||
-           p.shortName?.toLowerCase() === partyName.toLowerCase(),
+    (p) => p.id === partyInput ||
+           p.name.toLowerCase() === partyInput.toLowerCase() ||
+           p.shortName?.toLowerCase() === partyInput.toLowerCase(),
   );
 
   if (!targetParty) {
@@ -47,7 +52,7 @@ async function handleJoin(interaction: ChatInputCommandInteraction): Promise<voi
     await interaction.editReply({
       embeds: [
         errorEmbed(
-          `No active party found matching **${partyName}**.\n\n**Available parties:**\n${available || '*No parties available.*'}`,
+          `No active party found matching **${partyInput}**.\n\n**Available parties:**\n${available || '*No parties available.*'}`,
         ),
       ],
     });
@@ -211,6 +216,117 @@ async function handleLeave(interaction: ChatInputCommandInteraction): Promise<vo
   });
 }
 
+async function handleAssign(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  const member = interaction.member;
+  if (!member || !('roles' in member)) {
+    await interaction.editReply({ embeds: [errorEmbed('This command can only be used in a server.')] });
+    return;
+  }
+  if (!(await isStaff(member))) {
+    await interaction.editReply({ embeds: [errorEmbed('Only staff can assign characters to parties.')] });
+    return;
+  }
+
+  const targetUser = interaction.options.getUser('user', true);
+  const partyInput = interaction.options.getString('party', true).trim();
+
+  const [targetPlayer] = await db
+    .select()
+    .from(players)
+    .where(eq(players.discordId, targetUser.id))
+    .limit(1);
+
+  if (!targetPlayer || !targetPlayer.characterName) {
+    await interaction.editReply({ embeds: [errorEmbed(`${targetUser.username} has no registered character.`)] });
+    return;
+  }
+
+  const [staffPlayer] = await db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.discordId, interaction.user.id))
+    .limit(1);
+
+  const partyRows = await db
+    .select()
+    .from(parties)
+    .where(eq(parties.isActive, true));
+
+  const targetParty = partyRows.find(
+    (p) => p.id === partyInput ||
+           p.name.toLowerCase() === partyInput.toLowerCase() ||
+           p.shortName?.toLowerCase() === partyInput.toLowerCase(),
+  );
+
+  if (!targetParty) {
+    const available = partyRows.map((p) => `- ${p.name}${p.shortName ? ` (${p.shortName})` : ''}`).join('\n');
+    await interaction.editReply({
+      embeds: [
+        errorEmbed(
+          `No active party found matching **${partyInput}**.\n\n**Available parties:**\n${available || '*No parties available.*'}`,
+        ),
+      ],
+    });
+    return;
+  }
+
+  if (targetPlayer.partyId === targetParty.id) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`**${targetPlayer.characterName}** is already a member of **${targetParty.name}**.`)],
+    });
+    return;
+  }
+
+  let oldPartyName = 'Independent';
+  let oldPartyRoleId: string | null = null;
+  if (targetPlayer.partyId) {
+    const [oldParty] = await db
+      .select({ name: parties.name, discordRoleId: parties.discordRoleId })
+      .from(parties)
+      .where(eq(parties.id, targetPlayer.partyId))
+      .limit(1);
+    oldPartyName = oldParty?.name ?? 'Unknown';
+    oldPartyRoleId = oldParty?.discordRoleId ?? null;
+  }
+
+  await db
+    .update(players)
+    .set({ partyId: targetParty.id })
+    .where(eq(players.id, targetPlayer.id));
+
+  await db.insert(playerEventLog).values({
+    playerId: targetPlayer.id,
+    eventType: 'party_change',
+    description: `${targetPlayer.characterName} left ${oldPartyName} and joined ${targetParty.name} (staff action).`,
+    oldValue: targetPlayer.partyId ? { partyId: targetPlayer.partyId, partyName: oldPartyName } : null,
+    newValue: { partyId: targetParty.id, partyName: targetParty.name },
+    triggeredById: staffPlayer?.id ?? null,
+  });
+
+  let roleSyncWarning: string | null = null;
+  if (interaction.guild && (oldPartyRoleId || targetParty.discordRoleId)) {
+    try {
+      const targetMember = await interaction.guild.members.fetch(targetUser.id);
+      if (oldPartyRoleId) await targetMember.roles.remove(oldPartyRoleId);
+      if (targetParty.discordRoleId) await targetMember.roles.add(targetParty.discordRoleId);
+    } catch (error) {
+      console.warn(`Failed to sync party roles for ${targetPlayer.characterName}:`, error);
+      roleSyncWarning = '\n\nDiscord role sync failed; run `/sync-roles` after checking the bot role hierarchy.';
+    }
+  }
+
+  await interaction.editReply({
+    embeds: [
+      successEmbed(
+        'Party Assigned',
+        `**${targetPlayer.characterName}** has been moved from **${oldPartyName}** to **${targetParty.name}**.${roleSyncWarning ?? ''}`,
+      ),
+    ],
+  });
+}
+
 async function handleList(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
 
@@ -309,11 +425,31 @@ const command: Command = {
             .setName('party')
             .setDescription('The party name to join')
             .setRequired(true)
-            .setMaxLength(128),
+            .setMaxLength(128)
+            .setAutocomplete(true),
         ),
     )
     .addSubcommand((sub) =>
       sub.setName('leave').setDescription('Leave your current party and become independent'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('assign')
+        .setDescription('Assign another character to a party (staff only)')
+        .addUserOption((opt) =>
+          opt
+            .setName('user')
+            .setDescription('The character owner to assign')
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('party')
+            .setDescription('The party to assign')
+            .setRequired(true)
+            .setMaxLength(128)
+            .setAutocomplete(true),
+        ),
     )
     .addSubcommand((sub) =>
       sub.setName('list').setDescription('List all active parties with member counts'),
@@ -329,10 +465,17 @@ const command: Command = {
       case 'leave':
         await handleLeave(interaction);
         break;
+      case 'assign':
+        await handleAssign(interaction);
+        break;
       case 'list':
         await handleList(interaction);
         break;
     }
+  },
+
+  async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    await autocompleteParty(interaction);
   },
 };
 

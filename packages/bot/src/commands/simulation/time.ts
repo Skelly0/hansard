@@ -8,6 +8,7 @@ import { db } from '../../db.js';
 import { simulationClock, players } from '@hansard/db';
 import { advanceTime, previewAdvance } from '@hansard/api/services/simulationService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { postObituaryToGraveyard, type GraveyardPostResult } from '../../utils/graveyard.js';
 import type { Command } from '../../client.js';
 
 type DeathAilment = {
@@ -120,6 +121,15 @@ async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<
     }
 
     const result = await advanceTime(db, ticks, staffPlayer.id);
+    const graveyardPosts: GraveyardPostResult[] = [];
+
+    for (const death of result.deathDetails) {
+      graveyardPosts.push(await postObituaryToGraveyard({
+        client: interaction.client,
+        db,
+        playerId: death.playerId,
+      }));
+    }
 
     const lines: string[] = [
       `**${result.fromDate}** → **${result.toDate}**`,
@@ -139,6 +149,16 @@ async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<
       lines.push('', '⚰️ **Deaths:**');
       for (const d of result.deathDetails) {
         lines.push(`• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}`);
+      }
+
+      const channelId = graveyardPosts.find(post => post.channelId)?.channelId;
+      const sentCount = graveyardPosts.filter(post => post.status === 'sent').length;
+      if (sentCount === graveyardPosts.length && channelId) {
+        lines.push('', `Obituaries posted to <#${channelId}>.`);
+      } else if (sentCount > 0 && channelId) {
+        lines.push('', `${sentCount}/${graveyardPosts.length} obituaries posted to <#${channelId}>; check bot logs for failures.`);
+      } else {
+        lines.push('', 'Obituaries could not be posted to the graveyard channel; check bot logs.');
       }
     }
 

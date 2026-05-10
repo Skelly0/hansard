@@ -26,7 +26,7 @@ import { findElectionByReference } from './_electionReference.js';
  *     a separate `/vote-tally` round-trip.
  *   - Fetches the original posted message via discordMessageId/discordChannelId
  *     and replaces its embed with a results view.
- *   - Removes all reactions so the embed is frozen post-close.
+ *   - Leaves reactions in place so the public vote record remains inspectable.
  *
  * Button-mode votes are unchanged: they get a public "Voting is Closed" notice
  * and rely on `/vote-tally` + `/vote-results` for the result view.
@@ -140,7 +140,8 @@ const command: Command = {
 
 /**
  * Compute a quick yea_nay_abstain or fptp tally and update the original
- * vote embed in-place. Removes all reactions so the message is frozen.
+ * vote embed in-place. Reactions stay visible after close as the public
+ * vote record.
  *
  * This intentionally does NOT use the API tally strategies — those live
  * in the API package and the bot doesn't import them. For yea/nay/abstain
@@ -261,13 +262,6 @@ async function renderReactionResult(election: typeof elections.$inferSelect): Pr
   });
 
   await msg.edit({ embeds: [resultEmbed] });
-
-  // Freeze the embed by stripping all reactions.
-  try {
-    await msg.reactions.removeAll();
-  } catch (error) {
-    console.error('[vote-close] failed to remove reactions on close:', error);
-  }
 }
 
 export default command;

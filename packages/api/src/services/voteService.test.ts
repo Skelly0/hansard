@@ -37,6 +37,36 @@ function makeTurnoutDb(election: any, ballotRows = [{ id: 'ballot-1' }, { id: 'b
   };
 }
 
+function makeTallyDb(election: any, allBallotRows: any[], aliveBallotRows = allBallotRows) {
+  const electionLimit = vi.fn().mockResolvedValue(election ? [election] : []);
+  const electionWhere = vi.fn().mockReturnValue({ limit: electionLimit });
+  const electionFrom = vi.fn().mockReturnValue({ where: electionWhere });
+
+  const legacyBallotWhere = vi.fn().mockResolvedValue(allBallotRows);
+  const aliveBallotWhere = vi.fn().mockResolvedValue(aliveBallotRows);
+  const innerJoin = vi.fn().mockReturnValue({ where: aliveBallotWhere });
+  const ballotFrom = vi.fn().mockReturnValue({
+    where: legacyBallotWhere,
+    innerJoin,
+  });
+
+  const updateWhere = vi.fn().mockResolvedValue(undefined);
+  const set = vi.fn().mockReturnValue({ where: updateWhere });
+  const update = vi.fn().mockReturnValue({ set });
+
+  const select = vi.fn()
+    .mockReturnValueOnce({ from: electionFrom })
+    .mockReturnValueOnce({ from: ballotFrom });
+
+  return {
+    db: { select, update },
+    legacyBallotWhere,
+    aliveBallotWhere,
+    innerJoin,
+    update,
+  };
+}
+
 const validNpcElection = {
   id: 'election-1',
   title: 'Minister Appointment',
@@ -196,6 +226,7 @@ describe('VoteService character registration guards', () => {
         characterName: null,
         factionId: null,
         partyId: null,
+        isAlive: true,
       }]))
       .mockReturnValueOnce(selectLimit([]));
 
@@ -210,6 +241,34 @@ describe('VoteService character registration guards', () => {
     });
   });
 
+  it('does not allow dead character rows to vote', async () => {
+    const select = vi.fn()
+      .mockReturnValueOnce(selectLimit([{
+        id: 'election-1',
+        status: 'voting_open',
+        config: {},
+        createdById: 'creator-player',
+      }]))
+      .mockReturnValueOnce(selectLimit([{
+        id: 'dead-player',
+        characterName: 'Ada Vance',
+        factionId: null,
+        partyId: null,
+        isAlive: false,
+      }]))
+      .mockReturnValueOnce(selectLimit([]));
+
+    const result = await new VoteService({ select } as any).getEligibility(
+      'election-1',
+      'dead-player',
+    );
+
+    expect(result).toEqual({
+      eligible: false,
+      reason: 'Dead characters cannot vote',
+    });
+  });
+
   it('does not allow OAuth-only rows to register as candidates', async () => {
     const db = makeRegisterCandidateDb({
       playerRows: [{ id: 'oauth-placeholder', characterName: null }],
@@ -221,5 +280,41 @@ describe('VoteService character registration guards', () => {
     })).rejects.toThrow('Character registration is required');
 
     expect(db.insert).not.toHaveBeenCalled();
+  });
+});
+
+describe('VoteService dead voter tally handling', () => {
+  it('excludes ballots from dead voters when tallying', async () => {
+    const castAt = new Date('2026-05-01T12:00:00.000Z');
+    const aliveBallot = {
+      id: 'ballot-alive',
+      electionId: 'election-1',
+      voterId: 'alive-player',
+      vote: { type: 'yea_nay_abstain', choice: 'yea' },
+      castAt,
+    };
+    const deadBallot = {
+      id: 'ballot-dead',
+      electionId: 'election-1',
+      voterId: 'dead-player',
+      vote: { type: 'yea_nay_abstain', choice: 'nay' },
+      castAt,
+    };
+    const { db, legacyBallotWhere, aliveBallotWhere } = makeTallyDb({
+      id: 'election-1',
+      method: 'yea_nay_abstain',
+      status: 'voting_closed',
+      config: {},
+    }, [aliveBallot, deadBallot], [aliveBallot]);
+
+    const result = await new VoteService(db as any).tallyVotes('election-1');
+
+    expect(result).toMatchObject({
+      totalVotes: 1,
+      turnout: 1,
+      finalTallies: { yea: 1, nay: 0, abstain: 0 },
+    });
+    expect(legacyBallotWhere).not.toHaveBeenCalled();
+    expect(aliveBallotWhere).toHaveBeenCalledTimes(1);
   });
 });

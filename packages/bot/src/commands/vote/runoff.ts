@@ -5,6 +5,7 @@ import {
 } from 'discord.js';
 import { and, eq, inArray } from 'drizzle-orm';
 import { elections, candidates } from '@hansard/db';
+import { DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
@@ -113,7 +114,7 @@ const command: Command = {
         parentElectionId: rootId,
         roundNumber: runoffRound,
         votingOpensAt: new Date(),
-        votingClosesAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        votingClosesAt: new Date(Date.now() + DEFAULT_VOTE_DURATION_MS),
         createdById: election.createdById,
         discordChannelId: election.discordChannelId,
         status: 'draft',

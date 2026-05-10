@@ -5,6 +5,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { bills, billStatusLog, elections, players } from '@hansard/db';
+import { DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
@@ -83,7 +84,7 @@ const command: Command = {
     try {
       // Create a yea/nay/abstain election linked to this bill
       const now = new Date();
-      const votingCloses = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+      const votingCloses = new Date(now.getTime() + DEFAULT_VOTE_DURATION_MS);
 
       const [election] = await db
         .insert(elections)

@@ -18,6 +18,7 @@ import type {
   ElectionType,
   ElectionStatus,
 } from '@hansard/shared';
+import { DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
 import { getStrategy } from './tallying/index.js';
 import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
 import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
@@ -157,6 +158,7 @@ export class VoteService {
         characterName: players.characterName,
         factionId: players.factionId,
         partyId: players.partyId,
+        isAlive: players.isAlive,
       })
       .from(players)
       .where(eq(players.id, playerId))
@@ -169,6 +171,9 @@ export class VoteService {
     const config = election.config as ElectionConfig;
     if (!player.characterName) {
       return { eligible: false, reason: 'Character registration is required' };
+    }
+    if (!player.isAlive) {
+      return { eligible: false, reason: 'Dead characters cannot vote' };
     }
 
     if (config.eligibleFactions?.length) {
@@ -740,9 +745,19 @@ export class VoteService {
 
     // Fetch all ballots
     const allBallots = await this.db
-      .select()
+      .select({
+        id: ballots.id,
+        electionId: ballots.electionId,
+        voterId: ballots.voterId,
+        vote: ballots.vote,
+        castAt: ballots.castAt,
+      })
       .from(ballots)
-      .where(eq(ballots.electionId, electionId));
+      .innerJoin(players, eq(players.id, ballots.voterId))
+      .where(and(
+        eq(ballots.electionId, electionId),
+        eq(players.isAlive, true),
+      ));
 
     // Convert to the Ballot shape expected by strategies
     const strategyBallots = allBallots.map((b) => ({
@@ -862,7 +877,7 @@ export class VoteService {
         parentElectionId: rootId,
         roundNumber: runoffRound,
         votingOpensAt: new Date(), // staff can update
-        votingClosesAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // default 7 days
+        votingClosesAt: new Date(Date.now() + DEFAULT_VOTE_DURATION_MS),
         createdById: election.createdById,
         discordChannelId: election.discordChannelId,
         status: 'draft',

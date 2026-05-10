@@ -5,6 +5,7 @@ import {
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { elections, players } from '@hansard/db';
+import { DEFAULT_VOTE_DURATION_HOURS } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { hasPermission, isStaff } from '../../utils/permissions.js';
@@ -105,7 +106,7 @@ const command: Command = {
     .addNumberOption((opt) =>
       opt
         .setName('duration-hours')
-        .setDescription('How long voting stays open after it opens (default 48)')
+        .setDescription(`How long voting stays open after it opens (default ${DEFAULT_VOTE_DURATION_HOURS})`)
         .setRequired(false)
         .setMinValue(1)
         .setMaxValue(24 * 365),
@@ -153,7 +154,7 @@ const command: Command = {
     const electionType = interaction.options.getString('type', true);
     const method = interaction.options.getString('method', true);
     const opensInHours = interaction.options.getNumber('opens-in-hours', true);
-    const durationHours = interaction.options.getNumber('duration-hours') ?? 48;
+    const durationHours = interaction.options.getNumber('duration-hours') ?? DEFAULT_VOTE_DURATION_HOURS;
     const description = interaction.options.getString('description')?.trim() || null;
     const majority = interaction.options.getString('majority') ?? 'simple';
 

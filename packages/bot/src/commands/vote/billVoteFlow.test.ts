@@ -128,6 +128,14 @@ describe('createLegislativeBillVote', () => {
     });
 
     expect(result.electionId).toBe(insertedElection.id);
+    expect(db.select).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      id: expect.anything(),
+      title: expect.anything(),
+      billNumber: expect.anything(),
+      summary: expect.anything(),
+      status: expect.anything(),
+    }));
+    expect(db.select.mock.calls[0]?.[0]).not.toHaveProperty('billType');
     expect(insertValues[0]).toMatchObject({
       title: 'Vote on: Transit Reform Act',
       type: 'legislative_vote',
@@ -142,6 +150,12 @@ describe('createLegislativeBillVote', () => {
       status: BillStatus.VOTING,
       playerVoteId: insertedElection.id,
     });
+    expect(txUpdate.returning).toHaveBeenCalledWith(expect.objectContaining({
+      id: expect.anything(),
+      status: expect.anything(),
+      playerVoteId: expect.anything(),
+    }));
+    expect(txUpdate.returning.mock.calls[0]?.[0]).not.toHaveProperty('billType');
   });
 
   it('rejects bills that are not still submitted', async () => {

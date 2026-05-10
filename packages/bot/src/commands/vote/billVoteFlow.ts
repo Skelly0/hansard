@@ -35,7 +35,11 @@ export interface CreateLegislativeBillVoteInput {
 }
 
 export interface CreateLegislativeBillVoteResult {
-  bill: typeof bills.$inferSelect;
+  bill: {
+    id: string;
+    status: string;
+    playerVoteId: string | null;
+  };
   electionId: string;
   votingOpensAt: Date;
   votingClosesAt: Date;
@@ -126,7 +130,13 @@ export async function createLegislativeBillVote(
   }
 
   const [bill] = await database
-    .select()
+    .select({
+      id: bills.id,
+      title: bills.title,
+      billNumber: bills.billNumber,
+      summary: bills.summary,
+      status: bills.status,
+    })
     .from(bills)
     .where(eq(bills.id, input.billId))
     .limit(1);
@@ -183,7 +193,15 @@ export async function createLegislativeBillVote(
         updatedAt: now,
       })
       .where(eq(bills.id, bill.id))
-      .returning();
+      .returning({
+        id: bills.id,
+        status: bills.status,
+        playerVoteId: bills.playerVoteId,
+      });
+
+    if (!updatedBill) {
+      throw new Error('Failed to update bill status');
+    }
 
     await tx.insert(billStatusLog).values({
       billId: bill.id,

@@ -69,6 +69,7 @@ function containsText(value: unknown, pattern: RegExp, seen = new Set<object>())
   seen.add(value);
 
   for (const key of Reflect.ownKeys(value)) {
+    if (key === 'timestamp') continue;
     const child = (value as Record<PropertyKey, unknown>)[key];
     if (containsText(child, pattern, seen)) return true;
   }

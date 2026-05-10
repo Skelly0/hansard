@@ -76,6 +76,7 @@ export type Permission =
   | 'bills.delete'
   | 'voting.create'
   | 'voting.close'
+  | 'voting.cancel'
   | 'players.edit'
   | 'offices.assign'
   | 'favours.grant'
@@ -88,6 +89,7 @@ const PERMISSION_ALIASES: Record<string, string[]> = {
   'bills.create': ['legislative_leader'],
   'voting.create': ['call_elections', 'legislative_leader'],
   'voting.close': ['call_elections', 'legislative_leader'],
+  'voting.cancel': ['legislative_leader'],
   'offices.assign': ['appoint_ministers'],
 };
 

@@ -194,6 +194,8 @@ export async function handleVoteCreateModal(
   const [, electionType, method, majority, ifaceRaw] = parts;
   const iface = getRequestedVoteInterface(ifaceRaw ?? null, method);
 
+  await interaction.deferReply({ ephemeral: true });
+
   // Re-check permission for restricted types — modal submits don't re-run
   // the slash command's permission logic.
   if (CHANCELLOR_ONLY_TYPES.has(electionType)) {
@@ -203,9 +205,8 @@ export async function handleVoteCreateModal(
       ? await hasPermission(member as any, requiredPermission)
       : false;
     if (!allowed) {
-      await interaction.reply({
+      await interaction.editReply({
         embeds: [errorEmbed('Only staff or an office holder with the required voting permission can create this type of vote.')],
-        ephemeral: true,
       });
       return;
     }
@@ -215,13 +216,12 @@ export async function handleVoteCreateModal(
   // even though the slash command should have caught it (someone could craft
   // a modal directly).
   if (iface === 'reactions' && !REACTION_COMPATIBLE_METHODS.includes(method as never)) {
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [
         errorEmbed(
           `Reaction-mode voting is not supported for method \`${method}\`. Use buttons.`,
         ),
       ],
-      ephemeral: true,
     });
     return;
   }
@@ -254,9 +254,8 @@ export async function handleVoteCreateModal(
     .limit(1);
 
   if (!creator) {
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [errorEmbed('You are not registered as a player. Run `/character create` first.')],
-      ephemeral: true,
     });
     return;
   }
@@ -283,7 +282,7 @@ export async function handleVoteCreateModal(
     electionId = row.id;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create election';
-    await interaction.reply({ embeds: [errorEmbed(message)], ephemeral: true });
+    await interaction.editReply({ embeds: [errorEmbed(message)] });
     return;
   }
 
@@ -320,7 +319,7 @@ export async function handleVoteCreateModal(
     { name: 'Election ID', value: `\`${electionId}\``, inline: false },
   ];
 
-  // ---- Buttons mode: just confirm to the creator (existing behaviour) ----
+  // ---- Buttons mode: post the vote publicly, then confirm to the creator ----
   if (!useReactions) {
     const embed = createEmbed({
       title,
@@ -328,24 +327,46 @@ export async function handleVoteCreateModal(
       system: 'voting',
       fields: baseFields,
     });
-    await interaction.reply({ embeds: [embed] });
+
+    const channel = interaction.channel;
+    if (channel && 'send' in channel) {
+      try {
+        await (channel as TextChannel | NewsChannel | ThreadChannel).send({ embeds: [embed] });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to post vote message';
+        await interaction.editReply({ embeds: [errorEmbed(message)] });
+        return;
+      }
+
+      await interaction.editReply({
+        embeds: [
+          createEmbed({
+            title: 'Vote Created',
+            description: `The vote has been posted in this channel.\n\nElection ID: \`${electionId}\``,
+            system: 'voting',
+          }),
+        ],
+      });
+      return;
+    }
+
+    await interaction.editReply({ embeds: [embed] });
     return;
   }
 
   // ---- Reactions mode: post a public embed in the channel and seed reactions ----
   const channel = interaction.channel;
   if (!channel || !('send' in channel)) {
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [errorEmbed('Reaction-mode voting must be created in a text channel.')],
-      ephemeral: true,
     });
     return;
   }
 
   const reactionInstructions =
     method === 'yea_nay_abstain'
-      ? `React with ${REACTION_EMOJI.YEA} for **Yea**, ${REACTION_EMOJI.NAY} for **Nay**, or ${REACTION_EMOJI.ABSTAIN} for **Abstain**.\nYour reaction is removed once recorded; you may change your vote by reacting again.`
-      : `React with the number matching your preferred candidate. Use \`/candidate-list\` to see candidates by position.\n*Note: candidates must be registered before votes are cast — restart the vote if you add candidates after.*`;
+      ? `React with ${REACTION_EMOJI.YEA} for **Yea**, ${REACTION_EMOJI.NAY} for **Nay**, or ${REACTION_EMOJI.ABSTAIN} for **Abstain**.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.`
+      : `React with the number matching your preferred candidate. Use \`/candidate-list\` to see candidates by position.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.\n*Note: candidates must be registered before votes are cast — restart the vote if you add candidates after.*`;
 
   const reactionEmbed = createEmbed({
     title,
@@ -370,7 +391,7 @@ export async function handleVoteCreateModal(
       .set({ status: 'cancelled', updatedAt: new Date() })
       .where(eq(elections.id, electionId));
     const message = error instanceof Error ? error.message : 'Failed to post vote message';
-    await interaction.reply({ embeds: [errorEmbed(message)], ephemeral: true });
+    await interaction.editReply({ embeds: [errorEmbed(message)] });
     return;
   }
 
@@ -400,7 +421,7 @@ export async function handleVoteCreateModal(
   // FPTP: candidate emoji are seeded by the candidate-list flow once
   // candidates are registered (see candidateSubmit.ts — TODO follow-up).
 
-  await interaction.reply({
+  await interaction.editReply({
     embeds: [
       createEmbed({
         title: 'Reaction Vote Posted',
@@ -408,7 +429,6 @@ export async function handleVoteCreateModal(
         system: 'voting',
       }),
     ],
-    ephemeral: true,
   });
 }
 

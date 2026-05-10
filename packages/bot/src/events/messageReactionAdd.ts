@@ -30,15 +30,15 @@ import { db } from '../db.js';
  *   4. Atomically replace the existing ballot (delete + insert in a transaction)
  *      — reaction mode is public voting where changing your mind is
  *      part of the design.
- *   5. Remove the user's reaction so the visible counts on the embed don't
- *      double-count the bot's own seeds and aren't a public scoreboard mid-vote.
+ *   5. Leave the user's reaction in place so the Discord message itself is
+ *      the public voting record.
  *
  * Race-condition note: the discord.js global InteractionCreate vs awaiter race
  * (CLAUDE.md) does NOT apply here — MessageReactionAdd is a separate event
  * that no command awaits. We can act freely.
  *
- * Errors are reported by DM to the reacting user and removing the reaction
- * silently — we never reply in the channel.
+ * Errors are reported by DM to the reacting user where useful; we never reply
+ * in the channel and we do not remove reactions from the vote message.
  */
 
 type ReactionInput = MessageReaction | PartialMessageReaction;
@@ -50,15 +50,6 @@ async function notifyByDm(user: UserInput, message: string): Promise<void> {
     await fullUser.send(message);
   } catch {
     // User has DMs closed — nothing we can do.
-  }
-}
-
-async function safeRemoveReaction(reaction: ReactionInput, user: UserInput): Promise<void> {
-  try {
-    await reaction.users.remove(user.id);
-  } catch (error) {
-    // Likely missing Manage Messages permission, or message was deleted.
-    console.error('[reaction-vote] failed to remove user reaction:', error);
   }
 }
 
@@ -99,8 +90,10 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
   if (!election || !election.useReactions) return;
 
   if (election.status !== 'voting_open') {
-    // Vote is closed — strip the reaction so the embed stays clean.
-    await safeRemoveReaction(fullReaction, user);
+    await notifyByDm(
+      user,
+      `Your reaction on **${election.title}** was not recorded — voting is closed.`,
+    );
     return;
   }
 
@@ -143,9 +136,8 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
   }
 
   if (!votePayload) {
-    // Unrecognised emoji on a vote message — clean it off so the embed
-    // doesn't accumulate junk.
-    await safeRemoveReaction(fullReaction, user);
+    // Unrecognised emoji on a vote message — leave it alone. Staff can clean
+    // message clutter manually, but the bot never removes public vote reactions.
     return;
   }
 
@@ -158,7 +150,6 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     .limit(1);
 
   if (!player) {
-    await safeRemoveReaction(fullReaction, user);
     await notifyByDm(
       user,
       `Your reaction on **${election.title}** was not recorded — you are not registered as a player. Run \`/character create\` first.`,
@@ -166,7 +157,6 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     return;
   }
   if (!player.characterName) {
-    await safeRemoveReaction(fullReaction, user);
     await notifyByDm(
       user,
       `Your reaction on **${election.title}** was not recorded — you have not created a character yet. Run \`/character create\` first.`,
@@ -178,7 +168,6 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
   const config = election.config ?? {};
   if (config.eligibleFactions?.length) {
     if (!player.factionId || !config.eligibleFactions.includes(player.factionId)) {
-      await safeRemoveReaction(fullReaction, user);
       await notifyByDm(
         user,
         `Your reaction on **${election.title}** was not recorded — your faction is not eligible to vote in this election.`,
@@ -188,7 +177,6 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
   }
   if (config.eligibleParties?.length) {
     if (!player.partyId || !config.eligibleParties.includes(player.partyId)) {
-      await safeRemoveReaction(fullReaction, user);
       await notifyByDm(
         user,
         `Your reaction on **${election.title}** was not recorded — your party is not eligible to vote in this election.`,
@@ -220,7 +208,6 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
     console.error(`[reaction-vote] failed to record ballot for ${user.id} on ${election.id}:`, message);
-    await safeRemoveReaction(fullReaction, user);
     await notifyByDm(
       user,
       `Your reaction on **${election.title}** was not recorded due to an internal error. Please try \`/vote-cast\` instead, or contact staff.`,
@@ -228,14 +215,11 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     return;
   }
 
-  // Strip the reaction so live counts on the embed don't reveal who voted
-  // for what mid-vote. Anonymity by default; the tally reveals aggregates.
-  await safeRemoveReaction(fullReaction, user);
-
-  // Quiet success — confirm in DM so the user knows it landed.
+  // Quiet success — confirm in DM so the user knows it landed. Their reaction
+  // stays on the public vote message.
   await notifyByDm(
     user,
-    `Your **${voteLabel}** vote on **${election.title}** has been recorded. React again to change it before voting closes.`,
+    `Your **${voteLabel}** vote on **${election.title}** has been recorded. Your reaction remains visible on the public vote message.`,
   );
 }
 

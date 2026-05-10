@@ -105,12 +105,14 @@ describe('MessageReactionAdd reaction voting', () => {
       }),
     } as any);
 
+    const remove = vi.fn().mockResolvedValue(undefined);
+
     await listener!(
       {
         partial: false,
         message: { id: 'message-1' },
         emoji: { name: REACTION_CANDIDATE_EMOJIS[0] },
-        users: { remove: vi.fn().mockResolvedValue(undefined) },
+        users: { remove },
       },
       {
         id: 'discord-user-1',
@@ -125,6 +127,7 @@ describe('MessageReactionAdd reaction voting', () => {
       voterId: 'voter-player-1',
       vote: { type: 'fptp', candidateId: 'candidate-player-1' },
     });
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('does not record reaction ballots for OAuth-only player rows', async () => {
@@ -156,12 +159,14 @@ describe('MessageReactionAdd reaction voting', () => {
 
     const send = vi.fn().mockResolvedValue(undefined);
 
+    const remove = vi.fn().mockResolvedValue(undefined);
+
     await listener!(
       {
         partial: false,
         message: { id: 'message-1' },
         emoji: { name: REACTION_CANDIDATE_EMOJIS[0] },
-        users: { remove: vi.fn().mockResolvedValue(undefined) },
+        users: { remove },
       },
       {
         id: 'discord-user-1',
@@ -173,5 +178,6 @@ describe('MessageReactionAdd reaction voting', () => {
 
     expect(mocks.insertValues).not.toHaveBeenCalled();
     expect(send).toHaveBeenCalledWith(expect.stringContaining('/character create'));
+    expect(remove).not.toHaveBeenCalled();
   });
 });

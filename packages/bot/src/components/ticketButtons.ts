@@ -100,10 +100,7 @@ export function buildTicketSummaryEmbed(data: TicketEmbedData) {
 
   return createEmbed({
     title: `Ticket #${data.number}: ${data.title}`,
-    description:
-      data.description.length > 400
-        ? data.description.slice(0, 400) + '...'
-        : data.description,
+    description: data.description,
     system: 'tickets',
     fields,
   });

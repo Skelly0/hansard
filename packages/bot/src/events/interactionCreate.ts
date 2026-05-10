@@ -51,6 +51,7 @@ const COLLECTOR_MANAGED_PREFIXES = [
   'portrait_skip_', 'faction_sel_', 'party_sel_',
   'pagination_',
   'ticket_category_select:', 'ticket_create_modal:',
+  'vote_create_bill_select:', 'vote_create_bill_modal:',
   'bill_submit_type:', 'bill_submit_modal:',
 ];
 

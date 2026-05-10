@@ -36,11 +36,12 @@ interface PartyFormState {
   colour: string;
   discordRoleId: string;
   factionId: string;
+  isInviteOnly: boolean;
   active: boolean;
 }
 
 function emptyForm(): PartyFormState {
-  return { name: '', shortName: '', ideology: '', colour: '', discordRoleId: '', factionId: '', active: true };
+  return { name: '', shortName: '', ideology: '', colour: '', discordRoleId: '', factionId: '', isInviteOnly: false, active: true };
 }
 
 function fromParty(p: PartyWithStats): PartyFormState {
@@ -51,6 +52,7 @@ function fromParty(p: PartyWithStats): PartyFormState {
     colour: p.colour ?? '',
     discordRoleId: p.discordRoleId ?? '',
     factionId: p.factionId ?? '',
+    isInviteOnly: p.isInviteOnly,
     active: p.isActive,
   };
 }
@@ -162,6 +164,17 @@ function PartyFormModal({
                 />
               </Field>
             </div>
+
+            <Field label="Access">
+              <label className="flex items-center gap-2 text-body-sm">
+                <input
+                  type="checkbox"
+                  checked={form.isInviteOnly}
+                  onChange={(e) => update('isInviteOnly', e.target.checked)}
+                />
+                <span>Invite-only</span>
+              </label>
+            </Field>
 
             {isEdit && (
               <Field label="Status">
@@ -297,6 +310,7 @@ export function Parties() {
       colour: form.colour.trim() || null,
       factionId: form.factionId.trim() || null,
       discordRoleId: form.discordRoleId.trim() || null,
+      isInviteOnly: form.isInviteOnly,
     };
     try {
       await createMut.mutateAsync(body);
@@ -316,6 +330,7 @@ export function Parties() {
       colour: form.colour.trim() || null,
       factionId: form.factionId.trim() || null,
       discordRoleId: form.discordRoleId.trim() || null,
+      isInviteOnly: form.isInviteOnly,
       isActive: form.active,
     };
     try {
@@ -396,6 +411,12 @@ export function Parties() {
                   {p.isActive ? 'Active' : 'Dissolved'}
                 </Tag>
               </div>
+
+              {p.isInviteOnly && (
+                <div className="mb-3">
+                  <Tag color="pending">Invite-only</Tag>
+                </div>
+              )}
 
               {p.ideology && (
                 <p className="text-body-sm italic text-text-secondary mb-3 line-clamp-2">

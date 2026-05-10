@@ -4,6 +4,7 @@ import {
   findOrCreatePlayerByDiscordId,
   aggregatePermissionsForPlayer,
   listPlayers,
+  changeParty,
   getPlayerVotingRecord,
   sanitizePlayerEvents,
   sanitizePlayerProfile,
@@ -205,6 +206,78 @@ describe('listPlayers with search', () => {
     const results = await listPlayers(db, { isActive: true, limit: 10, offset: 0 });
 
     expect(results.map((player) => player.id)).toEqual(['created-character']);
+  });
+});
+
+describe('changeParty invite-only guard', () => {
+  function playerRow(overrides: Partial<Record<string, any>> = {}) {
+    return {
+      id: 'player-1',
+      discordId: '111',
+      discordUsername: 'aldrick',
+      characterName: 'Aldrick Vance',
+      characterBio: null,
+      characterPortraitUrl: null,
+      factionId: null,
+      partyId: null,
+      birthDate: '1990-01-01',
+      startingAge: 35,
+      currentAge: 35,
+      deathDate: null,
+      causeOfDeath: null,
+      isAlive: true,
+      healthStatus: 'healthy',
+      ailments: [],
+      startingFavoursGranted: false,
+      isActive: true,
+      isStaff: false,
+      staffRole: null,
+      registeredAt: new Date('2026-01-01T00:00:00.000Z'),
+      lastActiveAt: null,
+      profileData: null,
+      ...overrides,
+    };
+  }
+
+  it('rejects self-service joins to invite-only parties', async () => {
+    const existing = playerRow();
+    const updated = playerRow({ partyId: 'party-private' });
+
+    const select = vi.fn()
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([existing]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{
+              id: 'party-private',
+              name: 'Inner Table',
+              isInviteOnly: true,
+            }]),
+          }),
+        }),
+      });
+
+    const update = vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([updated]),
+        }),
+      }),
+    });
+    const insert = vi.fn().mockReturnValue({
+      values: vi.fn().mockResolvedValue(undefined),
+    });
+    const db: any = { select, update, insert };
+
+    await expect(changeParty(db, existing.id, 'party-private', existing.id)).rejects.toThrow(/invite-only/i);
+    expect(update).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
   });
 });
 

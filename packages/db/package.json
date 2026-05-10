@@ -10,6 +10,7 @@
     "generate": "drizzle-kit generate",
     "migrate": "drizzle-kit migrate",
     "migrate:short-bills": "tsx scripts/migrate-short-bills.ts",
+    "migrate:invite-only-parties": "tsx scripts/migrate-invite-only-parties.ts",
     "push": "drizzle-kit push",
     "studio": "drizzle-kit studio",
     "build": "tsc"

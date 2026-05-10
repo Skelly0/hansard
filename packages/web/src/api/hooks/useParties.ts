@@ -12,6 +12,7 @@ export interface Party {
   ideology: string | null;
   colour: string | null;
   discordRoleId: string | null;
+  isInviteOnly: boolean;
   isActive: boolean;
   foundedAt: string;
   dissolvedAt: string | null;
@@ -35,6 +36,7 @@ export interface CreatePartyBody {
   ideology?: string | null;
   colour?: string | null;
   discordRoleId?: string | null;
+  isInviteOnly?: boolean;
 }
 
 export interface UpdatePartyBody extends Partial<CreatePartyBody> {

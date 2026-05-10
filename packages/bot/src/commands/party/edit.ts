@@ -33,6 +33,9 @@ const command: Command = {
     )
     .addBooleanOption((opt) =>
       opt.setName('active').setDescription('Set active state').setRequired(false),
+    )
+    .addBooleanOption((opt) =>
+      opt.setName('invite-only').setDescription('Require staff assignment instead of public self-join').setRequired(false),
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -95,6 +98,9 @@ const command: Command = {
       updates.isActive = active;
       updates.dissolvedAt = active ? null : new Date();
     }
+
+    const inviteOnly = interaction.options.getBoolean('invite-only');
+    if (inviteOnly !== null) updates.isInviteOnly = inviteOnly;
 
     if (Object.keys(updates).length === 0) {
       await interaction.editReply({ embeds: [errorEmbed('No fields to update. Provide at least one option.')] });

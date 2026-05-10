@@ -45,6 +45,7 @@ export default async function partyRoutes(fastify: FastifyInstance) {
       ideology?: string | null;
       colour?: string | null;
       discordRoleId?: string | null;
+      isInviteOnly?: boolean;
     };
   }>(
     '/api/parties',
@@ -71,6 +72,7 @@ export default async function partyRoutes(fastify: FastifyInstance) {
       ideology?: string | null;
       colour?: string | null;
       discordRoleId?: string | null;
+      isInviteOnly?: boolean;
       isActive?: boolean;
     };
   }>(

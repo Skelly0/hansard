@@ -99,6 +99,7 @@ export const parties = pgTable('parties', {
   ideology: varchar('ideology', { length: 256 }),
   colour: varchar('colour', { length: 7 }),
   discordRoleId: varchar('discord_role_id', { length: 20 }),  // mapped Discord role for auto-sync
+  isInviteOnly: boolean('is_invite_only').default(false).notNull(),
   isActive: boolean('is_active').default(true).notNull(),
   foundedAt: timestamp('founded_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   dissolvedAt: timestamp('dissolved_at', { withTimezone: true, mode: 'date' }),

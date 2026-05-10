@@ -304,6 +304,81 @@ describe('/character create', () => {
     expect(editPayloads.some((payload) => containsText(payload, /Failed to create character/))).toBe(false);
   });
 
+  it('does not offer invite-only parties during self-service character creation', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([
+        { id: 'party-open', name: 'Open League', shortName: 'OPEN', isInviteOnly: false },
+        { id: 'party-private', name: 'Private Caucus', shortName: 'PRV', isInviteOnly: true },
+      ]);
+      if (selectCall === 5) return selectWhereResult([
+        { id: 'party-open', name: 'Open League', shortName: 'OPEN', isInviteOnly: false },
+        { id: 'party-private', name: 'Private Caucus', shortName: 'PRV', isInviteOnly: true },
+      ]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    let endHandler: (() => void) | undefined;
+    const portraitCollector = {
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'end') {
+          endHandler = handler;
+          queueMicrotask(() => endHandler?.());
+        }
+        return portraitCollector;
+      }),
+      stop: vi.fn(),
+    };
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => portraitCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({ values: ['none'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({
+          customId: 'char_cancel_discord-user-1',
+          update: vi.fn(),
+        }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: null,
+      options: { getSubcommand: vi.fn().mockReturnValue('create') },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const partyPayload = modalSubmit.editReply.mock.calls
+      .map(([payload]) => payload)
+      .find((payload) => containsText(payload, /Choose Your Party/));
+
+    expect(partyPayload).toBeDefined();
+    expect(containsText(partyPayload, /Open League/)).toBe(true);
+    expect(containsText(partyPayload, /Private Caucus/)).toBe(false);
+  });
+
   it('does not overwrite an existing character if a concurrent create finishes first', async () => {
     let selectCall = 0;
 

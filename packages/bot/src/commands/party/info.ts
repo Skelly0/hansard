@@ -75,6 +75,7 @@ const command: Command = {
       factionName ? `**Faction:** ${factionName}` : '',
       target.colour ? `**Colour:** \`${target.colour}\`` : '',
       target.discordRoleId ? `**Role:** <@&${target.discordRoleId}>` : '',
+      `**Access:** ${target.isInviteOnly ? 'Invite-only' : 'Open join'}`,
       target.isActive ? '' : `**Dissolved:** ${target.dissolvedAt ? target.dissolvedAt.toISOString().slice(0, 10) : 'unknown'}`,
     ].filter(Boolean).join('\n');
 

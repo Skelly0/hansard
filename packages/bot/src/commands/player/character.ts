@@ -332,16 +332,22 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 
   // Step 4: Party select (optional)
   const factionParties = await db
-    .select({ id: parties.id, name: parties.name, shortName: parties.shortName })
+    .select({ id: parties.id, name: parties.name, shortName: parties.shortName, isInviteOnly: parties.isInviteOnly })
     .from(parties)
-    .where(eq(parties.factionId, selectedFactionId));
+    .where(and(
+      eq(parties.factionId, selectedFactionId),
+      eq(parties.isActive, true),
+      eq(parties.isInviteOnly, false),
+    ));
 
   const allActiveParties = await db
-    .select({ id: parties.id, name: parties.name, shortName: parties.shortName })
+    .select({ id: parties.id, name: parties.name, shortName: parties.shortName, isInviteOnly: parties.isInviteOnly })
     .from(parties)
-    .where(eq(parties.isActive, true));
+    .where(and(eq(parties.isActive, true), eq(parties.isInviteOnly, false)));
 
-  const partyOptions = factionParties.length > 0 ? factionParties : allActiveParties;
+  const joinableFactionParties = factionParties.filter((party) => !party.isInviteOnly);
+  const joinableActiveParties = allActiveParties.filter((party) => !party.isInviteOnly);
+  const partyOptions = joinableFactionParties.length > 0 ? joinableFactionParties : joinableActiveParties;
 
   let selectedPartyId: string | null = null;
   let selectedPartyName: string | null = null;

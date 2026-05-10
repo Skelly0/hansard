@@ -69,6 +69,15 @@ async function handleJoin(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
+  if (targetParty.isInviteOnly) {
+    await interaction.editReply({
+      embeds: [
+        errorEmbed(`**${targetParty.name}** is invite-only. Ask staff to add you to the party.`),
+      ],
+    });
+    return;
+  }
+
   // Get old party name for logging
   let oldPartyName = 'Independent';
   if (player.partyId) {
@@ -339,6 +348,7 @@ async function handleList(interaction: ChatInputCommandInteraction): Promise<voi
       ideology: parties.ideology,
       colour: parties.colour,
       factionId: parties.factionId,
+      isInviteOnly: parties.isInviteOnly,
     })
     .from(parties)
     .where(eq(parties.isActive, true));
@@ -390,7 +400,7 @@ async function handleList(interaction: ChatInputCommandInteraction): Promise<voi
     return [
       `**${p.name}**${p.shortName ? ` (${p.shortName})` : ''}`,
       `> ${faction}${ideology}`,
-      `> Members: **${members}**`,
+      `> Members: **${members}**${p.isInviteOnly ? ' · invite-only' : ''}`,
     ].join('\n');
   });
 

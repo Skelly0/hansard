@@ -34,6 +34,7 @@ const command: Command = {
         colour: parties.colour,
         factionId: parties.factionId,
         discordRoleId: parties.discordRoleId,
+        isInviteOnly: parties.isInviteOnly,
       })
       .from(parties)
       .where(eq(parties.isActive, true))
@@ -79,10 +80,11 @@ const command: Command = {
       const ideology = p.ideology ? ` — *${p.ideology}*` : '';
       const colourSwatch = p.colour ? ` \`${p.colour}\`` : '';
       const roleMention = p.discordRoleId ? ` <@&${p.discordRoleId}>` : '';
+      const access = p.isInviteOnly ? ' · invite-only' : '';
       return [
         `**${p.name}**${p.shortName ? ` (${p.shortName})` : ''}${colourSwatch}${roleMention}`,
         `> ${faction}${ideology}`,
-        `> Members: **${members}**`,
+        `> Members: **${members}**${access}`,
       ].join('\n');
     });
 

@@ -755,7 +755,7 @@ export async function findOrCreatePlayerByDiscordId(
 
 /**
  * Aggregate permissions for a player from all currently-active office holdings.
- * Currently-active = office_holders.endDate IS NULL.
+ * Currently-active = office_holders.endDate IS NULL and office is active.
  * Returns a deduped list of permission strings.
  */
 export async function aggregatePermissionsForPlayer(db: Database, playerId: string): Promise<string[]> {
@@ -763,7 +763,11 @@ export async function aggregatePermissionsForPlayer(db: Database, playerId: stri
     .select({ permissions: offices.permissions })
     .from(officeHolders)
     .innerJoin(offices, eq(officeHolders.officeId, offices.id))
-    .where(and(eq(officeHolders.playerId, playerId), isNull(officeHolders.endDate)));
+    .where(and(
+      eq(officeHolders.playerId, playerId),
+      isNull(officeHolders.endDate),
+      eq(offices.isActive, true),
+    ));
 
   const set = new Set<string>();
   for (const row of rows) {

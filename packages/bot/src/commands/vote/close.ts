@@ -198,7 +198,7 @@ async function renderReactionResult(election: typeof elections.$inferSelect): Pr
       .orderBy(candidates.registeredAt);
 
     const tally = new Map<string, number>();
-    for (const c of cRows) tally.set(c.id, 0);
+    for (const c of cRows) tally.set(c.playerId, 0);
     for (const b of allBallots) {
       if (b.vote.type !== 'fptp') continue;
       tally.set(b.vote.candidateId, (tally.get(b.vote.candidateId) ?? 0) + 1);
@@ -213,15 +213,15 @@ async function renderReactionResult(election: typeof elections.$inferSelect): Pr
       : [];
     const playerMap = new Map(playerRows.map((p) => [p.id, p.name ?? p.fallback]));
 
-    const sorted = [...cRows].sort((a, b) => (tally.get(b.id) ?? 0) - (tally.get(a.id) ?? 0));
+    const sorted = [...cRows].sort((a, b) => (tally.get(b.playerId) ?? 0) - (tally.get(a.playerId) ?? 0));
     const winner = sorted[0];
     resultHeadline = winner
-      ? `**Winner: ${playerMap.get(winner.playerId) ?? winner.playerId}** (${tally.get(winner.id) ?? 0} votes)`
+      ? `**Winner: ${playerMap.get(winner.playerId) ?? winner.playerId}** (${tally.get(winner.playerId) ?? 0} votes)`
       : '*No ballots cast*';
 
     resultLines = sorted.map((c, i) => {
       const name = playerMap.get(c.playerId) ?? c.playerId;
-      const count = tally.get(c.id) ?? 0;
+      const count = tally.get(c.playerId) ?? 0;
       return `${i + 1}. **${name}** — ${count}`;
     });
   } else {

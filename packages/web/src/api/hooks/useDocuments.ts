@@ -124,10 +124,17 @@ export function useUpdateDocument() {
 }
 
 export interface DocumentDiff {
-  from: { version: number; lineCount: number };
-  to: { version: number; lineCount: number };
-  fromContent: string;
-  toContent: string;
+  from: string;
+  to: string;
+  hunks: Array<{
+    type: 'added' | 'removed' | 'unchanged';
+    value: string;
+  }>;
+  stats: {
+    additions: number;
+    deletions: number;
+    unchanged: number;
+  };
 }
 
 /** Fetch a diff between two versions of a document. `to` omitted means latest. */

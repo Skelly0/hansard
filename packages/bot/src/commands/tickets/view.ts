@@ -5,8 +5,9 @@ import {
 import { eq } from 'drizzle-orm';
 import { players } from '@hansard/db';
 import { TicketService } from '@hansard/api/services/ticketService';
-import { createEmbed, errorEmbed } from '../../utils/embeds.js';
-import { buildTicketActionRow } from '../../components/ticketButtons.js';
+import { errorEmbed } from '../../utils/embeds.js';
+import { createPaginatedEmbed } from '../../utils/pagination.js';
+import { buildTicketActionRow, buildTicketDescriptionEmbeds } from '../../components/ticketButtons.js';
 import { getTicketViewer } from '../../utils/ticketAccess.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
@@ -128,18 +129,18 @@ const command: Command = {
       });
     }
 
-    const embed = createEmbed({
+    const pages = buildTicketDescriptionEmbeds({
       title: `Ticket #${ticket.number}: ${ticket.title}`,
       description: ticket.description,
-      system: 'tickets',
       fields,
     });
 
     const actionRow = buildTicketActionRow(ticket.number);
 
-    await interaction.editReply({
-      embeds: [embed],
-      components: [actionRow],
+    await createPaginatedEmbed({
+      interaction,
+      pages,
+      actionRows: [actionRow],
     });
   },
 };

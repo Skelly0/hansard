@@ -30,7 +30,11 @@ import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { sendTicketStaffPing } from '../../utils/ticketStaffPing.js';
 import type { Command } from '../../client.js';
-import { buildTicketSummaryEmbed, buildTicketActionRow } from '../../components/ticketButtons.js';
+import {
+  buildTicketActionRow,
+  buildTicketOpeningMessages,
+  buildTicketSummaryEmbeds,
+} from '../../components/ticketButtons.js';
 import {
   buildTicketCategoryCreatedDescription,
   buildTicketCategoryFields,
@@ -371,7 +375,7 @@ const command: Command = {
       try {
         const channel = await interaction.guild.channels.fetch(ticketChannelId);
 
-        const summaryEmbed = buildTicketSummaryEmbed(ticketData);
+        const summaryEmbeds = buildTicketSummaryEmbeds(ticketData);
         const actionRow = buildTicketActionRow(ticketNumber);
         const threadName = buildTicketThreadName(ticketNumber, title);
         const reason = `Ticket #${ticketNumber} created by ${creatorDiscordUsername}`;
@@ -387,7 +391,7 @@ const command: Command = {
           threadChannelId = channel.id;
 
           await sendTicketStaffPing(thread, interaction.guild, ticketNumber);
-          await sendTicketSummaryMessage(thread, summaryEmbed, actionRow, ticketNumber);
+          await sendTicketSummaryMessage(thread, summaryEmbeds, actionRow, ticketNumber);
           await sendOpeningTicketMessage(
             thread,
             ticketData.createdBy.displayName,
@@ -450,7 +454,7 @@ function isTextTicketChannel(channel: unknown): channel is TextChannel {
 
 async function sendTicketSummaryMessage(
   thread: Pick<ThreadChannel, 'send'>,
-  summaryEmbed: ReturnType<typeof buildTicketSummaryEmbed>,
+  summaryEmbeds: ReturnType<typeof buildTicketSummaryEmbeds>,
   actionRow: ReturnType<typeof buildTicketActionRow>,
   ticketNumber: number,
 ): Promise<void> {
@@ -458,7 +462,7 @@ async function sendTicketSummaryMessage(
 
   try {
     summaryMessage = await thread.send({
-      embeds: [summaryEmbed],
+      embeds: summaryEmbeds.slice(0, 10),
       components: [actionRow],
     } satisfies MessageCreateOptions);
   } catch (err) {
@@ -480,9 +484,9 @@ async function sendOpeningTicketMessage(
   ticketNumber: number,
 ): Promise<void> {
   try {
-    await thread.send({
-      content: `**${creatorDisplayName}** opened this ticket:\n\n${description}`,
-    });
+    for (const content of buildTicketOpeningMessages(creatorDisplayName, description)) {
+      await thread.send({ content });
+    }
   } catch (err) {
     console.error(`Failed to post opener for ticket #${ticketNumber}:`, err);
   }

@@ -10,6 +10,9 @@ const dryRun = process.argv.includes('--dry-run');
 const statements = [
   `ALTER TABLE "bills" ADD COLUMN IF NOT EXISTS "bill_type" varchar(32) NOT NULL DEFAULT 'google_doc';`,
   `ALTER TABLE "bills" ALTER COLUMN "google_doc_url" DROP NOT NULL;`,
+  `ALTER TABLE "bills" ADD COLUMN IF NOT EXISTS "google_doc_id" varchar(128);`,
+  `ALTER TABLE "bills" ADD COLUMN IF NOT EXISTS "cached_content" text;`,
+  `ALTER TABLE "bills" ADD COLUMN IF NOT EXISTS "cached_at" timestamp with time zone;`,
 ];
 
 async function main() {

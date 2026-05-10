@@ -14,6 +14,7 @@ import {
   REACTION_FPTP_MAX_CANDIDATES,
 } from '@hansard/shared';
 import { db } from '../db.js';
+import { handlePartyJoinReaction } from '../utils/partyJoinMessage.js';
 
 /**
  * MessageReactionAdd handler — implements public reaction-mode voting.
@@ -87,7 +88,10 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     .where(eq(elections.discordMessageId, messageId))
     .limit(1);
 
-  if (!election || !election.useReactions) return;
+  if (!election || !election.useReactions) {
+    await handlePartyJoinReaction(fullReaction, user);
+    return;
+  }
 
   if (election.status !== 'voting_open') {
     await notifyByDm(

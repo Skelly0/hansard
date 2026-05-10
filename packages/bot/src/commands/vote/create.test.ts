@@ -46,11 +46,15 @@ function selectLimit(rows: unknown[]) {
   };
 }
 
-function makeModalInteraction(overrides: Record<string, unknown> = {}) {
+function makeModalInteraction(
+  overrides: Record<string, unknown> = {},
+  fieldOverrides: Record<string, string> = {},
+) {
   const values: Record<string, string> = {
     title: 'Bridge Security Act',
     description: 'Establishes protections and patrol authority.',
     duration: '24',
+    ...fieldOverrides,
   };
 
   return {
@@ -76,6 +80,7 @@ describe('handleVoteCreateModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.calls.length = 0;
+    vi.useRealTimers();
     mocks.db.select.mockImplementation(() => {
       mocks.calls.push('db.select');
       return selectLimit([]);
@@ -91,5 +96,30 @@ describe('handleVoteCreateModal', () => {
     expect(mocks.calls).toContain('db.select');
     expect(interaction.editReply).toHaveBeenCalled();
     expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it('defaults blank duration input to a 24 hour voting window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+
+    let insertedElection: any;
+    mocks.db.select.mockImplementationOnce(() => selectLimit([{ id: 'player-1' }]));
+    mocks.db.insert.mockReturnValue({
+      values: vi.fn((values) => {
+        insertedElection = values;
+        return {
+          returning: vi.fn().mockResolvedValue([{ id: 'election-1' }]),
+        };
+      }),
+    });
+
+    const interaction = makeModalInteraction({
+      customId: 'vote-create:referendum:yea_nay_abstain:simple:buttons',
+    }, { duration: '' });
+
+    await handleVoteCreateModal(interaction as any);
+
+    expect(insertedElection.votingOpensAt.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+    expect(insertedElection.votingClosesAt.toISOString()).toBe('2026-01-02T00:00:00.000Z');
   });
 });

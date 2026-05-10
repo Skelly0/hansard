@@ -16,7 +16,7 @@ import type {
   ElectionConfig,
   BillType,
 } from '@hansard/shared';
-import { BillStatus } from '@hansard/shared';
+import { BillStatus, DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
 import { extractDocId, cacheDocContent } from './googleDocService.js';
 import { updateDocument } from './documentService.js';
 
@@ -597,7 +597,7 @@ export async function createVoteOnBill(
 
   // Create a yea/nay/abstain election linked to this bill
   const now = new Date();
-  const votingCloses = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days default
+  const votingCloses = new Date(now.getTime() + DEFAULT_VOTE_DURATION_MS);
 
   const [election] = await db
     .insert(elections)

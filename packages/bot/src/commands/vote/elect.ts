@@ -4,6 +4,7 @@ import {
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { elections, offices, players } from '@hansard/db';
+import { DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { hasPermission } from '../../utils/permissions.js';
@@ -96,7 +97,7 @@ const command: Command = {
 
     const now = new Date();
     const nominationsCloseAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
-    const votingClosesAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const votingClosesAt = new Date(nominationsCloseAt.getTime() + DEFAULT_VOTE_DURATION_MS);
 
     let electionId: string;
     try {

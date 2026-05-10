@@ -15,7 +15,7 @@ import {
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { bills, elections, players } from '@hansard/db';
-import { REACTION_EMOJI, REACTION_COMPATIBLE_METHODS } from '@hansard/shared';
+import { DEFAULT_VOTE_DURATION_HOURS, REACTION_EMOJI, REACTION_COMPATIBLE_METHODS } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { hasPermission, type Permission } from '../../utils/permissions.js';
@@ -102,7 +102,7 @@ function buildVoteCreateModal(
   const durationInput = new TextInputBuilder()
     .setCustomId('duration')
     .setLabel('Duration (hours)')
-    .setPlaceholder('48')
+    .setPlaceholder(String(DEFAULT_VOTE_DURATION_HOURS))
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
     .setMaxLength(5);
@@ -338,7 +338,7 @@ async function handleLegislativeBillVoteCreate(
     buildVoteCreateModal(modalCustomId, {
       title: `Vote on: ${selectedBill.title}`,
       description: defaultDescription,
-      durationHours: 48,
+      durationHours: DEFAULT_VOTE_DURATION_HOURS,
     }),
   );
 
@@ -360,8 +360,8 @@ async function handleLegislativeBillVoteCreate(
 
   const title = modalSubmit.fields.getTextInputValue('title').trim();
   const description = modalSubmit.fields.getTextInputValue('description').trim() || null;
-  const durationStr = modalSubmit.fields.getTextInputValue('duration') || '48';
-  const durationHours = Math.max(1, parseInt(durationStr, 10) || 48);
+  const durationStr = modalSubmit.fields.getTextInputValue('duration') || String(DEFAULT_VOTE_DURATION_HOURS);
+  const durationHours = Math.max(1, parseInt(durationStr, 10) || DEFAULT_VOTE_DURATION_HOURS);
   const useReactions = options.iface === 'reactions';
   const channel = interaction.channel;
 
@@ -556,8 +556,8 @@ export async function handleVoteCreateModal(
 
   const title = interaction.fields.getTextInputValue('title');
   const description = interaction.fields.getTextInputValue('description') || null;
-  const durationStr = interaction.fields.getTextInputValue('duration') || '48';
-  const durationHours = Math.max(1, parseInt(durationStr, 10) || 48);
+  const durationStr = interaction.fields.getTextInputValue('duration') || String(DEFAULT_VOTE_DURATION_HOURS);
+  const durationHours = Math.max(1, parseInt(durationStr, 10) || DEFAULT_VOTE_DURATION_HOURS);
 
   const now = new Date();
   const votingClosesAt = new Date(now.getTime() + durationHours * 60 * 60 * 1000);

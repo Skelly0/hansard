@@ -18,6 +18,7 @@ import type {
   ElectionType,
   ElectionStatus,
 } from '@hansard/shared';
+import { DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
 import { getStrategy } from './tallying/index.js';
 import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
 import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
@@ -862,7 +863,7 @@ export class VoteService {
         parentElectionId: rootId,
         roundNumber: runoffRound,
         votingOpensAt: new Date(), // staff can update
-        votingClosesAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // default 7 days
+        votingClosesAt: new Date(Date.now() + DEFAULT_VOTE_DURATION_MS),
         createdById: election.createdById,
         discordChannelId: election.discordChannelId,
         status: 'draft',

@@ -5,6 +5,10 @@
 /** The canonical bot name used in embeds, footers, and logging */
 export const DEFAULT_BOT_NAME = 'Hansard';
 
+/** Default voting window for newly-created votes and runoff rounds */
+export const DEFAULT_VOTE_DURATION_HOURS = 24;
+export const DEFAULT_VOTE_DURATION_MS = DEFAULT_VOTE_DURATION_HOURS * 60 * 60 * 1000;
+
 // ============================================================
 // Discord Embed — Emoji Prefixes
 // ============================================================

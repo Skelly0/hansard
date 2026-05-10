@@ -8,7 +8,7 @@ import { bills, billStatusLog, elections, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
-import { BillStatus } from '@hansard/shared';
+import { BillStatus, DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
 
 /**
  * Resolve a bill by either bill number (e.g. "B-001", "1") or title.
@@ -122,7 +122,7 @@ const command: Command = {
 
     try {
       const now = new Date();
-      const votingCloses = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+      const votingCloses = new Date(now.getTime() + DEFAULT_VOTE_DURATION_MS);
 
       // Create the linked election (mirrors createVoteOnBill in billService)
       const [election] = await db

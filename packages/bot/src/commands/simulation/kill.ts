@@ -1,17 +1,14 @@
 import {
   SlashCommandBuilder,
   PermissionFlagsBits,
-  EmbedBuilder,
   type ChatInputCommandInteraction,
-  type TextChannel,
 } from 'discord.js';
 import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog, simulationClock, officeHolders, offices } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { postObituaryToGraveyard } from '../../utils/graveyard.js';
 import type { Command } from '../../client.js';
-
-const GRAVEYARD_COLOUR = 0x9C9890;
 
 type DeathAilment = {
   condition: string;
@@ -94,142 +91,6 @@ async function processPlayerDeath(
   }
 }
 
-async function generateObituary(playerId: string) {
-  const [player] = await db.select().from(players).where(eq(players.id, playerId));
-  if (!player) throw new Error('Player not found');
-
-  const events = await db.select().from(playerEventLog)
-    .where(eq(playerEventLog.playerId, playerId));
-
-  const partyChanges = events
-    .filter(e => e.eventType === 'party_change')
-    .map(e => ({
-      description: e.description,
-      date: e.simDate,
-      oldValue: e.oldValue as { partyName?: string } | null,
-      newValue: e.newValue as { partyName?: string } | null,
-    }));
-
-  const officesHeld = events
-    .filter(e => e.eventType === 'office_appointed' || e.eventType === 'office_left')
-    .map(e => ({
-      description: e.description,
-      date: e.simDate,
-      eventType: e.eventType,
-      newValue: e.newValue as { officeName?: string } | null,
-    }));
-
-  const name = player.characterName ?? 'Unknown';
-  const narrativeParts: string[] = [];
-
-  if (player.currentAge != null) {
-    narrativeParts.push(`${name} lived to the age of ${player.currentAge}.`);
-  }
-
-  if (partyChanges.length > 0) {
-    const lastParty = partyChanges[partyChanges.length - 1];
-    const partyName = lastParty?.newValue?.partyName ?? 'an independent faction';
-    narrativeParts.push(`A member of ${partyName}.`);
-  }
-
-  const appointmentEvents = officesHeld.filter(o => o.eventType === 'office_appointed');
-  if (appointmentEvents.length > 0) {
-    const officeNames = appointmentEvents
-      .map(o => o.newValue?.officeName ?? o.description)
-      .filter(Boolean);
-    if (officeNames.length > 0) {
-      narrativeParts.push(`Served as ${officeNames.join(', ')}.`);
-    }
-  }
-
-  if (player.causeOfDeath) {
-    narrativeParts.push(`Died of ${player.causeOfDeath}.`);
-  }
-
-  const ailments = summarizeDeathAilments(player.ailments);
-  const ailmentsText = formatDeathAilments(ailments);
-  if (ailmentsText) {
-    narrativeParts.push(`Ailments at death: ${ailmentsText}.`);
-  }
-
-  return {
-    characterName: player.characterName ?? 'Unknown',
-    birthDate: player.birthDate ?? 'unknown',
-    deathDate: player.deathDate ?? 'unknown',
-    age: player.currentAge,
-    causeOfDeath: player.causeOfDeath ?? 'unknown causes',
-    ailments,
-    partyHistory: partyChanges,
-    officesHeld,
-    narrative: narrativeParts.join(' '),
-    portraitUrl: player.characterPortraitUrl,
-  };
-}
-
-function buildObituaryEmbed(obituary: {
-  characterName: string;
-  birthDate: string;
-  deathDate: string;
-  age: number | null;
-  causeOfDeath: string;
-  ailments: DeathAilment[];
-  partyHistory: { description: string; date: string | null }[];
-  officesHeld: { description: string; date: string | null; eventType: string }[];
-  narrative: string;
-  portraitUrl: string | null;
-}): EmbedBuilder {
-  const embed = new EmbedBuilder()
-    .setTitle(`\u26B0\uFE0F ${obituary.characterName} (${obituary.birthDate} \u2014 ${obituary.deathDate})`)
-    .setColor(GRAVEYARD_COLOUR)
-    .setFooter({ text: `Rest in peace. \u2022 ${obituary.deathDate}` })
-    .setTimestamp();
-
-  if (obituary.narrative) {
-    embed.setDescription(`*${obituary.narrative}*`);
-  }
-
-  const fields: { name: string; value: string; inline: boolean }[] = [];
-
-  fields.push({ name: 'Cause of Death', value: obituary.causeOfDeath, inline: true });
-  fields.push({ name: 'Age', value: obituary.age != null ? `${obituary.age}` : 'Unknown', inline: true });
-
-  const ailmentsText = formatDeathAilments(obituary.ailments);
-  if (ailmentsText) {
-    fields.push({ name: 'Ailments', value: ailmentsText.slice(0, 1024), inline: false });
-  }
-
-  if (obituary.partyHistory.length > 0) {
-    const partyLines = obituary.partyHistory.map(
-      (p) => `\u2022 ${p.description}${p.date ? ` (${p.date})` : ''}`,
-    );
-    fields.push({
-      name: 'Party History',
-      value: partyLines.join('\n').slice(0, 1024),
-      inline: false,
-    });
-  }
-
-  const appointments = obituary.officesHeld.filter(o => o.eventType === 'office_appointed');
-  if (appointments.length > 0) {
-    const officeLines = appointments.map(
-      (o) => `\u2022 ${o.description}${o.date ? ` (${o.date})` : ''}`,
-    );
-    fields.push({
-      name: 'Offices Held',
-      value: officeLines.join('\n').slice(0, 1024),
-      inline: false,
-    });
-  }
-
-  embed.addFields(fields);
-
-  if (obituary.portraitUrl) {
-    embed.setThumbnail(obituary.portraitUrl);
-  }
-
-  return embed;
-}
-
 // ============================================================
 // Command
 // ============================================================
@@ -290,22 +151,21 @@ const command: Command = {
         deathAilments,
       );
 
-      // Generate obituary
-      const obituary = await generateObituary(targetPlayer.id);
-      const graveyardEmbed = buildObituaryEmbed(obituary);
-
-      // Post to graveyard channel if configured
-      const graveyardChannelId = process.env.GRAVEYARD_CHANNEL_ID;
-      if (graveyardChannelId) {
-        try {
-          const channel = await interaction.client.channels.fetch(graveyardChannelId);
-          if (channel && 'send' in channel) {
-            await (channel as TextChannel).send({ embeds: [graveyardEmbed] });
-          }
-        } catch (channelErr) {
-          console.error('Failed to post obituary to graveyard channel:', channelErr);
-        }
-      }
+      const graveyardPost = await postObituaryToGraveyard({
+        client: interaction.client,
+        db,
+        playerId: targetPlayer.id,
+      });
+      const obituary = graveyardPost.obituary ?? {
+        characterName: targetPlayer.characterName ?? targetUser.username,
+        age: targetPlayer.currentAge,
+        ailments: deathAilments,
+      };
+      const graveyardNotice = graveyardPost.status === 'sent'
+        ? `Obituary posted to <#${graveyardPost.channelId}>.`
+        : graveyardPost.channelId
+          ? `Death recorded, but the obituary could not be posted to <#${graveyardPost.channelId}>. Check bot logs.`
+          : '_No graveyard channel configured. Set GRAVEYARD\\_CHANNEL\\_ID to enable obituary posts._';
 
       // Reply in the command channel
       const ailmentsText = formatDeathAilments(obituary.ailments);
@@ -318,9 +178,7 @@ const command: Command = {
           `**Age:** ${obituary.age ?? 'unknown'}`,
           ...(ailmentsText ? [`**Ailments:** ${ailmentsText}`] : []),
           '',
-          graveyardChannelId
-            ? `Obituary posted to <#${graveyardChannelId}>.`
-            : '_No graveyard channel configured. Set GRAVEYARD\\_CHANNEL\\_ID to enable obituary posts._',
+          graveyardNotice,
         ].join('\n'),
         system: 'graveyard',
       });

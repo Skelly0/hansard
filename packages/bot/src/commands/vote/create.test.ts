@@ -35,7 +35,11 @@ vi.mock('../../utils/permissions.js', () => ({
   hasPermission: mocks.hasPermission,
 }));
 
-import { buildLegislativeVotePublicEmbeds, handleVoteCreateModal } from './create';
+import {
+  buildLegislativeVotePublicEmbeds,
+  buildReactionVoteInstructions,
+  handleVoteCreateModal,
+} from './create';
 
 function selectLimit(rows: unknown[]) {
   return {
@@ -174,5 +178,14 @@ describe('buildLegislativeVotePublicEmbeds', () => {
       }),
     ]));
     expect(embeds[1].data.description).toBe(billText);
+  });
+});
+
+describe('buildReactionVoteInstructions', () => {
+  it('tells yea/nay reaction voters that reactions remain visible', () => {
+    const instructions = buildReactionVoteInstructions('yea_nay_abstain');
+
+    expect(instructions).toContain('Reactions stay visible as the public voting record.');
+    expect(instructions).not.toContain('Your reaction is removed once recorded');
   });
 });

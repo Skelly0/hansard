@@ -46,6 +46,8 @@ export interface BillPlayerSummary {
   discordUsername: string;
 }
 
+export type BillType = 'google_doc' | 'short';
+
 // ============================================================
 // Bill — the full shape returned by API
 // ============================================================
@@ -56,12 +58,13 @@ export interface Bill {
   shortTitle: string | null;
   slug: string;
   billNumber: number;
+  billType: BillType;
 
-  // Google Doc
-  googleDocUrl: string;
+  // Source
+  googleDocUrl: string | null;
   googleDocId: string | null;
 
-  // Cached content
+  // Cached content, or authoritative text for short bills
   cachedContent: string | null;
   cachedAt: string | null;
   summary: string | null;

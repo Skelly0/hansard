@@ -6,7 +6,9 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { bills, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
+import { createPaginatedEmbed } from '../../utils/pagination.js';
 import type { Command } from '../../client.js';
+import { buildShortBillContentPages } from './display.js';
 import { formatBillStatus, statusEmoji } from './shared.js';
 
 const command: Command = {
@@ -58,6 +60,7 @@ const command: Command = {
 
     const status = formatBillStatus(bill.status);
     const emoji = statusEmoji(bill.status);
+    const isShortBill = bill.billType === 'short';
 
     const fields = [
       { name: 'Bill Number', value: `\`#${bill.billNumber}\``, inline: true },
@@ -68,8 +71,10 @@ const command: Command = {
         inline: true,
       },
       {
-        name: 'Google Doc',
-        value: `[View Document](${bill.googleDocUrl})`,
+        name: 'Source',
+        value: isShortBill || !bill.googleDocUrl
+          ? 'Short bill'
+          : `[Google Doc](${bill.googleDocUrl})`,
         inline: true,
       },
       {
@@ -96,6 +101,14 @@ const command: Command = {
         name: 'Policy Areas',
         value: policyAreas.join(', '),
         inline: true,
+      });
+    }
+
+    if (isShortBill && bill.summary) {
+      fields.push({
+        name: 'Summary',
+        value: bill.summary,
+        inline: false,
       });
     }
 
@@ -130,11 +143,22 @@ const command: Command = {
       });
     }
 
+    if (isShortBill) {
+      const pages = buildShortBillContentPages({
+        title: bill.title,
+        content: bill.cachedContent ?? '*No short bill text available.*',
+        fields,
+      });
+
+      await createPaginatedEmbed({ interaction, pages });
+      return;
+    }
+
     const embed = createEmbed({
       title: bill.title,
       description: bill.summary ? `> ${bill.summary}` : undefined,
       system: 'bills',
-      url: bill.googleDocUrl,
+      url: bill.googleDocUrl ?? undefined,
       fields,
     });
 

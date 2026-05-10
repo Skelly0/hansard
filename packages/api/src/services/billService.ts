@@ -14,6 +14,7 @@ import type {
   NpcVote,
   EstimatedEffects,
   ElectionConfig,
+  BillType,
 } from '@hansard/shared';
 import { BillStatus } from '@hansard/shared';
 import { extractDocId, cacheDocContent } from './googleDocService.js';
@@ -25,7 +26,9 @@ import { updateDocument } from './documentService.js';
 
 export interface SubmitBillData {
   title: string;
-  googleDocUrl: string;
+  billType?: BillType;
+  googleDocUrl?: string | null;
+  content?: string;
   summary?: string;
   tags?: string[];
   policyAreas?: string[];
@@ -123,6 +126,7 @@ function toBill(row: typeof bills.$inferSelect, enrichment: BillEnrichment = {})
     shortTitle: row.shortTitle,
     slug: row.slug,
     billNumber: row.billNumber,
+    billType: row.billType,
     googleDocUrl: row.googleDocUrl,
     googleDocId: row.googleDocId,
     cachedContent: row.cachedContent,
@@ -312,7 +316,19 @@ export async function submitBillFor(
 ): Promise<Bill> {
   const baseSlug = generateSlug(data.title);
   const slug = await ensureUniqueSlug(db, baseSlug);
-  const googleDocId = extractDocId(data.googleDocUrl);
+  const billType = data.billType ?? (data.content?.trim() ? 'short' : 'google_doc');
+  const content = data.content?.trim() ?? '';
+
+  if (billType === 'short' && !content) {
+    throw new Error('Short bills require content');
+  }
+  if (billType === 'google_doc' && !data.googleDocUrl?.trim()) {
+    throw new Error('Google Doc bills require a googleDocUrl');
+  }
+
+  const googleDocUrl = billType === 'google_doc' ? data.googleDocUrl!.trim() : null;
+  const googleDocId = googleDocUrl ? extractDocId(googleDocUrl) : null;
+  const now = new Date();
 
   const [bill] = await db
     .insert(bills)
@@ -320,8 +336,11 @@ export async function submitBillFor(
       title: data.title,
       shortTitle: data.shortTitle ?? null,
       slug,
-      googleDocUrl: data.googleDocUrl,
+      billType,
+      googleDocUrl,
       googleDocId,
+      cachedContent: billType === 'short' ? content : null,
+      cachedAt: billType === 'short' ? now : null,
       summary: data.summary ?? null,
       authorId,
       submittedById,

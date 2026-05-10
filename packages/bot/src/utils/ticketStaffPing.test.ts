@@ -5,6 +5,24 @@ describe('sendTicketStaffPing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.STAFF_ROLE_ID;
+    delete process.env.STAFF_ROLE_IDS;
+  });
+
+  it('mentions every configured staff role in the ticket thread', async () => {
+    process.env.STAFF_ROLE_IDS = 'first-staff-role-id, second-staff-role-id';
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    await sendTicketStaffPing(
+      { send } as any,
+      { roles: { cache: new Map(), fetch: vi.fn() } } as any,
+      41,
+    );
+
+    expect(send).toHaveBeenCalledWith({
+      allowedMentions: { roles: ['first-staff-role-id', 'second-staff-role-id'] },
+      content:
+        '<@&first-staff-role-id> <@&second-staff-role-id> New ticket #41 is ready for staff review.',
+    });
   });
 
   it('mentions the configured staff role in the ticket thread', async () => {

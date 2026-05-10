@@ -15,7 +15,7 @@ import {
   players,
 } from '@hansard/db';
 import { TicketStatus, TicketPriority } from '@hansard/shared';
-import { createEmbed, errorEmbed, successEmbed } from '../utils/embeds.js';
+import { createEmbed, errorEmbed, successEmbed, type EmbedField } from '../utils/embeds.js';
 import { isStaff } from '../utils/permissions.js';
 import { db } from '../db.js';
 
@@ -39,6 +39,8 @@ const PRIORITY_DISPLAY: Record<string, string> = {
 };
 
 const VALID_PRIORITIES = new Set<string>(Object.values(TicketPriority));
+export const TICKET_DESCRIPTION_PAGE_SIZE = 1800;
+export const DISCORD_MESSAGE_CONTENT_LIMIT = 2000;
 
 export interface TicketEmbedData {
   number: number;
@@ -53,10 +55,74 @@ export interface TicketEmbedData {
   tags: string[];
 }
 
+export function splitTicketTextForDiscord(
+  content: string,
+  maxLength = TICKET_DESCRIPTION_PAGE_SIZE,
+): string[] {
+  let remaining = content.trim();
+  if (!remaining) return ['*No ticket description available.*'];
+
+  const chunks: string[] = [];
+
+  while (remaining.length > maxLength) {
+    const window = remaining.slice(0, maxLength + 1);
+    let splitAt = window.lastIndexOf('\n\n');
+
+    if (splitAt < maxLength * 0.5) {
+      splitAt = window.lastIndexOf('\n');
+    }
+    if (splitAt < maxLength * 0.5) {
+      splitAt = window.lastIndexOf(' ');
+    }
+    if (splitAt <= 0) {
+      splitAt = maxLength;
+    }
+
+    chunks.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+
+  chunks.push(remaining);
+  return chunks;
+}
+
+export function buildTicketDescriptionEmbeds(options: {
+  title: string;
+  description: string;
+  fields?: EmbedField[];
+}) {
+  const chunks = splitTicketTextForDiscord(options.description);
+
+  return chunks.map((chunk, index) => createEmbed({
+    title: index === 0 ? options.title : `${options.title} (continued)`,
+    description: chunk,
+    system: 'tickets',
+    fields: index === 0 ? options.fields : undefined,
+  }));
+}
+
+export function buildTicketOpeningMessages(
+  displayName: string,
+  description: string,
+  maxLength = DISCORD_MESSAGE_CONTENT_LIMIT,
+): string[] {
+  const prefix = `**${displayName}** opened this ticket:\n\n`;
+  const firstPageLength = Math.max(1, maxLength - prefix.length);
+  const chunks = splitTicketTextForDiscord(description, firstPageLength);
+
+  return chunks.map((chunk, index) => (
+    index === 0 ? `${prefix}${chunk}` : chunk
+  ));
+}
+
 /**
  * Build the pinned summary embed for a ticket thread.
  */
 export function buildTicketSummaryEmbed(data: TicketEmbedData) {
+  return buildTicketSummaryEmbeds(data)[0];
+}
+
+export function buildTicketSummaryEmbeds(data: TicketEmbedData) {
   const fields = [
     {
       name: 'Status',
@@ -98,10 +164,9 @@ export function buildTicketSummaryEmbed(data: TicketEmbedData) {
     });
   }
 
-  return createEmbed({
+  return buildTicketDescriptionEmbeds({
     title: `Ticket #${data.number}: ${data.title}`,
     description: data.description,
-    system: 'tickets',
     fields,
   });
 }
@@ -811,7 +876,7 @@ async function refreshPinnedSummary(
     if (!pinned) return;
 
     await pinned.edit({
-      embeds: [buildTicketSummaryEmbed(data)],
+      embeds: buildTicketSummaryEmbeds(data).slice(0, 10),
       components:
         data.status === TicketStatus.CLOSED
           ? [] // strip action row on closed tickets

@@ -27,7 +27,11 @@ import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { sendTicketStaffPing } from '../../utils/ticketStaffPing.js';
 import type { Command } from '../../client.js';
-import { buildTicketSummaryEmbed, buildTicketActionRow } from '../../components/ticketButtons.js';
+import {
+  buildTicketActionRow,
+  buildTicketOpeningMessages,
+  buildTicketSummaryEmbeds,
+} from '../../components/ticketButtons.js';
 import {
   buildTicketCategoryCreatedDescription,
   buildTicketCategoryFields,
@@ -383,18 +387,18 @@ const command: Command = {
           await sendTicketStaffPing(thread, interaction.guild, ticketNumber);
 
           // Pin the summary embed.
-          const summaryEmbed = buildTicketSummaryEmbed(ticketData);
+          const summaryEmbeds = buildTicketSummaryEmbeds(ticketData);
           const actionRow = buildTicketActionRow(ticketNumber);
           const pinMessage = await thread.send({
-            embeds: [summaryEmbed],
+            embeds: summaryEmbeds.slice(0, 10),
             components: [actionRow],
           });
           await pinMessage.pin();
 
-          // Send initial description as a message.
-          await thread.send({
-            content: `**${ticketData.createdBy.displayName}** opened this ticket:\n\n${description}`,
-          });
+          // Send initial description as message pages.
+          for (const content of buildTicketOpeningMessages(ticketData.createdBy.displayName, description)) {
+            await thread.send({ content });
+          }
         }
       } catch (err) {
         console.error('Failed to create ticket thread (ticket persisted):', err);

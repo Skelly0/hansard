@@ -13,6 +13,8 @@ export interface PaginatedEmbedOptions {
   interaction: ChatInputCommandInteraction;
   /** Array of embeds, one per page. */
   pages: EmbedBuilder[];
+  /** Additional button rows to keep below the pagination controls. */
+  actionRows?: ActionRowBuilder<ButtonBuilder>[];
   /** Timeout in milliseconds before buttons are disabled. Defaults to 120000 (2 min). */
   timeout?: number;
 }
@@ -27,7 +29,7 @@ export interface PaginatedEmbedOptions {
 export async function createPaginatedEmbed(
   options: PaginatedEmbedOptions,
 ): Promise<void> {
-  const { interaction, pages, timeout = 120_000 } = options;
+  const { interaction, pages, actionRows = [], timeout = 120_000 } = options;
 
   if (pages.length === 0) {
     throw new Error('createPaginatedEmbed requires at least one page.');
@@ -43,10 +45,11 @@ export async function createPaginatedEmbed(
 
   // Single page — no buttons needed
   if (pages.length === 1) {
+    const components = actionRows.length > 0 ? actionRows : undefined;
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ embeds: [pages[0]] });
+      await interaction.editReply({ embeds: [pages[0]], components });
     } else {
-      await interaction.reply({ embeds: [pages[0]] });
+      await interaction.reply({ embeds: [pages[0]], components });
     }
     return;
   }
@@ -69,18 +72,19 @@ export async function createPaginatedEmbed(
     prevButton,
     nextButton,
   );
+  const components = () => [row, ...actionRows];
 
   let message: Message;
 
   if (interaction.deferred || interaction.replied) {
     message = await interaction.editReply({
       embeds: [pages[currentPage]],
-      components: [row],
+      components: components(),
     });
   } else {
     message = await interaction.reply({
       embeds: [pages[currentPage]],
-      components: [row],
+      components: components(),
       fetchReply: true,
     });
   }
@@ -111,7 +115,7 @@ export async function createPaginatedEmbed(
 
     await buttonInteraction.update({
       embeds: [pages[currentPage]],
-      components: [row],
+      components: components(),
     });
   });
 
@@ -122,7 +126,7 @@ export async function createPaginatedEmbed(
     try {
       await interaction.editReply({
         embeds: [pages[currentPage]],
-        components: [row],
+        components: components(),
       });
     } catch {
       // Token may have expired or message was deleted — ignore

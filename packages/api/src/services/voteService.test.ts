@@ -45,6 +45,37 @@ const validNpcElection = {
   config: { requiresNpcConfirmation: true },
 };
 
+function selectLimit(rows: any[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue(rows),
+      }),
+    }),
+  };
+}
+
+function makeRegisterCandidateDb({
+  election = { id: 'election-1', status: 'nominations_open' },
+  existingCandidates = [],
+  playerRows = [{ id: 'player-1', characterName: 'Ada Vance' }],
+}: {
+  election?: any;
+  existingCandidates?: any[];
+  playerRows?: any[];
+} = {}) {
+  const select = vi.fn()
+    .mockReturnValueOnce(selectLimit(election ? [election] : []))
+    .mockReturnValueOnce(selectLimit(existingCandidates))
+    .mockReturnValueOnce(selectLimit(playerRows));
+
+  const returning = vi.fn().mockResolvedValue([{ id: 'candidate-1' }]);
+  const values = vi.fn().mockReturnValue({ returning });
+  const insert = vi.fn().mockReturnValue({ values });
+
+  return { select, insert };
+}
+
 describe('VoteService.enterNpcConfirmation guards', () => {
   it('rejects elections that are not awaiting NPC confirmation', async () => {
     const { db, update } = makeNpcConfirmDb({
@@ -148,5 +179,47 @@ describe('VoteService.getTurnout privacy', () => {
       voted: 2,
       totalBallots: 2,
     });
+  });
+});
+
+describe('VoteService character registration guards', () => {
+  it('does not allow OAuth-only rows to vote by default', async () => {
+    const select = vi.fn()
+      .mockReturnValueOnce(selectLimit([{
+        id: 'election-1',
+        status: 'voting_open',
+        config: {},
+        createdById: 'creator-player',
+      }]))
+      .mockReturnValueOnce(selectLimit([{
+        id: 'oauth-placeholder',
+        characterName: null,
+        factionId: null,
+        partyId: null,
+      }]))
+      .mockReturnValueOnce(selectLimit([]));
+
+    const result = await new VoteService({ select } as any).getEligibility(
+      'election-1',
+      'oauth-placeholder',
+    );
+
+    expect(result).toEqual({
+      eligible: false,
+      reason: 'Character registration is required',
+    });
+  });
+
+  it('does not allow OAuth-only rows to register as candidates', async () => {
+    const db = makeRegisterCandidateDb({
+      playerRows: [{ id: 'oauth-placeholder', characterName: null }],
+    });
+
+    await expect(new VoteService(db as any).registerCandidate({
+      electionId: 'election-1',
+      playerId: 'oauth-placeholder',
+    })).rejects.toThrow('Character registration is required');
+
+    expect(db.insert).not.toHaveBeenCalled();
   });
 });

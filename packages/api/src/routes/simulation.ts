@@ -6,6 +6,13 @@ import { requireStaff } from '../middleware/requireStaff.js';
 import * as simService from '../services/simulationService.js';
 import { PUBLIC_PLAYER_EVENT_TYPES } from '../services/playerService.js';
 
+function parseTicks(rawTicks: unknown): number | null {
+  const ticks = rawTicks ?? 1;
+  return typeof ticks === 'number' && Number.isInteger(ticks) && ticks >= 1 && ticks <= 100
+    ? ticks
+    : null;
+}
+
 /**
  * Simulation routes — clock management, time advance, ailments, death.
  */
@@ -32,10 +39,11 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
     '/api/simulation/advance',
     { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
-      const { ticks = 1, notes } = request.body as { ticks?: number; notes?: string };
+      const { ticks: rawTicks } = (request.body ?? {}) as { ticks?: unknown; notes?: string };
+      const ticks = parseTicks(rawTicks);
 
-      if (ticks < 1 || ticks > 100) {
-        return reply.status(400).send({ error: 'Ticks must be between 1 and 100' });
+      if (ticks === null) {
+        return reply.status(400).send({ error: 'Ticks must be an integer between 1 and 100' });
       }
 
       const userId = request.session.user!.id;
@@ -57,10 +65,11 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
     '/api/simulation/advance/preview',
     { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
-      const { ticks = 1 } = request.body as { ticks?: number };
+      const { ticks: rawTicks } = (request.body ?? {}) as { ticks?: unknown };
+      const ticks = parseTicks(rawTicks);
 
-      if (ticks < 1 || ticks > 100) {
-        return reply.status(400).send({ error: 'Ticks must be between 1 and 100' });
+      if (ticks === null) {
+        return reply.status(400).send({ error: 'Ticks must be an integer between 1 and 100' });
       }
 
       try {

@@ -63,6 +63,20 @@ describe('findOrCreatePlayerByDiscordId', () => {
 });
 
 describe('aggregatePermissionsForPlayer', () => {
+  function containsText(value: unknown, pattern: RegExp, seen = new Set<object>()): boolean {
+    if (typeof value === 'string') return pattern.test(value);
+    if (!value || typeof value !== 'object') return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+
+    for (const key of Reflect.ownKeys(value)) {
+      const child = (value as Record<PropertyKey, unknown>)[key];
+      if (containsText(child, pattern, seen)) return true;
+    }
+
+    return false;
+  }
+
   // Capture the WHERE predicate so we can assert it was applied
   function makePermissionsMockDb(rows: any[]) {
     const where = vi.fn().mockResolvedValue(rows);
@@ -90,9 +104,8 @@ describe('aggregatePermissionsForPlayer', () => {
   });
 
   it('applies the active-holding WHERE predicate (regression guard)', async () => {
-    // The contract: filter by playerId AND endDate IS NULL.
+    // The contract: filter by playerId, endDate IS NULL, and offices.isActive.
     // If the implementation drops either filter, requireRole correctness breaks.
-    // We can't easily inspect drizzle SQL chunks, but we can assert the call shape.
     const db: any = makePermissionsMockDb([]);
     await aggregatePermissionsForPlayer(db, 'player-uuid');
     expect(db.select).toHaveBeenCalledTimes(1);
@@ -103,6 +116,7 @@ describe('aggregatePermissionsForPlayer', () => {
     // not undefined — which would happen if both filters were accidentally removed.
     const whereArg = db._where.mock.calls[0][0];
     expect(whereArg).toBeTruthy();
+    expect(containsText(whereArg, /is_active/i)).toBe(true);
   });
 });
 

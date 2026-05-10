@@ -39,27 +39,7 @@ function VersionHistoryPanel({ doc }: { doc: Document }) {
 
   const rollbackMutation = useRollbackDocument();
 
-  // Build diff hunks from raw content
-  const diffHunks: DiffHunk[] = [];
-  if (diffData) {
-    const fromLines = diffData.fromContent.split('\n');
-    const toLines = diffData.toContent.split('\n');
-    const maxLen = Math.max(fromLines.length, toLines.length);
-    for (let i = 0; i < maxLen; i++) {
-      const fromLine = fromLines[i];
-      const toLine = toLines[i];
-      if (fromLine === toLine) {
-        diffHunks.push({ type: 'unchanged', value: (fromLine ?? '') + '\n' });
-      } else {
-        if (fromLine !== undefined) {
-          diffHunks.push({ type: 'removed', value: fromLine + '\n' });
-        }
-        if (toLine !== undefined) {
-          diffHunks.push({ type: 'added', value: toLine + '\n' });
-        }
-      }
-    }
-  }
+  const diffHunks: DiffHunk[] = diffData?.hunks ?? [];
 
   function handleCompare(version: DocumentVersion) {
     const prevVersion = version.versionNumber - 1;
@@ -192,8 +172,8 @@ function VersionHistoryPanel({ doc }: { doc: Document }) {
           {diffHunks.length > 0 ? (
             <RedlineDiff
               hunks={diffHunks}
-              fromLabel={`Version ${compareFrom}`}
-              toLabel={`Version ${compareTo}`}
+              fromLabel={`Version ${diffData?.from ?? compareFrom}`}
+              toLabel={`Version ${diffData?.to ?? compareTo}`}
             />
           ) : (
             <p className="text-body-sm text-text-tertiary italic">

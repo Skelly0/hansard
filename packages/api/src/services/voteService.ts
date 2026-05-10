@@ -167,7 +167,7 @@ export class VoteService {
     }
 
     const config = election.config as ElectionConfig;
-    if (config.requireRegistration && !player.characterName) {
+    if (!player.characterName) {
       return { eligible: false, reason: 'Character registration is required' };
     }
 
@@ -605,6 +605,22 @@ export class VoteService {
 
     if (existing.length > 0) {
       throw new Error('Already registered as a candidate');
+    }
+
+    const [player] = await this.db
+      .select({
+        id: players.id,
+        characterName: players.characterName,
+      })
+      .from(players)
+      .where(eq(players.id, input.playerId))
+      .limit(1);
+
+    if (!player) {
+      throw new Error('Player not found');
+    }
+    if (!player.characterName) {
+      throw new Error('Character registration is required');
     }
 
     const [candidate] = await this.db

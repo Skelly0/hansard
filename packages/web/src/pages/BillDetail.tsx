@@ -85,27 +85,7 @@ export function BillDetail() {
     );
   }
 
-  // Build simple diff hunks from the raw content returned by the API
-  const redlineHunks: DiffHunk[] = [];
-  if (diffData) {
-    const fromLines = diffData.fromContent.split('\n');
-    const toLines = diffData.toContent.split('\n');
-    const maxLen = Math.max(fromLines.length, toLines.length);
-    for (let i = 0; i < maxLen; i++) {
-      const fromLine = fromLines[i];
-      const toLine = toLines[i];
-      if (fromLine === toLine) {
-        redlineHunks.push({ type: 'unchanged', value: (fromLine ?? '') + '\n' });
-      } else {
-        if (fromLine !== undefined) {
-          redlineHunks.push({ type: 'removed', value: fromLine + '\n' });
-        }
-        if (toLine !== undefined) {
-          redlineHunks.push({ type: 'added', value: toLine + '\n' });
-        }
-      }
-    }
-  }
+  const redlineHunks: DiffHunk[] = diffData?.hunks ?? [];
 
   const stageIndex = getStageIndex(bill.status);
   const timelineStages = BILL_STAGES.map((stage) => {

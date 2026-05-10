@@ -124,7 +124,7 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     if (idx >= 0 && idx < REACTION_FPTP_MAX_CANDIDATES) {
       // Resolve candidate by registration order. Withdrawn candidates are skipped.
       const rows = await db
-        .select({ id: candidates.id })
+        .select({ playerId: candidates.playerId })
         .from(candidates)
         .where(
           and(
@@ -136,7 +136,7 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
 
       const candidate = rows[idx];
       if (candidate) {
-        votePayload = { type: 'fptp', candidateId: candidate.id };
+        votePayload = { type: 'fptp', candidateId: candidate.playerId };
         voteLabel = `Candidate #${idx + 1}`;
       }
     }
@@ -162,6 +162,14 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     await notifyByDm(
       user,
       `Your reaction on **${election.title}** was not recorded — you are not registered as a player. Run \`/character create\` first.`,
+    );
+    return;
+  }
+  if (!player.characterName) {
+    await safeRemoveReaction(fullReaction, user);
+    await notifyByDm(
+      user,
+      `Your reaction on **${election.title}** was not recorded — you have not created a character yet. Run \`/character create\` first.`,
     );
     return;
   }

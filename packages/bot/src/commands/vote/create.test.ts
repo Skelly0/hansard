@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createEmbed } from '../../utils/embeds.js';
 
 const mocks = vi.hoisted(() => ({
   calls: [] as string[],
@@ -34,7 +35,7 @@ vi.mock('../../utils/permissions.js', () => ({
   hasPermission: mocks.hasPermission,
 }));
 
-import { handleVoteCreateModal } from './create';
+import { buildLegislativeVotePublicEmbeds, handleVoteCreateModal } from './create';
 
 function selectLimit(rows: unknown[]) {
   return {
@@ -121,5 +122,57 @@ describe('handleVoteCreateModal', () => {
 
     expect(insertedElection.votingOpensAt.toISOString()).toBe('2026-01-01T00:00:00.000Z');
     expect(insertedElection.votingClosesAt.toISOString()).toBe('2026-01-02T00:00:00.000Z');
+  });
+});
+
+describe('buildLegislativeVotePublicEmbeds', () => {
+  const baseFields = [
+    { name: 'Bill', value: 'B-007 - Bridge Security Act', inline: false },
+  ];
+
+  it('attaches a linked Google Doc to the vote creation embed', () => {
+    const embeds = buildLegislativeVotePublicEmbeds({
+      title: 'Vote on: Bridge Security Act',
+      description: 'Establishes protections and patrol authority.',
+      useReactions: true,
+      reactionInstructions: 'React with yea/nay/abstain.',
+      baseFields,
+      billSource: {
+        fields: [{ name: 'Bill Text', value: '[Google Doc](https://docs.google.com/document/d/example/edit)' }],
+        embeds: [],
+      },
+    });
+
+    expect(embeds).toHaveLength(1);
+    expect(embeds[0].data.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'Bill Text',
+        value: '[Google Doc](https://docs.google.com/document/d/example/edit)',
+      }),
+    ]));
+  });
+
+  it('attaches full short bill text after the vote creation embed', () => {
+    const billText = 'Section 1. Establishes bridge patrols.';
+    const embeds = buildLegislativeVotePublicEmbeds({
+      title: 'Vote on: Bridge Security Act',
+      description: 'Establishes protections and patrol authority.',
+      useReactions: false,
+      reactionInstructions: 'ignored for button votes',
+      baseFields,
+      billSource: {
+        fields: [{ name: 'Bill Text', value: 'Short bill text below.' }],
+        embeds: [createEmbed({ title: 'B-007 - Bridge Security Act', description: billText, system: 'bills' })],
+      },
+    });
+
+    expect(embeds).toHaveLength(2);
+    expect(embeds[0].data.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'Bill Text',
+        value: 'Short bill text below.',
+      }),
+    ]));
+    expect(embeds[1].data.description).toBe(billText);
   });
 });

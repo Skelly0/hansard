@@ -12,6 +12,7 @@ import {
   type TextChannel,
   type NewsChannel,
   type ThreadChannel,
+  type EmbedBuilder,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { bills, elections, players } from '@hansard/db';
@@ -27,6 +28,10 @@ import {
   listSubmittedBillsForVote,
   type SubmittedBillSelectRow,
 } from './billVoteFlow.js';
+import {
+  buildLinkedBillSourceDisplay,
+  type BillSourceDisplay,
+} from './billSourceDisplay.js';
 
 const CHANCELLOR_ONLY_TYPES = new Set([
   'legislative_vote',
@@ -118,6 +123,32 @@ function buildVoteCreateModal(
   );
 
   return modal;
+}
+
+export function buildLegislativeVotePublicEmbeds(options: {
+  title: string;
+  description: string | null;
+  useReactions: boolean;
+  reactionInstructions: string;
+  baseFields: { name: string; value: string; inline?: boolean }[];
+  billSource: BillSourceDisplay;
+}): EmbedBuilder[] {
+  const publicEmbed = createEmbed({
+    title: options.title,
+    description: [
+      options.description ? `> ${options.description}\n` : '',
+      options.useReactions ? '**This is a public reaction vote.**' : '**A legislative vote has been opened.**',
+      options.useReactions
+        ? options.reactionInstructions
+        : 'Players can cast ballots with `/vote-cast` or the usual vote controls.',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    system: 'voting',
+    fields: [...options.baseFields, ...options.billSource.fields],
+  });
+
+  return [publicEmbed, ...options.billSource.embeds];
 }
 
 /**
@@ -429,24 +460,22 @@ async function handleLegislativeBillVoteCreate(
         ? `React with ${REACTION_EMOJI.YEA} for **Yea**, ${REACTION_EMOJI.NAY} for **Nay**, or ${REACTION_EMOJI.ABSTAIN} for **Abstain**.\nYour reaction is removed once recorded; you may change your vote by reacting again.`
         : `React with the number matching your preferred candidate. Use \`/candidate-list\` to see candidates by position.\n*Note: candidates must be registered before votes are cast -- restart the vote if you add candidates after.*`;
 
-    const publicEmbed = createEmbed({
+    const billSource = await buildLinkedBillSourceDisplay(db, {
+      type: 'legislative_vote',
+      relatedBillId: selectedBill.id,
+    });
+    const publicEmbeds = buildLegislativeVotePublicEmbeds({
       title,
-      description: [
-        description ? `> ${description}\n` : '',
-        useReactions ? '**This is a public reaction vote.**' : '**A legislative vote has been opened.**',
-        useReactions
-          ? reactionInstructions
-          : 'Players can cast ballots with `/vote-cast` or the usual vote controls.',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-      system: 'voting',
-      fields,
+      description,
+      useReactions,
+      reactionInstructions,
+      baseFields: fields,
+      billSource,
     });
 
     try {
       const posted = await (channel as TextChannel | NewsChannel | ThreadChannel).send({
-        embeds: [publicEmbed],
+        embeds: publicEmbeds,
       });
 
       if (useReactions) {

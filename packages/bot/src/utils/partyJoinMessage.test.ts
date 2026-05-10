@@ -121,6 +121,7 @@ function partyJoinMessage(description = 'React with the emoji for the open party
 import {
   buildPartyJoinMessagePayload,
   handlePartyJoinReaction,
+  refreshPartyJoinMessage,
 } from './partyJoinMessage';
 
 describe('party join reaction message', () => {
@@ -192,6 +193,74 @@ describe('party join reaction message', () => {
     expect(embed.description).toContain('Syndicalism');
     expect(embed.description).toContain('Liberal conservatism');
     expect(embed.description).not.toContain('Closed Caucus');
+  });
+
+  it('refreshes the current join board when parties change and keeps existing emoji assignments stable', async () => {
+    mocks.db.select.mockImplementation(() => new Query([
+      {
+        id: 'aqua',
+        name: 'Aqua Bloc',
+        shortName: 'AQU',
+        ideology: 'Maritime municipalism',
+        colour: '#1751d8',
+        discordRoleId: null,
+        isActive: true,
+        isInviteOnly: false,
+      },
+      {
+        id: 'blue',
+        name: 'Blue Party',
+        shortName: 'BLU',
+        ideology: 'Liberal conservatism',
+        colour: '#1751d8',
+        discordRoleId: null,
+        isActive: true,
+        isInviteOnly: false,
+      },
+      {
+        id: 'private',
+        name: 'Closed Caucus',
+        shortName: null,
+        ideology: 'Patronage',
+        colour: '#222222',
+        discordRoleId: null,
+        isActive: true,
+        isInviteOnly: true,
+      },
+    ]));
+
+    const message = partyJoinMessage([
+      'React with the emoji for the open party you want to join.',
+      'Invite-only parties are not listed.',
+      '',
+      '🔵 **Blue Party** (BLU) — Ideology: *Liberal conservatism*',
+    ].join('\n'));
+    message.edit = vi.fn().mockResolvedValue(message);
+    message.react = vi.fn().mockResolvedValue(undefined);
+
+    const channel = {
+      messages: {
+        fetch: vi.fn().mockResolvedValue(new Map([[message.id, message]])),
+      },
+    };
+    message.channel = channel;
+
+    const client = {
+      channels: {
+        fetch: vi.fn().mockResolvedValue(channel),
+      },
+    };
+
+    await refreshPartyJoinMessage(client as any);
+
+    expect(message.edit).toHaveBeenCalledWith({ embeds: expect.any(Array) });
+    const editPayload = message.edit.mock.calls[0]?.[0];
+    const embed = editPayload.embeds[0].toJSON();
+    expect(embed.description).toContain('🟦 **Aqua Bloc** (AQU) — Ideology: *Maritime municipalism*');
+    expect(embed.description).toContain('🔵 **Blue Party** (BLU) — Ideology: *Liberal conservatism*');
+    expect(embed.description).not.toContain('Closed Caucus');
+    expect(message.react).toHaveBeenCalledWith('🟦');
+    expect(message.react).toHaveBeenCalledWith('🔵');
   });
 
   it('moves a character into the party selected by reaction and syncs roles', async () => {

@@ -20,6 +20,7 @@ export const PARTY_JOIN_EMBED_TITLE = '🏛️ Join a Party';
 
 type ReactionInput = MessageReaction | PartialMessageReaction;
 type UserInput = User | PartialUser;
+type PartyJoinMessageChannel = TextChannel | NewsChannel | ThreadChannel;
 
 export interface PartyJoinRow {
   id: string;
@@ -97,10 +98,27 @@ function colourDistance(a: readonly [number, number, number], b: readonly [numbe
   return ((a[0] - b[0]) ** 2) + ((a[1] - b[1]) ** 2) + ((a[2] - b[2]) ** 2);
 }
 
-export function assignPartyReactionOptions(partiesToAssign: PartyJoinRow[]): PartyReactionOption[] {
+export function assignPartyReactionOptions(
+  partiesToAssign: PartyJoinRow[],
+  existingEmojiByPartyName: ReadonlyMap<string, string> = new Map(),
+): PartyReactionOption[] {
   const used = new Set<string>();
+  const reserved = new Map<string, string>();
+
+  for (const party of partiesToAssign) {
+    const existingEmoji = existingEmojiByPartyName.get(party.name);
+    if (existingEmoji && !used.has(existingEmoji)) {
+      reserved.set(party.name, existingEmoji);
+      used.add(existingEmoji);
+    }
+  }
 
   return partiesToAssign.map((party) => {
+    const existingEmoji = reserved.get(party.name);
+    if (existingEmoji) {
+      return { emoji: existingEmoji, party };
+    }
+
     const rgb = parseHexColour(party.colour) ?? [255, 255, 255];
     const nearest = PARTY_REACTION_EMOJI_PALETTE
       .filter((candidate) => !used.has(candidate.emoji))
@@ -112,13 +130,16 @@ export function assignPartyReactionOptions(partiesToAssign: PartyJoinRow[]): Par
   });
 }
 
-export function buildPartyJoinMessagePayload(allParties: PartyJoinRow[]): {
+export function buildPartyJoinMessagePayload(
+  allParties: PartyJoinRow[],
+  existingEmojiByPartyName: ReadonlyMap<string, string> = new Map(),
+): {
   embeds: ReturnType<typeof createEmbed>[];
   options: PartyReactionOption[];
   reactionEmojis: string[];
 } {
   const joinableParties = allParties.filter((party) => party.isActive && !party.isInviteOnly);
-  const options = assignPartyReactionOptions(joinableParties);
+  const options = assignPartyReactionOptions(joinableParties, existingEmojiByPartyName);
   const lines = options.map(({ emoji, party }) => {
     const tag = party.shortName ? ` (${party.shortName})` : '';
     const ideology = party.ideology?.trim() || 'Unlisted';
@@ -177,6 +198,33 @@ function valuesFromFetchedMessages(
   return Array.isArray(fetched) ? fetched : [...fetched.values()];
 }
 
+async function findNewestPartyJoinMessage(channel: PartyJoinMessageChannel): Promise<Message | null> {
+  const fetched = await channel.messages.fetch({ limit: 100 });
+  return valuesFromFetchedMessages(fetched as Collection<string, Message>)
+    .filter((candidate) => isPartyJoinMessage(candidate) && isBotAuthored(candidate))
+    .sort((a, b) => b.createdTimestamp - a.createdTimestamp)[0] ?? null;
+}
+
+async function findRefreshablePartyJoinMessage(channel: PartyJoinMessageChannel): Promise<Message | null> {
+  const configuredMessageId = resolvePartyJoinMessageId();
+  if (configuredMessageId) {
+    try {
+      const message = await channel.messages.fetch(configuredMessageId);
+      return isPartyJoinMessage(message) && isBotAuthored(message) ? message : null;
+    } catch (error) {
+      console.warn(`[party-join] failed to fetch configured join board ${configuredMessageId}:`, error);
+      return null;
+    }
+  }
+
+  try {
+    return await findNewestPartyJoinMessage(channel);
+  } catch (error) {
+    console.warn('[party-join] failed to find current join board:', error);
+    return null;
+  }
+}
+
 async function isCurrentPartyJoinMessage(message: Message | PartialMessageReaction['message']): Promise<boolean> {
   if (message.channelId !== resolvePartyJoinChannelId()) return false;
   if (!isPartyJoinMessage(message)) return false;
@@ -188,10 +236,7 @@ async function isCurrentPartyJoinMessage(message: Message | PartialMessageReacti
   if (!('messages' in message.channel)) return false;
 
   try {
-    const fetched = await message.channel.messages.fetch({ limit: 100 });
-    const newestJoinBoard = valuesFromFetchedMessages(fetched as Collection<string, Message>)
-      .filter((candidate) => isPartyJoinMessage(candidate) && isBotAuthored(candidate))
-      .sort((a, b) => b.createdTimestamp - a.createdTimestamp)[0];
+    const newestJoinBoard = await findNewestPartyJoinMessage(message.channel as PartyJoinMessageChannel);
 
     return newestJoinBoard?.id === message.id;
   } catch (error) {
@@ -213,6 +258,19 @@ function partyNameForReactionEmoji(
   if (!line) return null;
 
   return line.match(/\*\*(.+?)\*\*/)?.[1] ?? null;
+}
+
+function partyEmojiAssignmentsFromMessage(message: Message): Map<string, string> {
+  const description = message.embeds?.[0]?.description;
+  if (!description) return new Map();
+
+  return description
+    .split('\n')
+    .reduce((assignments, line) => {
+      const match = line.trimStart().match(/^(\S+)\s+\*\*(.+?)\*\*/);
+      if (match) assignments.set(match[2], match[1]);
+      return assignments;
+    }, new Map<string, string>());
 }
 
 async function fetchJoinableParties(): Promise<PartyJoinRow[]> {
@@ -277,6 +335,37 @@ export async function postPartyJoinMessage(
   }
 
   return posted;
+}
+
+export async function refreshPartyJoinMessage(
+  client: Client,
+  channelId = resolvePartyJoinChannelId(),
+): Promise<Message | null> {
+  const channel = await client.channels.fetch(channelId);
+  if (!channel || !('messages' in channel)) {
+    return null;
+  }
+
+  const currentMessage = await findRefreshablePartyJoinMessage(channel as PartyJoinMessageChannel);
+  if (!currentMessage) {
+    return null;
+  }
+
+  const payload = buildPartyJoinMessagePayload(
+    await fetchJoinableParties(),
+    partyEmojiAssignmentsFromMessage(currentMessage),
+  );
+  const edited = await currentMessage.edit({ embeds: payload.embeds });
+
+  for (const emoji of payload.reactionEmojis) {
+    try {
+      await edited.react(emoji);
+    } catch (error) {
+      console.warn(`[party-join] failed to seed ${emoji} on ${edited.id}:`, error);
+    }
+  }
+
+  return edited;
 }
 
 export async function handlePartyJoinReaction(reaction: ReactionInput, user: UserInput): Promise<boolean> {

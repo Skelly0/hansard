@@ -90,28 +90,37 @@ export function Offices() {
                     {/* Current holders */}
                     {holders.length > 0 ? (
                       <div className="space-y-2 mb-3">
-                        {holders.map((holder) => (
-                          <div key={holder.id} className="flex items-center gap-2">
-                            <PlayerAvatar
-                              player={holder.player ?? { id: holder.playerId, characterName: null, discordUsername: '?' }}
-                              size="md"
-                            />
-                            <div>
-                              <Link
-                                to="/players/$id"
-                                params={{ id: holder.playerId }}
-                                className="text-body-sm font-medium text-text-primary hover:text-accent-primary transition-colors"
-                              >
-                                {holder.player?.characterName || holder.player?.discordUsername || '—'}
-                              </Link>
-                              <span className="font-mono text-xs text-text-tertiary block">
-                                Since {new Date(holder.startDate).toLocaleDateString('en-GB', {
-                                  day: 'numeric', month: 'short', year: 'numeric',
-                                })}
-                              </span>
+                        {holders.map((holder) => {
+                          const player = {
+                            id: holder.player?.id ?? holder.playerId,
+                            characterName: holder.player?.characterName ?? holder.playerName ?? null,
+                            discordUsername: holder.player?.discordUsername ?? holder.discordUsername ?? '?',
+                          };
+                          const holderName = player.characterName || player.discordUsername || '—';
+
+                          return (
+                            <div key={holder.id} className="flex items-center gap-2">
+                              <PlayerAvatar
+                                player={player}
+                                size="md"
+                              />
+                              <div>
+                                <Link
+                                  to="/players/$id"
+                                  params={{ id: holder.playerId }}
+                                  className="text-body-sm font-medium text-text-primary hover:text-accent-primary transition-colors"
+                                >
+                                  {holderName}
+                                </Link>
+                                <span className="font-mono text-xs text-text-tertiary block">
+                                  Since {new Date(holder.startDate).toLocaleDateString('en-GB', {
+                                    day: 'numeric', month: 'short', year: 'numeric',
+                                  })}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="text-body-sm text-text-tertiary italic mb-3">

@@ -24,7 +24,14 @@ export interface OfficeHolder {
   id: string;
   officeId: string;
   playerId: string;
-  player?: { id: string; characterName: string; discordUsername: string; characterPortraitUrl?: string };
+  playerName?: string | null;
+  discordUsername?: string;
+  player?: {
+    id: string;
+    characterName: string | null;
+    discordUsername: string;
+    characterPortraitUrl?: string | null;
+  };
   startDate: string;
   endDate?: string;
   appointedBy?: string;

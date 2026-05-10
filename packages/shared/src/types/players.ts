@@ -19,6 +19,11 @@ export interface Ailment {
   notes?: string;
 }
 
+export interface DeathAilment {
+  condition: string;
+  severity: AilmentSeverity;
+}
+
 export interface PendingDeath {
   cause: string;
   triggeredTick: number;
@@ -26,6 +31,7 @@ export interface PendingDeath {
   eligibleFromTick: number;
   eligibleFromDate: string;
   ageAtProc: number | null;
+  ailments?: DeathAilment[];
 }
 
 // ============================================================

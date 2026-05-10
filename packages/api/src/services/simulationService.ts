@@ -14,6 +14,7 @@ import {
   PlayerEventType,
   type AgingConfig,
   type AilmentPoolEntry,
+  type AilmentSeverity,
   type PendingDeath,
   type ProfileData,
   type TimeAdvanceSummary,
@@ -73,6 +74,7 @@ export interface DeathDetail {
   characterName: string | null;
   age: number | null;
   cause: string;
+  ailments: DeathAilmentDetail[];
 }
 
 export interface PendingDeathDetail {
@@ -80,10 +82,16 @@ export interface PendingDeathDetail {
   characterName: string | null;
   age: number | null;
   cause: string;
+  ailments: DeathAilmentDetail[];
   triggeredTick: number;
   triggeredDate: string;
   eligibleFromTick: number;
   eligibleFromDate: string;
+}
+
+export interface DeathAilmentDetail {
+  condition: string;
+  severity: AilmentSeverity;
 }
 
 export interface AilmentDetail {
@@ -134,6 +142,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isAilmentSeverity(value: unknown): value is AilmentSeverity {
+  return value === 'minor' || value === 'major' || value === 'critical';
+}
+
+function summarizeAilments(ailments: unknown): DeathAilmentDetail[] {
+  if (!Array.isArray(ailments)) return [];
+
+  const byCondition = new Map<string, DeathAilmentDetail>();
+  for (const ailment of ailments) {
+    if (!isRecord(ailment)) continue;
+    const { condition, severity } = ailment;
+    if (typeof condition !== 'string' || !isAilmentSeverity(severity)) continue;
+    const normalized = condition.trim();
+    if (!normalized) continue;
+    byCondition.set(normalized.toLocaleLowerCase(), { condition: normalized, severity });
+  }
+
+  return [...byCondition.values()];
+}
+
+function formatDeathAilments(ailments: DeathAilmentDetail[]): string {
+  return ailments.map(a => `${a.condition} (${a.severity})`).join(', ');
+}
+
 function getPendingDeath(profileData: unknown): PendingDeath | null {
   if (!isRecord(profileData)) return null;
   const pending = profileData.pendingDeath;
@@ -166,6 +198,7 @@ function getPendingDeath(profileData: unknown): PendingDeath | null {
     eligibleFromTick,
     eligibleFromDate,
     ageAtProc,
+    ...('ailments' in pending ? { ailments: summarizeAilments(pending.ailments) } : {}),
   };
 }
 
@@ -191,6 +224,7 @@ function toPendingDeathDetail(
     characterName: player.characterName,
     age: pendingDeath.ageAtProc,
     cause: pendingDeath.cause,
+    ailments: pendingDeath.ailments ?? summarizeAilments(player.ailments),
     triggeredTick: pendingDeath.triggeredTick,
     triggeredDate: pendingDeath.triggeredDate,
     eligibleFromTick: pendingDeath.eligibleFromTick,
@@ -399,6 +433,8 @@ async function markPlayerDeathPending(
   player: typeof players.$inferSelect,
   pendingDeath: PendingDeath,
 ) {
+  const ailmentsText = formatDeathAilments(pendingDeath.ailments ?? []);
+
   await db
     .update(players)
     .set({
@@ -409,7 +445,7 @@ async function markPlayerDeathPending(
   await db.insert(playerEventLog).values({
     playerId: player.id,
     eventType: PlayerEventType.DEATH_PENDING,
-    description: `Death roll triggered (${pendingDeath.cause}); death will be processed after the grace tick.`,
+    description: `Death roll triggered (${pendingDeath.cause}${ailmentsText ? `; ailments: ${ailmentsText}` : ''}); death will be processed after the grace tick.`,
     newValue: pendingDeath,
     simTick: pendingDeath.triggeredTick,
     simDate: pendingDeath.triggeredDate,
@@ -449,6 +485,7 @@ export async function advanceTime(
       if (pendingDeath) {
         const deathTick = fromTick + 1;
         const deathDate = perTickDates[1] ?? toDate;
+        const ailmentsAtDeath = pendingDeath.ailments ?? summarizeAilments(player.ailments);
 
         if (deathTick >= pendingDeath.eligibleFromTick) {
           const ageAtDeath = calculateAge(player.birthDate, deathDate) ?? player.currentAge ?? null;
@@ -461,12 +498,14 @@ export async function advanceTime(
             null,
             true,
             withoutPendingDeath(player.profileData),
+            ailmentsAtDeath,
           );
           deathDetails.push({
             playerId: player.id,
             characterName: player.characterName,
             age: ageAtDeath,
             cause: pendingDeath.cause,
+            ailments: ailmentsAtDeath,
           });
         } else {
           pendingDeathDetails.push(toPendingDeathDetail(player, pendingDeath));
@@ -526,6 +565,7 @@ export async function advanceTime(
           eligibleFromTick: toTick + 1,
           eligibleFromDate: advanceDateByTicks(toDate, 1, clock.tickUnit),
           ageAtProc: result.death.age,
+          ailments: summarizeAilments(state.ailments),
         };
 
         await markPlayerDeathPending(tx, player, pendingDeath);
@@ -609,6 +649,7 @@ export async function previewAdvance(
           characterName: player.characterName,
           age: calculateAge(player.birthDate, deathDate) ?? player.currentAge ?? null,
           cause: pendingDeath.cause,
+          ailments: pendingDeath.ailments ?? summarizeAilments(player.ailments),
         });
       } else {
         pendingDeathDetails.push(toPendingDeathDetail(player, pendingDeath));
@@ -646,6 +687,7 @@ export async function previewAdvance(
         eligibleFromTick: toTick + 1,
         eligibleFromDate: advanceDateByTicks(toDate, 1, clock.tickUnit),
         ageAtProc: result.death.age,
+        ailments: summarizeAilments(state.ailments),
       }));
     }
   }
@@ -803,6 +845,7 @@ export async function manualDeath(
   const clock = await getClock(db);
   const currentDate = clock?.currentDate ?? 'unknown';
   const currentTick = clock?.currentTick ?? 0;
+  const ailments = summarizeAilments(player.ailments);
 
   await processPlayerDeath(
     db,
@@ -813,9 +856,10 @@ export async function manualDeath(
     triggeredById ?? null,
     false,
     withoutPendingDeath(player.profileData),
+    ailments,
   );
 
-  return { player, cause, deathDate: currentDate };
+  return { player, cause, deathDate: currentDate, ailments };
 }
 
 /**
@@ -885,12 +929,19 @@ export async function generateObituary(db: Database, playerId: string) {
     narrativeParts.push(`Died of ${player.causeOfDeath}.`);
   }
 
+  const ailments = summarizeAilments(player.ailments);
+  const ailmentsText = formatDeathAilments(ailments);
+  if (ailmentsText) {
+    narrativeParts.push(`Ailments at death: ${ailmentsText}.`);
+  }
+
   return {
     characterName: player.characterName ?? 'Unknown',
     birthDate: player.birthDate ?? 'unknown',
     deathDate: player.deathDate ?? 'unknown',
     age: ageAtDeath,
     causeOfDeath: player.causeOfDeath ?? 'unknown causes',
+    ailments,
     partyHistory: partyChanges,
     officesHeld,
     narrative: narrativeParts.join(' '),
@@ -958,7 +1009,10 @@ async function processPlayerDeath(
   triggeredById: string | null,
   isAutomatic: boolean,
   profileData?: ProfileData | null,
+  deathAilments: DeathAilmentDetail[] = [],
 ) {
+  const ailmentsText = formatDeathAilments(deathAilments);
+
   // Mark player dead
   await db
     .update(players)
@@ -975,8 +1029,8 @@ async function processPlayerDeath(
   await db.insert(playerEventLog).values({
     playerId,
     eventType: 'death',
-    description: `Died of ${causeOfDeath}`,
-    newValue: { causeOfDeath, deathDate },
+    description: `Died of ${causeOfDeath}${ailmentsText ? `; ailments: ${ailmentsText}` : ''}`,
+    newValue: { causeOfDeath, deathDate, ailments: deathAilments },
     simTick: deathTick,
     simDate: deathDate,
     triggeredById,

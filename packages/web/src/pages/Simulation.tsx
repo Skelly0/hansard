@@ -40,6 +40,11 @@ function formatDateTime(dateString: string): string {
   });
 }
 
+function formatDeathAilments(ailments?: { condition: string; severity: string }[]): string {
+  if (!ailments || ailments.length === 0) return '';
+  return ` · ailments: ${ailments.map(a => `${a.condition} (${a.severity})`).join(', ')}`;
+}
+
 // ---- Sub-components ----
 
 function ClockHeader() {
@@ -229,13 +234,13 @@ function ControlsCard() {
                     {preview.deathDetails.map((d) => (
                       <div
                         key={d.playerId}
-                        className="flex items-center justify-between bg-status-rejected/[0.05] border border-status-rejected/10 rounded-card px-3 py-2"
+                        className="flex flex-col gap-1 bg-status-rejected/[0.05] border border-status-rejected/10 rounded-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
                       >
                         <span className="text-body-sm text-text-primary font-medium">
                           {d.characterName ?? 'Unknown'}
                         </span>
-                        <span className="font-mono text-xs text-text-tertiary">
-                          age {d.age} &middot; {d.cause}
+                        <span className="font-mono text-xs text-text-tertiary sm:text-right">
+                          age {d.age} &middot; {d.cause}{formatDeathAilments(d.ailments)}
                         </span>
                       </div>
                     ))}
@@ -251,13 +256,13 @@ function ControlsCard() {
                     {preview.pendingDeathDetails.map((d) => (
                       <div
                         key={`${d.playerId}-pending-death`}
-                        className="flex items-center justify-between bg-status-rejected/[0.05] border border-status-rejected/10 rounded-card px-3 py-2"
+                        className="flex flex-col gap-1 bg-status-rejected/[0.05] border border-status-rejected/10 rounded-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
                       >
                         <span className="text-body-sm text-text-primary font-medium">
                           {d.characterName ?? 'Unknown'}
                         </span>
-                        <span className="font-mono text-xs text-text-tertiary">
-                          grace until tick {d.eligibleFromTick}
+                        <span className="font-mono text-xs text-text-tertiary sm:text-right">
+                          age {d.age} &middot; {d.cause}{formatDeathAilments(d.ailments)} &middot; grace until tick {d.eligibleFromTick}
                         </span>
                       </div>
                     ))}

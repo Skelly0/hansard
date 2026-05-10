@@ -104,7 +104,19 @@ interface LinkedSlugs {
   amendsDocumentSlug?: string | null;
 }
 
-function toBill(row: typeof bills.$inferSelect, linked: LinkedSlugs = {}): Bill {
+interface BillPlayerSummary {
+  id: string;
+  characterName: string | null;
+  discordUsername: string;
+}
+
+interface BillEnrichment extends LinkedSlugs {
+  author?: BillPlayerSummary;
+  submittedBy?: BillPlayerSummary;
+  coSponsors?: BillPlayerSummary[];
+}
+
+function toBill(row: typeof bills.$inferSelect, enrichment: BillEnrichment = {}): Bill {
   return {
     id: row.id,
     title: row.title,
@@ -117,8 +129,11 @@ function toBill(row: typeof bills.$inferSelect, linked: LinkedSlugs = {}): Bill 
     cachedAt: row.cachedAt?.toISOString() ?? null,
     summary: row.summary,
     authorId: row.authorId,
+    author: enrichment.author,
     submittedById: row.submittedById,
+    submittedBy: enrichment.submittedBy,
     coSponsorIds: (row.coSponsorIds ?? []) as string[],
+    coSponsors: enrichment.coSponsors,
     status: row.status as Bill['status'],
     submittedAt: row.submittedAt.toISOString(),
     playerVoteId: row.playerVoteId,
@@ -133,9 +148,9 @@ function toBill(row: typeof bills.$inferSelect, linked: LinkedSlugs = {}): Bill 
     collectionId: row.collectionId,
     parentDocumentId: row.parentDocumentId,
     amendsBillId: row.amendsBillId,
-    amendsBillSlug: linked.amendsBillSlug ?? null,
+    amendsBillSlug: enrichment.amendsBillSlug ?? null,
     amendsDocumentId: row.amendsDocumentId,
-    amendsDocumentSlug: linked.amendsDocumentSlug ?? null,
+    amendsDocumentSlug: enrichment.amendsDocumentSlug ?? null,
     tags: (row.tags ?? []) as string[],
     policyAreas: (row.policyAreas ?? []) as string[],
     crossReferences: (row.crossReferences ?? []) as string[],
@@ -149,8 +164,15 @@ async function toBillsEnriched(
   db: Database,
   rows: (typeof bills.$inferSelect)[],
 ): Promise<Bill[]> {
-  const slugs = await lookupLinkedSlugs(db, rows);
-  return rows.map((r) => toBill(r, slugs.get(r.id)));
+  const [slugs, playerRefs] = await Promise.all([
+    lookupLinkedSlugs(db, rows),
+    lookupBillPlayerRefs(db, rows),
+  ]);
+
+  return rows.map((row) => toBill(row, {
+    ...slugs.get(row.id),
+    ...playerRefs.get(row.id),
+  }));
 }
 
 async function toBillEnriched(
@@ -187,6 +209,48 @@ async function lookupLinkedSlugs(
       amendsDocumentSlug: row.amendsDocumentId ? docSlugMap.get(row.amendsDocumentId) ?? null : null,
     });
   }
+  return out;
+}
+
+async function lookupBillPlayerRefs(
+  db: Database,
+  rows: (typeof bills.$inferSelect)[],
+): Promise<Map<string, Pick<BillEnrichment, 'author' | 'submittedBy' | 'coSponsors'>>> {
+  const playerIds = new Set<string>();
+
+  for (const row of rows) {
+    playerIds.add(row.authorId);
+    playerIds.add(row.submittedById);
+    for (const coSponsorId of (row.coSponsorIds ?? []) as string[]) {
+      playerIds.add(coSponsorId);
+    }
+  }
+
+  if (playerIds.size === 0) return new Map();
+
+  const playerRows = await db
+    .select({
+      id: players.id,
+      characterName: players.characterName,
+      discordUsername: players.discordUsername,
+    })
+    .from(players)
+    .where(inArray(players.id, [...playerIds]));
+
+  const playersById = new Map(playerRows.map((player) => [player.id, player]));
+  const out = new Map<string, Pick<BillEnrichment, 'author' | 'submittedBy' | 'coSponsors'>>();
+
+  for (const row of rows) {
+    const coSponsorIds = (row.coSponsorIds ?? []) as string[];
+    out.set(row.id, {
+      author: playersById.get(row.authorId),
+      submittedBy: playersById.get(row.submittedById),
+      coSponsors: coSponsorIds
+        .map((id) => playersById.get(id))
+        .filter((player): player is BillPlayerSummary => !!player),
+    });
+  }
+
   return out;
 }
 

@@ -15,11 +15,11 @@ export interface Bill {
   cachedAt?: string;
   summary?: string;
   authorId: string;
-  author?: { id: string; characterName: string; discordUsername: string };
+  author?: { id: string; characterName: string | null; discordUsername: string };
   submittedById: string;
-  submittedBy?: { id: string; characterName: string; discordUsername: string };
+  submittedBy?: { id: string; characterName: string | null; discordUsername: string };
   coSponsorIds: string[];
-  coSponsors?: { id: string; characterName: string }[];
+  coSponsors?: { id: string; characterName: string | null; discordUsername: string }[];
   status: string;
   submittedAt: string;
   playerVoteId?: string;

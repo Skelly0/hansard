@@ -1,3 +1,7 @@
+import {
+  meetsVoteThreshold,
+  SUPERMAJORITY_PASS_THRESHOLD,
+} from '@hansard/shared';
 import type { TallyStrategy, Ballot, BallotVote, ElectionConfig, TallyResult } from './types.js';
 
 /**
@@ -74,9 +78,8 @@ export class YeaNayStrategy implements TallyStrategy {
       case 'supermajority':
       case 'qualified': {
         // Yea >= passThreshold of voting members (yea + nay)
-        const threshold = config.passThreshold ?? 0.667;
-        if (votingVotes === 0) return false;
-        return yea / votingVotes >= threshold;
+        const threshold = config.passThreshold ?? SUPERMAJORITY_PASS_THRESHOLD;
+        return meetsVoteThreshold(yea, votingVotes, threshold);
       }
 
       case 'unanimous':

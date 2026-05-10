@@ -9,6 +9,12 @@ export const DEFAULT_BOT_NAME = 'Hansard';
 export const DEFAULT_VOTE_DURATION_HOURS = 24;
 export const DEFAULT_VOTE_DURATION_MS = DEFAULT_VOTE_DURATION_HOURS * 60 * 60 * 1000;
 
+/** Canonical supermajority threshold: exactly two-thirds of yea+nay votes */
+export const SUPERMAJORITY_PASS_THRESHOLD = 2 / 3;
+
+/** Older persisted configs used the rounded value; keep recognizing it. */
+export const LEGACY_SUPERMAJORITY_PASS_THRESHOLD = 0.667;
+
 // ============================================================
 // Discord Embed — Emoji Prefixes
 // ============================================================

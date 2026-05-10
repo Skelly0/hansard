@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BillStatus } from '@hansard/shared';
+import { BillStatus, SUPERMAJORITY_PASS_THRESHOLD } from '@hansard/shared';
 import {
   buildLegislativeVoteConfig,
   buildSubmittedBillSelectOptions,
@@ -47,7 +47,7 @@ describe('buildLegislativeVoteConfig', () => {
   it('builds supermajority config for yea/nay legislative votes', () => {
     expect(buildLegislativeVoteConfig('yea_nay_abstain', 'supermajority')).toEqual({
       majorityType: 'supermajority',
-      passThreshold: 0.667,
+      passThreshold: SUPERMAJORITY_PASS_THRESHOLD,
       anonymousBallots: false,
       sealedResults: false,
     });

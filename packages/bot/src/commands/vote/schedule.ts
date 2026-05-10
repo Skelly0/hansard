@@ -5,7 +5,7 @@ import {
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { elections, players } from '@hansard/db';
-import { DEFAULT_VOTE_DURATION_HOURS } from '@hansard/shared';
+import { DEFAULT_VOTE_DURATION_HOURS, SUPERMAJORITY_PASS_THRESHOLD } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { hasPermission, isStaff } from '../../utils/permissions.js';
@@ -216,7 +216,7 @@ const command: Command = {
     if (method === 'yea_nay_abstain') {
       config.majorityType = majority;
       if (majority === 'supermajority') {
-        config.passThreshold = 0.667;
+        config.passThreshold = SUPERMAJORITY_PASS_THRESHOLD;
       }
     }
     if (['two_round_runoff', 'fptp'].includes(method)) {

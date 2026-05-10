@@ -6,6 +6,7 @@ import {
 } from 'discord.js';
 import { eq, inArray } from 'drizzle-orm';
 import { ballots, candidates, elections, players } from '@hansard/db';
+import { meetsVoteThreshold, SUPERMAJORITY_PASS_THRESHOLD } from '@hansard/shared';
 import { client } from '../../client.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
@@ -174,14 +175,28 @@ async function renderReactionResult(election: typeof elections.$inferSelect): Pr
     }
 
     const config = election.config ?? {};
-    const total = yea + nay; // abstain doesn't count toward majority for simple
-    const threshold = config.passThreshold ?? 0.5;
-    if (config.majorityType === 'unanimous') {
-      passed = yea > 0 && nay === 0;
-    } else if (total === 0) {
-      passed = false;
-    } else {
-      passed = yea / total > threshold;
+    const votingVotes = yea + nay;
+    const totalVotes = votingVotes + abstain;
+    switch (config.majorityType ?? 'simple') {
+      case 'absolute':
+        passed = config.quorumRequired != null
+          ? yea > config.quorumRequired / 2
+          : yea > totalVotes / 2;
+        break;
+      case 'supermajority':
+      case 'qualified':
+        passed = meetsVoteThreshold(
+          yea,
+          votingVotes,
+          config.passThreshold ?? SUPERMAJORITY_PASS_THRESHOLD,
+        );
+        break;
+      case 'unanimous':
+        passed = yea > 0 && nay === 0;
+        break;
+      case 'simple':
+      default:
+        passed = yea > nay;
     }
 
     resultHeadline = passed ? '**PASSED**' : '**REJECTED**';

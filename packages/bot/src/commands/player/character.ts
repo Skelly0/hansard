@@ -22,8 +22,6 @@ import {
   parties,
   offices,
   officeHolders,
-  favourBalances,
-  favourCategories,
   playerEventLog,
   simulationClock,
 } from '@hansard/db';
@@ -672,17 +670,6 @@ async function handleView(interaction: ChatInputCommandInteraction): Promise<voi
     .where(eq(officeHolders.playerId, player.id));
   // TODO: filter where endDate IS NULL once Drizzle isNull is wired
 
-  // Favour balances
-  const balances = await db
-    .select({
-      categoryName: favourCategories.name,
-      categoryEmoji: favourCategories.emoji,
-      balance: favourBalances.balance,
-    })
-    .from(favourBalances)
-    .innerJoin(favourCategories, eq(favourBalances.categoryId, favourCategories.id))
-    .where(eq(favourBalances.playerId, player.id));
-
   const healthDisplay = HEALTH_DISPLAY[player.healthStatus] ?? player.healthStatus;
 
   const ailments = (player.ailments as { condition: string; severity: string }[] | null) ?? [];
@@ -693,10 +680,6 @@ async function handleView(interaction: ChatInputCommandInteraction): Promise<voi
   const officeText = activeOffices.length > 0
     ? activeOffices.map((o) => `**${o.officeName}** (${o.officeTier})`).join('\n')
     : '*No offices held*';
-
-  const favourText = balances.length > 0
-    ? balances.map((b) => `${b.categoryEmoji ?? ''} ${b.categoryName}: **${b.balance}**`).join('\n')
-    : '*No favours recorded*';
 
   const bio = player.characterBio
     ? player.characterBio.length > 400 ? player.characterBio.slice(0, 397) + '...' : player.characterBio
@@ -716,7 +699,6 @@ async function handleView(interaction: ChatInputCommandInteraction): Promise<voi
       { name: 'Status', value: player.isAlive ? '\u{1F7E2} Alive' : '\u{26B0}\u{FE0F} Deceased', inline: true },
       { name: 'Offices', value: officeText },
       { name: 'Ailments', value: ailmentText, inline: true },
-      { name: 'Favours', value: favourText },
     ],
   });
 

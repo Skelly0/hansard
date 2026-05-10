@@ -34,6 +34,16 @@ function selectWhereResult(rows: unknown[]) {
   };
 }
 
+function selectInnerJoinWhereResult(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      innerJoin: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(rows),
+      }),
+    }),
+  };
+}
+
 function selectLimitOnlyResult(rows: unknown[]) {
   return {
     from: vi.fn().mockReturnValue({
@@ -284,5 +294,63 @@ describe('/character create', () => {
     const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
     expect(editPayloads.some((payload) => containsText(payload, /already has a character/i))).toBe(true);
     expect(editPayloads.some((payload) => containsText(payload, /Character Created!/))).toBe(false);
+  });
+});
+
+describe('/character view', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not expose favour balances in the character dossier', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) {
+        return selectLimitResult([{
+          id: 'player-1',
+          characterName: 'Ada Vance',
+          characterBio: 'A parliamentary comet.',
+          characterPortraitUrl: null,
+          currentAge: 32,
+          startingAge: 30,
+          factionId: 'faction-1',
+          partyId: 'party-1',
+          healthStatus: 'healthy',
+          ailments: [],
+          isAlive: true,
+          causeOfDeath: null,
+        }]);
+      }
+      if (selectCall === 2) return selectLimitResult([{ name: 'Commons' }]);
+      if (selectCall === 3) return selectLimitResult([{ name: 'Reform League' }]);
+      if (selectCall === 4) return selectInnerJoinWhereResult([]);
+      if (selectCall === 5) {
+        return selectInnerJoinWhereResult([{
+          categoryName: 'Court Influence',
+          categoryEmoji: 'CI',
+          balance: 42,
+        }]);
+      }
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const interaction = {
+      user: { id: 'discord-user-1', displayName: 'Ada' },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('view'),
+        getUser: vi.fn().mockReturnValue(null),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    const replyPayload = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(replyPayload).toBeDefined();
+    expect(containsText(replyPayload, /Favours/i)).toBe(false);
+    expect(containsText(replyPayload, /Court Influence|42/)).toBe(false);
   });
 });

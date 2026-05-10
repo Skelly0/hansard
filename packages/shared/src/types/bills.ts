@@ -40,6 +40,12 @@ export interface EstimatedEffects {
   notes?: string;
 }
 
+export interface BillPlayerSummary {
+  id: string;
+  characterName: string | null;
+  discordUsername: string;
+}
+
 // ============================================================
 // Bill — the full shape returned by API
 // ============================================================
@@ -62,8 +68,11 @@ export interface Bill {
 
   // Authorship
   authorId: string;
+  author?: BillPlayerSummary;
   submittedById: string;
+  submittedBy?: BillPlayerSummary;
   coSponsorIds: string[];
+  coSponsors?: BillPlayerSummary[];
 
   // Status
   status: BillStatus;

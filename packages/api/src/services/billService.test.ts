@@ -1,5 +1,93 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getVoters } from './billService';
+import { getVoters, listBills } from './billService';
+
+const baseDate = new Date('2026-01-01T00:00:00.000Z');
+
+function billRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'bill-1',
+    title: 'Transit Reform Act',
+    shortTitle: null,
+    slug: 'transit-reform-act',
+    billNumber: 1,
+    googleDocUrl: 'https://docs.google.com/document/d/doc-id',
+    googleDocId: 'doc-id',
+    cachedContent: null,
+    cachedAt: null,
+    summary: null,
+    authorId: 'author-1',
+    submittedById: 'submitter-1',
+    coSponsorIds: [],
+    status: 'submitted',
+    submittedAt: baseDate,
+    playerVoteId: null,
+    playerVoteResult: null,
+    playerVoteAt: null,
+    npcVoteRequired: true,
+    npcVote: null,
+    enactedAt: null,
+    effectiveAt: null,
+    repealedAt: null,
+    repealedByBillId: null,
+    collectionId: null,
+    parentDocumentId: null,
+    amendsBillId: null,
+    amendsDocumentId: null,
+    tags: [],
+    policyAreas: [],
+    crossReferences: [],
+    estimatedEffects: null,
+    createdAt: baseDate,
+    updatedAt: baseDate,
+    ...overrides,
+  };
+}
+
+function makeListBillsMockDb(billRows: any[], playerRows: any[]) {
+  const billsOffset = vi.fn().mockResolvedValue(billRows);
+  const billsLimit = vi.fn().mockReturnValue({ offset: billsOffset });
+  const billsOrderBy = vi.fn().mockReturnValue({ limit: billsLimit });
+  const billsWhere = vi.fn().mockReturnValue({ orderBy: billsOrderBy });
+  const billsFrom = vi.fn().mockReturnValue({ where: billsWhere });
+
+  const countWhere = vi.fn().mockResolvedValue([{ value: billRows.length }]);
+  const countFrom = vi.fn().mockReturnValue({ where: countWhere });
+
+  const playersWhere = vi.fn().mockResolvedValue(playerRows);
+  const playersFrom = vi.fn().mockReturnValue({ where: playersWhere });
+
+  const select = vi.fn()
+    .mockReturnValueOnce({ from: billsFrom })
+    .mockReturnValueOnce({ from: countFrom })
+    .mockReturnValueOnce({ from: playersFrom });
+
+  return { select, playersWhere };
+}
+
+describe('listBills', () => {
+  it('includes author display data for the bills webapp section', async () => {
+    const db: any = makeListBillsMockDb(
+      [billRow({ coSponsorIds: ['co-sponsor-1', 'missing-player'] })],
+      [
+        { id: 'author-1', characterName: 'Ada Vance', discordUsername: 'ada' },
+        { id: 'submitter-1', characterName: null, discordUsername: 'clerk' },
+        { id: 'co-sponsor-1', characterName: 'Beatrice Cole', discordUsername: 'bea' },
+      ],
+    );
+
+    const result = await listBills(db);
+
+    expect(result.total).toBe(1);
+    expect(result.bills[0]).toMatchObject({
+      author: { id: 'author-1', characterName: 'Ada Vance', discordUsername: 'ada' },
+      submittedBy: { id: 'submitter-1', characterName: null, discordUsername: 'clerk' },
+      coSponsors: [
+        { id: 'co-sponsor-1', characterName: 'Beatrice Cole', discordUsername: 'bea' },
+      ],
+    });
+    expect(result.bills[0]?.coSponsors).toHaveLength(1);
+  });
+});
 
 describe('getVoters', () => {
   function makeMockDb(billRows: any[], ballotRows: any[], electionRows: any[] = [{

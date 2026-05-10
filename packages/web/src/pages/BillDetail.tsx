@@ -174,7 +174,7 @@ export function BillDetail() {
                   params={{ id: cs.id }}
                   className="hover:text-accent-primary transition-colors"
                 >
-                  {cs.characterName}
+                  {cs.characterName || cs.discordUsername}
                 </Link>
                 {i < bill.coSponsors!.length - 1 && ', '}
               </span>

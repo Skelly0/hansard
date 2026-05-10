@@ -52,6 +52,7 @@ const COLLECTOR_MANAGED_PREFIXES = [
   'pagination_',
   'ticket_category_select:', 'ticket_create_modal:',
   'vote_create_bill_select:', 'vote_create_bill_modal:',
+  'bill_submit_type:', 'bill_submit_modal:',
 ];
 
 function isCollectorManaged(customId: string): boolean {

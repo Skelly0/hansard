@@ -5,7 +5,7 @@ import { requireRole } from '../middleware/requireRole.js';
 import { eq } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import { bills, documents } from '@hansard/db';
-import type { BillStatus, EstimatedEffects } from '@hansard/shared';
+import type { BillType, EstimatedEffects } from '@hansard/shared';
 import {
   submitBill,
   submitBillFor,
@@ -207,7 +207,9 @@ export default async function billRoutes(fastify: FastifyInstance) {
   fastify.post<{
     Body: {
       title: string;
-      googleDocUrl: string;
+      billType?: string;
+      googleDocUrl?: string | null;
+      content?: string;
       summary?: string;
       tags?: string[];
       policyAreas?: string[];
@@ -223,11 +225,22 @@ export default async function billRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth] },
     async (request, reply) => {
       const user = request.session.user!;
-      const { title, googleDocUrl, authorId, ...rest } = request.body;
+      const { title, billType, googleDocUrl, content, authorId, ...rest } = request.body;
+      const requestedBillType = billType ?? (content?.trim() ? 'short' : 'google_doc');
 
-      if (!title || !googleDocUrl) {
-        return reply.status(400).send({ error: 'title and googleDocUrl are required' });
+      if (!title) {
+        return reply.status(400).send({ error: 'title is required' });
       }
+      if (requestedBillType === 'short' && !content?.trim()) {
+        return reply.status(400).send({ error: 'title and content are required for short bills' });
+      }
+      if (requestedBillType === 'google_doc' && !googleDocUrl?.trim()) {
+        return reply.status(400).send({ error: 'title and googleDocUrl are required for Google Doc bills' });
+      }
+      if (requestedBillType !== 'short' && requestedBillType !== 'google_doc') {
+        return reply.status(400).send({ error: 'billType must be google_doc or short' });
+      }
+      const validatedBillType = requestedBillType as BillType;
 
       // Validate amendment targets exist if provided
       if (rest.amendsBillId) {
@@ -243,6 +256,14 @@ export default async function billRoutes(fastify: FastifyInstance) {
         }
       }
 
+      const billData = {
+        title,
+        billType: validatedBillType,
+        googleDocUrl: googleDocUrl?.trim() ?? null,
+        content: content?.trim(),
+        ...rest,
+      };
+
       let bill;
       if (authorId && authorId !== user.id) {
         // Submitting on behalf — requires legislative_leader or staff
@@ -255,9 +276,9 @@ export default async function billRoutes(fastify: FastifyInstance) {
             error: 'Only the Chancellor or staff can submit bills on behalf of other players',
           });
         }
-        bill = await submitBillFor(db, authorId, user.id, { title, googleDocUrl, ...rest });
+        bill = await submitBillFor(db, authorId, user.id, billData);
       } else {
-        bill = await submitBill(db, user.id, { title, googleDocUrl, ...rest });
+        bill = await submitBill(db, user.id, billData);
       }
 
       return reply.status(201).send(bill);
@@ -282,6 +303,9 @@ export default async function billRoutes(fastify: FastifyInstance) {
       const isStaff = request.player?.isStaff ?? false;
       if (bill.authorId !== user.id && !isStaff) {
         return reply.status(403).send({ error: 'Only the bill author or staff can re-cache content' });
+      }
+      if (bill.billType === 'short') {
+        return reply.status(400).send({ error: 'Short bills do not have Google Docs to re-cache' });
       }
 
       const content = await cacheDocContent(db, bill.id);

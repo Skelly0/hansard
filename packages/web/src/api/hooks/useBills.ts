@@ -9,8 +9,9 @@ export interface Bill {
   shortTitle?: string;
   slug: string;
   billNumber: number;
-  googleDocUrl: string;
-  googleDocId?: string;
+  billType: 'google_doc' | 'short';
+  googleDocUrl: string | null;
+  googleDocId?: string | null;
   cachedContent?: string;
   cachedAt?: string;
   summary?: string;
@@ -165,7 +166,7 @@ export function useSearchBills(query?: string) {
 export function useCreateBill() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { title: string; googleDocUrl: string; summary?: string; tags?: string[]; policyAreas?: string[]; authorId?: string }) =>
+    mutationFn: (body: { title: string; billType?: 'google_doc' | 'short'; googleDocUrl?: string | null; content?: string; summary?: string; tags?: string[]; policyAreas?: string[]; authorId?: string }) =>
       api.post<Bill>('/bills', body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['bills'] }); },
   });

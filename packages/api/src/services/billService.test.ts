@@ -10,6 +10,7 @@ function billRow(overrides: Record<string, unknown> = {}) {
     shortTitle: null,
     slug: 'transit-reform-act',
     billNumber: 1,
+    billType: 'google_doc',
     googleDocUrl: 'https://docs.google.com/document/d/doc-id',
     googleDocId: 'doc-id',
     cachedContent: null,
@@ -86,6 +87,30 @@ describe('listBills', () => {
       ],
     });
     expect(result.bills[0]?.coSponsors).toHaveLength(1);
+  });
+
+  it('maps short bills without a Google Doc URL', async () => {
+    const db: any = makeListBillsMockDb(
+      [billRow({
+        billType: 'short',
+        googleDocUrl: null,
+        googleDocId: null,
+        cachedContent: 'Section 1. The plaza shall be open on weekends.',
+      })],
+      [
+        { id: 'author-1', characterName: 'Ada Vance', discordUsername: 'ada' },
+        { id: 'submitter-1', characterName: null, discordUsername: 'clerk' },
+      ],
+    );
+
+    const result = await listBills(db);
+
+    expect(result.bills[0]).toMatchObject({
+      billType: 'short',
+      googleDocUrl: null,
+      googleDocId: null,
+      cachedContent: 'Section 1. The plaza shall be open on weekends.',
+    });
   });
 });
 

@@ -87,6 +87,11 @@ export function Bills() {
           {row.shortTitle && (
             <span className="font-mono text-xs text-text-tertiary ml-2">{row.shortTitle}</span>
           )}
+          {row.billType === 'short' && (
+            <span className="ml-2">
+              <Tag color="bills">short bill</Tag>
+            </span>
+          )}
         </div>
       ),
     },

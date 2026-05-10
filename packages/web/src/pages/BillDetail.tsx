@@ -113,6 +113,7 @@ export function BillDetail() {
     nay: voters?.filter((v) => v.choice === 'nay') ?? [],
     abstain: voters?.filter((v) => v.choice === 'abstain') ?? [],
   };
+  const isShortBill = bill.billType === 'short';
 
   return (
     <div className="p-8">
@@ -142,14 +143,18 @@ export function BillDetail() {
           <h1 className="text-display">{bill.title}</h1>
         </div>
 
-        <a
-          href={bill.googleDocUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-secondary whitespace-nowrap flex-shrink-0"
-        >
-          Open in Google Docs
-        </a>
+        {bill.googleDocUrl ? (
+          <a
+            href={bill.googleDocUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-secondary whitespace-nowrap flex-shrink-0"
+          >
+            Open in Google Docs
+          </a>
+        ) : (
+          <Tag color="bills">short bill</Tag>
+        )}
       </div>
 
       {/* Metadata line */}
@@ -315,7 +320,9 @@ export function BillDetail() {
           ) : (
             <div className="card border-l-accent-bills">
               <p className="text-body text-text-tertiary italic">
-                Bill content not yet cached. Open the Google Doc to read the full text.
+                {isShortBill
+                  ? 'Short bill text is not available.'
+                  : 'Bill content not yet cached. Open the Google Doc to read the full text.'}
               </p>
             </div>
           )}

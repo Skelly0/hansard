@@ -12,6 +12,7 @@ import {
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postToTicketThread } from '@hansard/api/services/ticketThreadNotifier';
 import type { Command } from '../../client.js';
 
 /**
@@ -113,6 +114,13 @@ const command: Command = {
       actorId: authorPlayer.id,
       action: 'internal_note',
       newValue: { messageId: message.id },
+    });
+
+    const authorName =
+      authorPlayer.characterName || authorPlayer.discordUsername || interaction.user.username;
+    await postToTicketThread({
+      threadId: ticket.discordThreadId,
+      content: `🔒 **${authorName}** (internal note):\n${content}`,
     });
 
     await interaction.editReply({

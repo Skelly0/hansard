@@ -7,6 +7,7 @@ import { tickets, ticketAuditLog, players } from '@hansard/db';
 import { successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postToTicketThread } from '@hansard/api/services/ticketThreadNotifier';
 import type { Command } from '../../client.js';
 
 /**
@@ -142,6 +143,15 @@ const command: Command = {
       actorId: actorPlayer.id,
       action: 'linked',
       newValue: { linkedTicketId: ticketA.id, linkedTicketNumber: aNumber },
+    });
+
+    await postToTicketThread({
+      threadId: ticketA.discordThreadId,
+      content: `🔗 Linked to ticket **#${bNumber}** — ${ticketB.title}`,
+    });
+    await postToTicketThread({
+      threadId: ticketB.discordThreadId,
+      content: `🔗 Linked to ticket **#${aNumber}** — ${ticketA.title}`,
     });
 
     await interaction.editReply({

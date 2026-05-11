@@ -6,7 +6,6 @@ import {
   TextInputStyle,
   type ChatInputCommandInteraction,
   type ModalSubmitInteraction,
-  type TextChannel,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
@@ -14,6 +13,7 @@ import { bills, billStatusLog, documents, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import type { Command } from '../../client.js';
 import { extractDocId } from './shared.js';
+import { postLegislationEmbed } from '../../utils/legislationChannel.js';
 
 /**
  * Resolve the `parent` option to a bill or document.
@@ -233,18 +233,7 @@ const command: Command = {
         ].filter(Boolean).join('\n'),
       });
 
-      // Post to legislation channel if configured
-      const legislationChannelId = process.env.LEGISLATION_CHANNEL_ID;
-      if (legislationChannelId) {
-        try {
-          const channel = await interaction.client.channels.fetch(legislationChannelId);
-          if (channel && 'send' in channel) {
-            await (channel as TextChannel).send({ embeds: [embed] });
-          }
-        } catch (channelErr) {
-          console.error('Failed to post amendment to legislation channel:', channelErr);
-        }
-      }
+      await postLegislationEmbed({ client: interaction.client, embed });
 
       await modalSubmit.editReply({ embeds: [embed] });
     } catch (error) {

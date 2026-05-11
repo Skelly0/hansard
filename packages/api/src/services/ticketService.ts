@@ -4,6 +4,7 @@ import {
   ticketCategories,
   ticketMessages,
   ticketAuditLog,
+  players,
   type Database,
 } from '@hansard/db';
 import type {
@@ -14,6 +15,7 @@ import type {
   TicketStatus,
   TicketPriority,
 } from '@hansard/shared';
+import { postToTicketThread } from './ticketThreadNotifier.js';
 
 // ============================================================
 // Types
@@ -38,7 +40,7 @@ export interface UpdateTicketData {
   tags?: string[];
   title?: string;
   description?: string;
-  discordThreadId?: string;
+  discordThreadId?: string | null;
 }
 
 export interface ListTicketsFilters {
@@ -113,6 +115,19 @@ export class TicketService {
       ticket.createdById === viewer.userId ||
       ticket.assignedToId === viewer.userId
     );
+  }
+
+  private async resolvePlayerDisplayName(id: string | null): Promise<string> {
+    if (!id) return 'Unassigned';
+    const [row] = await this.db
+      .select({
+        characterName: players.characterName,
+        discordUsername: players.discordUsername,
+      })
+      .from(players)
+      .where(eq(players.id, id))
+      .limit(1);
+    return row?.characterName || row?.discordUsername || 'Unknown';
   }
 
   // ----------------------------------------------------------
@@ -379,7 +394,50 @@ export class TicketService {
       });
     }
 
+    if (current.discordThreadId && auditEntries.length > 0) {
+      const actorName = await this.resolvePlayerDisplayName(actorId);
+      for (const entry of auditEntries) {
+        const line = await this.formatUpdateForThread(entry, actorName);
+        if (line) {
+          await postToTicketThread({
+            threadId: current.discordThreadId,
+            content: line,
+          });
+        }
+      }
+    }
+
     return updated as unknown as Ticket;
+  }
+
+  private async formatUpdateForThread(
+    entry: { action: string; oldValue: unknown; newValue: unknown },
+    actorName: string,
+  ): Promise<string | null> {
+    switch (entry.action) {
+      case 'status_changed':
+        return `🔄 Status: \`${entry.oldValue}\` → \`${entry.newValue}\` (by **${actorName}**)`;
+      case 'priority_changed':
+        return `⚠️ Priority: \`${entry.oldValue}\` → \`${entry.newValue}\` (by **${actorName}**)`;
+      case 'assigned': {
+        const newName = await this.resolvePlayerDisplayName(
+          typeof entry.newValue === 'string' ? entry.newValue : null,
+        );
+        const oldName = await this.resolvePlayerDisplayName(
+          typeof entry.oldValue === 'string' ? entry.oldValue : null,
+        );
+        return `👤 Assigned to **${newName}** (was *${oldName}*, by **${actorName}**)`;
+      }
+      case 'tags_changed': {
+        const oldTags = Array.isArray(entry.oldValue) ? (entry.oldValue as string[]) : [];
+        const newTags = Array.isArray(entry.newValue) ? (entry.newValue as string[]) : [];
+        const oldStr = oldTags.length ? oldTags.map((t) => `\`${t}\``).join(', ') : '*none*';
+        const newStr = newTags.length ? newTags.map((t) => `\`${t}\``).join(', ') : '*none*';
+        return `🏷️ Tags: ${oldStr} → ${newStr} (by **${actorName}**)`;
+      }
+      default:
+        return null;
+    }
   }
 
   // ----------------------------------------------------------
@@ -439,6 +497,17 @@ export class TicketService {
       action: isInternal ? 'internal_note' : 'commented',
       newValue: { messageId: message.id },
     });
+
+    if (ticket.discordThreadId) {
+      const authorName = await this.resolvePlayerDisplayName(authorId);
+      const prefix = isInternal
+        ? `🔒 **${authorName}** (internal note):`
+        : `💬 **${authorName}** replied:`;
+      await postToTicketThread({
+        threadId: ticket.discordThreadId,
+        content: `${prefix}\n${content}`,
+      });
+    }
 
     return message as unknown as TicketMessage;
   }
@@ -503,9 +572,15 @@ export class TicketService {
 
     const aLinks = ((a.linkedTicketIds ?? []) as string[]);
     const bLinks = ((b.linkedTicketIds ?? []) as string[]);
+    const aAlreadyLinked = aLinks.includes(otherTicketId);
+    const bAlreadyLinked = bLinks.includes(ticketId);
 
-    const newA = aLinks.includes(otherTicketId) ? aLinks : [...aLinks, otherTicketId];
-    const newB = bLinks.includes(ticketId) ? bLinks : [...bLinks, ticketId];
+    if (aAlreadyLinked && bAlreadyLinked) {
+      return a as unknown as Ticket;
+    }
+
+    const newA = aAlreadyLinked ? aLinks : [...aLinks, otherTicketId];
+    const newB = bAlreadyLinked ? bLinks : [...bLinks, ticketId];
 
     const now = new Date();
     await this.db.update(tickets).set({ linkedTicketIds: newA, updatedAt: now }).where(eq(tickets.id, ticketId));
@@ -520,6 +595,19 @@ export class TicketService {
       newValue: { linkedTicketId: ticketId },
     });
 
+    if (a.discordThreadId) {
+      await postToTicketThread({
+        threadId: a.discordThreadId,
+        content: `🔗 Linked to ticket **#${b.number}** — ${b.title}`,
+      });
+    }
+    if (b.discordThreadId) {
+      await postToTicketThread({
+        threadId: b.discordThreadId,
+        content: `🔗 Linked to ticket **#${a.number}** — ${a.title}`,
+      });
+    }
+
     const [updated] = await this.db.select().from(tickets).where(eq(tickets.id, ticketId)).limit(1);
     return updated as unknown as Ticket;
   }
@@ -530,8 +618,16 @@ export class TicketService {
     const [b] = await this.db.select().from(tickets).where(eq(tickets.id, otherTicketId)).limit(1);
     if (!b) return null;
 
-    const aLinks = ((a.linkedTicketIds ?? []) as string[]).filter((x) => x !== otherTicketId);
-    const bLinks = ((b.linkedTicketIds ?? []) as string[]).filter((x) => x !== ticketId);
+    const existingALinks = ((a.linkedTicketIds ?? []) as string[]);
+    const existingBLinks = ((b.linkedTicketIds ?? []) as string[]);
+    const hadLink = existingALinks.includes(otherTicketId) || existingBLinks.includes(ticketId);
+
+    if (!hadLink) {
+      return a as unknown as Ticket;
+    }
+
+    const aLinks = existingALinks.filter((x) => x !== otherTicketId);
+    const bLinks = existingBLinks.filter((x) => x !== ticketId);
 
     const now = new Date();
     await this.db.update(tickets).set({ linkedTicketIds: aLinks, updatedAt: now }).where(eq(tickets.id, ticketId));
@@ -545,6 +641,19 @@ export class TicketService {
       ticketId: otherTicketId, actorId, action: 'unlinked',
       oldValue: { linkedTicketId: ticketId },
     });
+
+    if (a.discordThreadId) {
+      await postToTicketThread({
+        threadId: a.discordThreadId,
+        content: `🔓 Unlinked from ticket **#${b.number}** — ${b.title}`,
+      });
+    }
+    if (b.discordThreadId) {
+      await postToTicketThread({
+        threadId: b.discordThreadId,
+        content: `🔓 Unlinked from ticket **#${a.number}** — ${a.title}`,
+      });
+    }
 
     const [updated] = await this.db.select().from(tickets).where(eq(tickets.id, ticketId)).limit(1);
     return updated as unknown as Ticket;

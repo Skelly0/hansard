@@ -17,6 +17,7 @@ import {
 import { TicketStatus, TicketPriority } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed, type EmbedField } from '../utils/embeds.js';
 import { isStaff } from '../utils/permissions.js';
+import { postToTicketThread } from '@hansard/api/services/ticketThreadNotifier';
 import { db } from '../db.js';
 
 // ============================================================
@@ -360,6 +361,12 @@ async function handleClaim(interaction: ButtonInteraction): Promise<void> {
     },
   });
 
+  const claimDisplay = resolveDisplayName(interaction);
+  await postToTicketThread({
+    threadId: ticket.discordThreadId,
+    content: `👤 Claimed by **${claimDisplay}**${willPromoteStatus ? ` — status: \`${oldStatus}\` → \`${newStatus}\`` : ''}`,
+  });
+
   await interaction.editReply({
     embeds: [
       successEmbed(
@@ -698,6 +705,12 @@ export async function handleSetPriorityButton(interaction: ButtonInteraction): P
   await refreshPinnedSummary(interaction, {
     ticketId: ticket.id,
     overrides: { priority },
+  });
+
+  const priorityActorName = resolveDisplayName(interaction);
+  await postToTicketThread({
+    threadId: ticket.discordThreadId,
+    content: `⚠️ Priority: \`${oldPriority}\` → \`${priority}\` (by **${priorityActorName}**)`,
   });
 
   await interaction.followUp({

@@ -7,6 +7,7 @@ import { tickets, ticketAuditLog, players } from '@hansard/db';
 import { successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postToTicketThread } from '@hansard/api/services/ticketThreadNotifier';
 import type { Command } from '../../client.js';
 
 /**
@@ -119,6 +120,13 @@ const command: Command = {
       action: 'priority_changed',
       oldValue: oldPriority,
       newValue: level,
+    });
+
+    const actorName =
+      actorPlayer.characterName || actorPlayer.discordUsername || interaction.user.username;
+    await postToTicketThread({
+      threadId: ticket.discordThreadId,
+      content: `⚠️ Priority: \`${oldPriority}\` → \`${level}\` (by **${actorName}**)`,
     });
 
     await interaction.editReply({

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   advanceTime: vi.fn(),
   previewAdvance: vi.fn(),
   postObituaryToGraveyard: vi.fn(),
+  postGameEventsEmbed: vi.fn(),
 }));
 
 vi.mock('../../db.js', () => ({
@@ -23,6 +24,10 @@ vi.mock('@hansard/api/services/simulationService', () => ({
 
 vi.mock('../../utils/graveyard.js', () => ({
   postObituaryToGraveyard: mocks.postObituaryToGraveyard,
+}));
+
+vi.mock('../../utils/gameEventsChannel.js', () => ({
+  postGameEventsEmbed: mocks.postGameEventsEmbed,
 }));
 
 function selectWhereResult(rows: unknown[]) {
@@ -79,6 +84,10 @@ describe('/time advance', () => {
         characterName: 'Isabella Grech',
       },
     });
+    mocks.postGameEventsEmbed.mockResolvedValue({
+      status: 'sent',
+      channelId: '1503483556914266254',
+    });
   });
 
   it('posts automatic death obituaries to the graveyard channel', async () => {
@@ -99,6 +108,68 @@ describe('/time advance', () => {
       client: interaction.client,
       playerId: 'dead-player',
     }));
+  });
+
+  it('posts a public time advance summary to the game events channel', async () => {
+    const interaction = {
+      user: { id: 'discord-staff' },
+      client: { channels: { fetch: vi.fn() } },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('advance'),
+        getInteger: vi.fn().mockReturnValue(1),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    expect(mocks.postGameEventsEmbed).toHaveBeenCalledWith(expect.objectContaining({
+      client: interaction.client,
+      embed: expect.anything(),
+    }));
+  });
+
+  it('keeps pending death rolls out of the public game events post', async () => {
+    mocks.advanceTime.mockResolvedValue({
+      fromDate: '2026-01-01',
+      toDate: '2026-02-01',
+      fromTick: 1,
+      toTick: 2,
+      aged: 0,
+      ailmentDetails: [],
+      deathDetails: [],
+      pendingDeathDetails: [{
+        playerId: 'pending-player',
+        characterName: 'Cato Vel',
+        age: 72,
+        cause: 'Critical organ failure',
+        ailments: [],
+        eligibleFromTick: 3,
+        eligibleFromDate: '2026-03-01',
+      }],
+    });
+
+    const interaction = {
+      user: { id: 'discord-staff' },
+      client: { channels: { fetch: vi.fn() } },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('advance'),
+        getInteger: vi.fn().mockReturnValue(1),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    const publicEmbed = mocks.postGameEventsEmbed.mock.calls[0][0].embed;
+    const publicPayload = publicEmbed.toJSON();
+    expect(publicPayload.description).not.toContain('Death Rolls Triggered');
+    expect(publicPayload.description).not.toContain('Cato Vel');
+
+    const staffReply = (interaction.editReply as any).mock.calls[0][0];
+    expect(staffReply.embeds[0].toJSON().description).toContain('Death Rolls Triggered');
   });
 });
 

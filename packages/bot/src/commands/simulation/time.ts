@@ -9,6 +9,7 @@ import { simulationClock, players } from '@hansard/db';
 import { advanceTime, previewAdvance } from '@hansard/api/services/simulationService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { postObituaryToGraveyard, type GraveyardPostResult } from '../../utils/graveyard.js';
+import { postGameEventsEmbed, type GameEventsPostResult } from '../../utils/gameEventsChannel.js';
 import type { Command } from '../../client.js';
 
 type DeathAilment = {
@@ -24,6 +25,81 @@ async function fetchClock() {
 function formatDeathAilments(ailments: DeathAilment[] | undefined): string {
   if (!ailments || ailments.length === 0) return '';
   return `; ailments: ${ailments.map(a => `${a.condition} (${a.severity})`).join(', ')}`;
+}
+
+type TimeAdvanceResult = Awaited<ReturnType<typeof advanceTime>>;
+
+function buildPublicAdvanceLines(result: TimeAdvanceResult): string[] {
+  const lines: string[] = [
+    `**${result.fromDate}** → **${result.toDate}**`,
+    `Tick \`${result.fromTick}\` → \`${result.toTick}\``,
+    '',
+    `**${result.aged}** players aged`,
+  ];
+
+  if (result.ailmentDetails.length > 0) {
+    lines.push('', '**New Ailments:**');
+    for (const a of result.ailmentDetails) {
+      lines.push(`• **${a.characterName ?? 'Unknown'}** — ${a.condition} (${a.severity})`);
+    }
+  }
+
+  if (result.deathDetails.length > 0) {
+    lines.push('', '⚰️ **Deaths:**');
+    for (const d of result.deathDetails) {
+      lines.push(`• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}`);
+    }
+  }
+
+  if (result.ailmentDetails.length === 0 && result.deathDetails.length === 0) {
+    lines.push('', '_No public ailments or deaths this tick._');
+  }
+
+  return lines;
+}
+
+function buildStaffAdvanceLines(
+  result: TimeAdvanceResult,
+  graveyardPosts: GraveyardPostResult[],
+): string[] {
+  const lines = buildPublicAdvanceLines(result);
+
+  if (result.deathDetails.length > 0) {
+    const channelId = graveyardPosts.find(post => post.channelId)?.channelId;
+    const sentCount = graveyardPosts.filter(post => post.status === 'sent').length;
+    if (sentCount === graveyardPosts.length && channelId) {
+      lines.push('', `Obituaries posted to <#${channelId}>.`);
+    } else if (sentCount > 0 && channelId) {
+      lines.push('', `${sentCount}/${graveyardPosts.length} obituaries posted to <#${channelId}>; check bot logs for failures.`);
+    } else {
+      lines.push('', 'Obituaries could not be posted to the graveyard channel; check bot logs.');
+    }
+  }
+
+  if (result.pendingDeathDetails.length > 0) {
+    lines.push('', '**Death Rolls Triggered:**');
+    for (const d of result.pendingDeathDetails) {
+      lines.push(
+        `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}; grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
+      );
+    }
+  }
+
+  return lines;
+}
+
+function appendGameEventsPostStatus(lines: string[], post: GameEventsPostResult): void {
+  if (post.status === 'sent' && post.channelId) {
+    lines.push('', `Game events summary posted to <#${post.channelId}>.`);
+    return;
+  }
+
+  if (post.channelId) {
+    lines.push('', `Game events summary could not be posted to <#${post.channelId}>; check bot logs.`);
+    return;
+  }
+
+  lines.push('', '_No game events channel configured._');
 }
 
 const command: Command = {
@@ -143,53 +219,19 @@ async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<
       }));
     }
 
-    const lines: string[] = [
-      `**${result.fromDate}** → **${result.toDate}**`,
-      `Tick \`${result.fromTick}\` → \`${result.toTick}\``,
-      '',
-      `**${result.aged}** players aged`,
-    ];
+    const publicEmbed = createEmbed({
+      title: `Time Advanced +${ticks} ${ticks === 1 ? 'tick' : 'ticks'}`,
+      description: buildPublicAdvanceLines(result).join('\n'),
+      system: 'simulation',
+    });
 
-    if (result.ailmentDetails.length > 0) {
-      lines.push('', '**New Ailments:**');
-      for (const a of result.ailmentDetails) {
-        lines.push(`• **${a.characterName ?? 'Unknown'}** — ${a.condition} (${a.severity})`);
-      }
-    }
+    const gameEventsPost = await postGameEventsEmbed({
+      client: interaction.client,
+      embed: publicEmbed,
+    });
 
-    if (result.deathDetails.length > 0) {
-      lines.push('', '⚰️ **Deaths:**');
-      for (const d of result.deathDetails) {
-        lines.push(`• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}`);
-      }
-
-      const channelId = graveyardPosts.find(post => post.channelId)?.channelId;
-      const sentCount = graveyardPosts.filter(post => post.status === 'sent').length;
-      if (sentCount === graveyardPosts.length && channelId) {
-        lines.push('', `Obituaries posted to <#${channelId}>.`);
-      } else if (sentCount > 0 && channelId) {
-        lines.push('', `${sentCount}/${graveyardPosts.length} obituaries posted to <#${channelId}>; check bot logs for failures.`);
-      } else {
-        lines.push('', 'Obituaries could not be posted to the graveyard channel; check bot logs.');
-      }
-    }
-
-    if (result.pendingDeathDetails.length > 0) {
-      lines.push('', '**Death Rolls Triggered:**');
-      for (const d of result.pendingDeathDetails) {
-        lines.push(
-          `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}; grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
-        );
-      }
-    }
-
-    if (
-      result.ailmentDetails.length === 0
-      && result.deathDetails.length === 0
-      && result.pendingDeathDetails.length === 0
-    ) {
-      lines.push('', '_No ailments or deaths this tick._');
-    }
+    const lines = buildStaffAdvanceLines(result, graveyardPosts);
+    appendGameEventsPostStatus(lines, gameEventsPost);
 
     const embed = createEmbed({
       title: `Time Advanced +${ticks} ${ticks === 1 ? 'tick' : 'ticks'}`,

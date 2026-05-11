@@ -11,6 +11,7 @@
     "migrate": "drizzle-kit migrate",
     "migrate:short-bills": "tsx scripts/migrate-short-bills.ts",
     "migrate:invite-only-parties": "tsx scripts/migrate-invite-only-parties.ts",
+    "migrate:npc-house-active": "tsx scripts/migrate-npc-house-active.ts",
     "push": "drizzle-kit push",
     "studio": "drizzle-kit studio",
     "build": "tsc"

@@ -70,4 +70,16 @@ describe('buildLinkedBillSourceDisplay', () => {
     expect(display).toEqual({ fields: [], embeds: [] });
     expect(select).not.toHaveBeenCalled();
   });
+
+  it('does not query bills for standalone legislative votes', async () => {
+    const { db, select } = makeDb([]);
+
+    const display = await buildLinkedBillSourceDisplay(db, {
+      type: 'legislative_vote',
+      relatedBillId: null,
+    });
+
+    expect(display).toEqual({ fields: [], embeds: [] });
+    expect(select).not.toHaveBeenCalled();
+  });
 });

@@ -23,6 +23,8 @@ export interface SubmittedBillSelectOption {
   description?: string;
 }
 
+export const STANDALONE_LEGISLATIVE_VOTE_OPTION_VALUE = '__standalone_legislative_vote__';
+
 export interface CreateLegislativeBillVoteInput {
   billId: string;
   creatorDiscordId: string;
@@ -41,6 +43,23 @@ export interface CreateLegislativeBillVoteResult {
     status: string;
     playerVoteId: string | null;
   };
+  electionId: string;
+  votingOpensAt: Date;
+  votingClosesAt: Date;
+}
+
+export interface CreateStandaloneLegislativeVoteInput {
+  creatorDiscordId: string;
+  title: string;
+  description: string | null;
+  method: VotingMethod | string;
+  majority: MajorityType | string;
+  durationHours: number;
+  useReactions: boolean;
+  now?: Date;
+}
+
+export interface CreateStandaloneLegislativeVoteResult {
   electionId: string;
   votingOpensAt: Date;
   votingClosesAt: Date;
@@ -79,8 +98,17 @@ export async function listSubmittedBillsForVote(
 
 export function buildSubmittedBillSelectOptions(
   billRows: SubmittedBillSelectRow[],
+  options: { includeStandalone?: boolean } = {},
 ): SubmittedBillSelectOption[] {
-  return billRows.slice(0, DISCORD_SELECT_LIMIT).map((bill) => {
+  const standaloneOptions: SubmittedBillSelectOption[] = options.includeStandalone
+    ? [{
+        label: 'Standalone legislative vote',
+        value: STANDALONE_LEGISLATIVE_VOTE_OPTION_VALUE,
+        description: 'Vote on an agenda item that is not tied to a submitted bill.',
+      }]
+    : [];
+  const billLimit = options.includeStandalone ? DISCORD_SELECT_LIMIT - 1 : DISCORD_SELECT_LIMIT;
+  const billOptions = billRows.slice(0, billLimit).map((bill) => {
     const prefix = `${formatBillNumber(bill.billNumber)}: `;
     const label = `${prefix}${truncateForDiscord(
       bill.title,
@@ -96,6 +124,8 @@ export function buildSubmittedBillSelectOptions(
       ...(description ? { description } : {}),
     };
   });
+
+  return [...standaloneOptions, ...billOptions];
 }
 
 export function buildLegislativeVoteConfig(
@@ -214,6 +244,54 @@ export async function createLegislativeBillVote(
 
     return {
       bill: updatedBill,
+      electionId: election.id,
+      votingOpensAt: now,
+      votingClosesAt,
+    };
+  });
+}
+
+export async function createStandaloneLegislativeVote(
+  database: Database,
+  input: CreateStandaloneLegislativeVoteInput,
+): Promise<CreateStandaloneLegislativeVoteResult> {
+  if (!Number.isFinite(input.durationHours) || input.durationHours <= 0) {
+    throw new Error('Vote duration must be a positive number of hours');
+  }
+
+  const [creator] = await database
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.discordId, input.creatorDiscordId))
+    .limit(1);
+
+  if (!creator) {
+    throw new Error('You need a registered character to create a legislature vote.');
+  }
+
+  const now = input.now ?? new Date();
+  const votingClosesAt = new Date(now.getTime() + input.durationHours * 60 * 60 * 1000);
+
+  return database.transaction(async (tx) => {
+    const [election] = await tx
+      .insert(elections)
+      .values({
+        title: input.title,
+        description: input.description,
+        type: 'legislative_vote',
+        method: input.method,
+        requiredPermission: 'legislative_leader',
+        config: buildLegislativeVoteConfig(input.method, input.majority),
+        relatedBillId: null,
+        createdById: creator.id,
+        status: 'voting_open',
+        votingOpensAt: now,
+        votingClosesAt,
+        useReactions: input.useReactions,
+      })
+      .returning();
+
+    return {
       electionId: election.id,
       votingOpensAt: now,
       votingClosesAt,

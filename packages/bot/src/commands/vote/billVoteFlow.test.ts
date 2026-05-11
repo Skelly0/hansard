@@ -3,7 +3,9 @@ import { BillStatus, SUPERMAJORITY_PASS_THRESHOLD } from '@hansard/shared';
 import {
   buildLegislativeVoteConfig,
   buildSubmittedBillSelectOptions,
+  createStandaloneLegislativeVote,
   createLegislativeBillVote,
+  STANDALONE_LEGISLATIVE_VOTE_OPTION_VALUE,
 } from './billVoteFlow.js';
 
 const baseDate = new Date('2026-01-01T00:00:00.000Z');
@@ -40,6 +42,22 @@ describe('buildSubmittedBillSelectOptions', () => {
       description: 'Summary 1',
     });
     expect(options[24]?.label).toBe('B-025: Bill Title 25');
+  });
+
+  it('can prepend a standalone legislative vote option before submitted bills', () => {
+    const options = buildSubmittedBillSelectOptions([submittedBill()], {
+      includeStandalone: true,
+    });
+
+    expect(options[0]).toMatchObject({
+      label: 'Standalone legislative vote',
+      value: STANDALONE_LEGISLATIVE_VOTE_OPTION_VALUE,
+      description: 'Vote on an agenda item that is not tied to a submitted bill.',
+    });
+    expect(options[1]).toMatchObject({
+      label: 'B-001: Transit Reform Act',
+      value: 'bill-1',
+    });
   });
 });
 
@@ -177,5 +195,67 @@ describe('createLegislativeBillVote', () => {
       now: baseDate,
     })).rejects.toThrow("Bill is not in 'submitted' status");
     expect(db.transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('createStandaloneLegislativeVote', () => {
+  function makeSelectChain(rows: unknown[]) {
+    const limit = vi.fn().mockResolvedValue(rows);
+    const where = vi.fn().mockReturnValue({ limit });
+    const from = vi.fn().mockReturnValue({ where });
+    return { from, where, limit };
+  }
+
+  function makeInsertChain(returnedRows: unknown[], insertValues: unknown[]) {
+    const returning = vi.fn().mockResolvedValue(returnedRows);
+    const values = vi.fn((value) => {
+      insertValues.push(value);
+      return { returning };
+    });
+    const insert = vi.fn().mockReturnValue({ values });
+    return { insert, values, returning };
+  }
+
+  it('creates a legislative vote without linking or updating a bill', async () => {
+    const actor = { id: 'player-1' };
+    const insertedElection = { id: 'election-standalone' };
+    const actorSelect = makeSelectChain([actor]);
+    const insertValues: unknown[] = [];
+    const txInsert = makeInsertChain([insertedElection], insertValues);
+    const txUpdate = vi.fn();
+
+    const db: any = {
+      select: vi.fn().mockReturnValueOnce({ from: actorSelect.from }),
+      transaction: vi.fn(async (callback) => callback({
+        insert: txInsert.insert,
+        update: txUpdate,
+      })),
+    };
+
+    const result = await createStandaloneLegislativeVote(db, {
+      creatorDiscordId: 'discord-1',
+      title: 'Emergency Bridge Patrol Mandate',
+      description: null,
+      method: 'yea_nay_abstain',
+      majority: 'supermajority',
+      durationHours: 24,
+      useReactions: false,
+      now: baseDate,
+    });
+
+    expect(result.electionId).toBe(insertedElection.id);
+    expect(db.select).toHaveBeenCalledTimes(1);
+    expect(insertValues[0]).toMatchObject({
+      title: 'Emergency Bridge Patrol Mandate',
+      description: null,
+      type: 'legislative_vote',
+      method: 'yea_nay_abstain',
+      requiredPermission: 'legislative_leader',
+      relatedBillId: null,
+      createdById: actor.id,
+      status: 'voting_open',
+      useReactions: false,
+    });
+    expect(txUpdate).not.toHaveBeenCalled();
   });
 });

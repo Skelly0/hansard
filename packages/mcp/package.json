@@ -8,7 +8,9 @@
     "start": "tsx src/index.ts",
     "login": "tsx src/index.ts login",
     "logout": "tsx src/index.ts logout",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest",
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@hansard/api": "workspace:*",
@@ -22,6 +24,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.5"
   }
 }

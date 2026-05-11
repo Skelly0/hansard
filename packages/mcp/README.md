@@ -90,6 +90,7 @@ webapp and bot.
 | `list_votes` | List elections with filters. |
 | `get_vote` | One election + its candidates. |
 | `get_vote_results` | Tally / results for a closed election. |
+| `list_tickets` | List tickets visible to you with filters. |
 | `list_parties` | Parties with member counts and leaders. |
 | `get_party` | One party + full member roster. |
 | `list_offices` | All active offices + current holders. |

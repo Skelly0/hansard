@@ -67,6 +67,53 @@ function makeTallyDb(election: any, allBallotRows: any[], aliveBallotRows = allB
   };
 }
 
+function makeLegislativeTallyDb({
+  election,
+  aliveBallotRows,
+  npcHouseActive,
+}: {
+  election: any;
+  aliveBallotRows: any[];
+  npcHouseActive: boolean;
+}) {
+  const electionLimit = vi.fn().mockResolvedValue(election ? [election] : []);
+  const electionWhere = vi.fn().mockReturnValue({ limit: electionLimit });
+  const electionFrom = vi.fn().mockReturnValue({ where: electionWhere });
+
+  const aliveBallotWhere = vi.fn().mockResolvedValue(aliveBallotRows);
+  const innerJoin = vi.fn().mockReturnValue({ where: aliveBallotWhere });
+  const ballotFrom = vi.fn().mockReturnValue({ innerJoin });
+
+  const clockLimit = vi.fn().mockResolvedValue([{ npcHouseActive }]);
+  const clockFrom = vi.fn().mockReturnValue({ limit: clockLimit });
+
+  const updateValues: unknown[] = [];
+  const updateWhere = vi.fn().mockResolvedValue(undefined);
+  const set = vi.fn((value) => {
+    updateValues.push(value);
+    return { where: updateWhere };
+  });
+  const update = vi.fn().mockReturnValue({ set });
+
+  const statusLogValues: unknown[] = [];
+  const values = vi.fn((value) => {
+    statusLogValues.push(value);
+    return {};
+  });
+  const insert = vi.fn().mockReturnValue({ values });
+
+  const select = vi.fn()
+    .mockReturnValueOnce({ from: electionFrom })
+    .mockReturnValueOnce({ from: ballotFrom })
+    .mockReturnValueOnce({ from: clockFrom });
+
+  return {
+    db: { select, update, insert },
+    updateValues,
+    statusLogValues,
+  };
+}
+
 const validNpcElection = {
   id: 'election-1',
   title: 'Minister Appointment',
@@ -353,5 +400,85 @@ describe('VoteService dead voter tally handling', () => {
     });
     expect(legacyBallotWhere).not.toHaveBeenCalled();
     expect(aliveBallotWhere).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('VoteService legislative bill status updates', () => {
+  const castAt = new Date('2026-05-01T12:00:00.000Z');
+  const yeaBallot = {
+    id: 'ballot-yea',
+    electionId: 'election-1',
+    voterId: 'player-1',
+    vote: { type: 'yea_nay_abstain', choice: 'yea' },
+    castAt,
+  };
+  const nayBallot = {
+    id: 'ballot-nay',
+    electionId: 'election-1',
+    voterId: 'player-2',
+    vote: { type: 'yea_nay_abstain', choice: 'nay' },
+    castAt,
+  };
+
+  it('marks a linked bill player-passed when the NPC house is inactive', async () => {
+    const { db, updateValues, statusLogValues } = makeLegislativeTallyDb({
+      npcHouseActive: false,
+      aliveBallotRows: [yeaBallot, yeaBallot, nayBallot],
+      election: {
+        id: 'election-1',
+        type: 'legislative_vote',
+        relatedBillId: 'bill-1',
+        createdById: 'creator-player',
+        method: 'yea_nay_abstain',
+        status: 'voting_closed',
+        config: {},
+      },
+    });
+
+    await new VoteService(db as any).tallyVotes('election-1');
+
+    expect(updateValues[1]).toMatchObject({
+      status: 'player_passed',
+      playerVoteResult: 'passed',
+      npcVoteRequired: false,
+    });
+    expect(updateValues[1]).toHaveProperty('playerVoteAt');
+    expect(statusLogValues[0]).toMatchObject({
+      billId: 'bill-1',
+      fromStatus: 'voting',
+      toStatus: 'player_passed',
+      changedById: 'creator-player',
+    });
+  });
+
+  it('marks a linked bill NPC-pending when the NPC house is active', async () => {
+    const { db, updateValues, statusLogValues } = makeLegislativeTallyDb({
+      npcHouseActive: true,
+      aliveBallotRows: [yeaBallot, yeaBallot, nayBallot],
+      election: {
+        id: 'election-1',
+        type: 'legislative_vote',
+        relatedBillId: 'bill-1',
+        createdById: 'creator-player',
+        method: 'yea_nay_abstain',
+        status: 'voting_closed',
+        config: {},
+      },
+    });
+
+    await new VoteService(db as any).tallyVotes('election-1');
+
+    expect(updateValues[1]).toMatchObject({
+      status: 'npc_pending',
+      playerVoteResult: 'passed',
+      npcVoteRequired: true,
+      npcVote: { status: 'pending' },
+    });
+    expect(statusLogValues[0]).toMatchObject({
+      billId: 'bill-1',
+      fromStatus: 'voting',
+      toStatus: 'npc_pending',
+      changedById: 'creator-player',
+    });
   });
 });

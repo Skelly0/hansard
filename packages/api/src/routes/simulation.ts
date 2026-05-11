@@ -108,6 +108,7 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
         tickUnit?: string;
         seasonName?: string;
         isPaused?: boolean;
+        npcHouseActive?: boolean;
       };
 
       const clock = await simService.getClock(fastify.db);
@@ -120,6 +121,7 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
       if (body.tickUnit !== undefined) updates.tickUnit = body.tickUnit;
       if (body.seasonName !== undefined) updates.seasonName = body.seasonName;
       if (body.isPaused !== undefined) updates.isPaused = body.isPaused;
+      if (body.npcHouseActive !== undefined) updates.npcHouseActive = body.npcHouseActive;
 
       await fastify.db
         .update(simulationClock)

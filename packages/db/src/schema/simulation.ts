@@ -23,6 +23,7 @@ export const simulationClock = pgTable('simulation_clock', {
   // Season metadata
   seasonName: varchar('season_name', { length: 128 }).notNull(),
   isPaused: boolean('is_paused').default(false).notNull(),
+  npcHouseActive: boolean('npc_house_active').default(false).notNull(),
 
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),

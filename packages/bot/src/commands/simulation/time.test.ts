@@ -3,6 +3,7 @@ import command from './time.js';
 
 const mocks = vi.hoisted(() => ({
   select: vi.fn(),
+  update: vi.fn(),
   advanceTime: vi.fn(),
   previewAdvance: vi.fn(),
   postObituaryToGraveyard: vi.fn(),
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../db.js', () => ({
   db: {
     select: mocks.select,
+    update: mocks.update,
   },
 }));
 
@@ -27,6 +29,25 @@ function selectWhereResult(rows: unknown[]) {
   return {
     from: vi.fn().mockReturnValue({
       where: vi.fn().mockResolvedValue(rows),
+    }),
+  };
+}
+
+function selectLimitResult(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      limit: vi.fn().mockResolvedValue(rows),
+    }),
+  };
+}
+
+function updateWhereResult(updateValues: unknown[]) {
+  return {
+    set: vi.fn((value) => {
+      updateValues.push(value);
+      return {
+        where: vi.fn().mockResolvedValue(undefined),
+      };
     }),
   };
 }
@@ -78,5 +99,34 @@ describe('/time advance', () => {
       client: interaction.client,
       playerId: 'dead-player',
     }));
+  });
+});
+
+describe('/time npc-house', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('lets staff persist whether the NPC house is active', async () => {
+    const updateValues: unknown[] = [];
+    mocks.select.mockReturnValue(selectLimitResult([{ id: 'clock-1', npcHouseActive: false }]));
+    mocks.update.mockReturnValue(updateWhereResult(updateValues));
+
+    const interaction = {
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('npc-house'),
+        getBoolean: vi.fn().mockReturnValue(true),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    expect(updateValues[0]).toMatchObject({
+      npcHouseActive: true,
+    });
+    expect(updateValues[0]).toHaveProperty('updatedAt');
+    expect(interaction.editReply).toHaveBeenCalled();
   });
 });

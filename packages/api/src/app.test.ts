@@ -24,4 +24,17 @@ describe('buildApp route registration', () => {
       await app.close();
     }
   });
+
+  it('mounts message export routes in the full API app', async () => {
+    process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/hansard';
+    const app = await buildApp();
+
+    try {
+      const res = await app.inject('/api/messages/export');
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: 'Authentication required' });
+    } finally {
+      await app.close();
+    }
+  });
 });

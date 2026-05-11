@@ -18,6 +18,7 @@ import moderationRoutes from './routes/moderation.js';
 import votingRoutes from './routes/voting.js';
 import billRoutes from './routes/bills.js';
 import documentRoutes from './routes/documents.js';
+import messageExportRoutes from './routes/messageExports.js';
 
 const DEV_SESSION_SECRET = 'hansard-dev-secret-change-me-in-production';
 
@@ -105,6 +106,7 @@ export async function buildApp() {
   await fastify.register(votingRoutes);
   await fastify.register(billRoutes);
   await fastify.register(documentRoutes);
+  await fastify.register(messageExportRoutes);
 
   return fastify;
 }

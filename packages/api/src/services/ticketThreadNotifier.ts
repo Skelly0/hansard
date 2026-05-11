@@ -1,13 +1,14 @@
 /**
  * Best-effort mirror of ticket activity into the linked Discord thread.
  *
- * Posts via the bot REST API using `DISCORD_BOT_TOKEN`, so callers do not
- * need a discord.js client. Used by both the API (for web-driven ticket
- * actions) and the bot (for slash commands that bypass `TicketService`).
+ * Posts via the bot REST API using `TICKET_THREAD_MIRROR_BOT_TOKEN`, falling
+ * back to `DISCORD_BOT_TOKEN`, so callers do not need a discord.js client.
+ * Used by both the API (for web-driven ticket actions) and the bot (for slash
+ * commands that bypass `TicketService`).
  *
- * Silent no-op when:
+ * No-op when:
  *  - the ticket has no `discordThreadId`
- *  - `DISCORD_BOT_TOKEN` is unset (tests, local dev without a bot)
+ *  - no bot token is configured (warns once)
  *  - Discord returns a non-2xx (logged, never thrown — the DB write has
  *    already committed and the thread mirror is non-critical)
  *
@@ -17,6 +18,9 @@
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const MAX_MESSAGE_LENGTH = 2000;
+const TOKEN_ENV_VARS = 'TICKET_THREAD_MIRROR_BOT_TOKEN or DISCORD_BOT_TOKEN';
+
+let warnedMissingToken = false;
 
 export interface ThreadEmbedField {
   name: string;
@@ -40,8 +44,13 @@ export interface PostToTicketThreadOptions {
 
 export async function postToTicketThread(opts: PostToTicketThreadOptions): Promise<void> {
   if (!opts.threadId) return;
-  const token = process.env.DISCORD_BOT_TOKEN;
-  if (!token) return;
+  if (!opts.content && !opts.embeds?.length) return;
+
+  const token = getBotToken();
+  if (!token) {
+    warnMissingToken();
+    return;
+  }
 
   const chunks = opts.content ? splitForDiscord(opts.content) : [];
 
@@ -58,6 +67,16 @@ export async function postToTicketThread(opts: PostToTicketThreadOptions): Promi
       embeds: isLast ? opts.embeds : undefined,
     });
   }
+}
+
+function getBotToken(): string | undefined {
+  return process.env.TICKET_THREAD_MIRROR_BOT_TOKEN || process.env.DISCORD_BOT_TOKEN || undefined;
+}
+
+function warnMissingToken(): void {
+  if (warnedMissingToken) return;
+  warnedMissingToken = true;
+  console.warn(`postToTicketThread skipped: set ${TOKEN_ENV_VARS} to mirror ticket activity.`);
 }
 
 async function sendOne(

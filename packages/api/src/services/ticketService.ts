@@ -572,9 +572,15 @@ export class TicketService {
 
     const aLinks = ((a.linkedTicketIds ?? []) as string[]);
     const bLinks = ((b.linkedTicketIds ?? []) as string[]);
+    const aAlreadyLinked = aLinks.includes(otherTicketId);
+    const bAlreadyLinked = bLinks.includes(ticketId);
 
-    const newA = aLinks.includes(otherTicketId) ? aLinks : [...aLinks, otherTicketId];
-    const newB = bLinks.includes(ticketId) ? bLinks : [...bLinks, ticketId];
+    if (aAlreadyLinked && bAlreadyLinked) {
+      return a as unknown as Ticket;
+    }
+
+    const newA = aAlreadyLinked ? aLinks : [...aLinks, otherTicketId];
+    const newB = bAlreadyLinked ? bLinks : [...bLinks, ticketId];
 
     const now = new Date();
     await this.db.update(tickets).set({ linkedTicketIds: newA, updatedAt: now }).where(eq(tickets.id, ticketId));
@@ -612,8 +618,16 @@ export class TicketService {
     const [b] = await this.db.select().from(tickets).where(eq(tickets.id, otherTicketId)).limit(1);
     if (!b) return null;
 
-    const aLinks = ((a.linkedTicketIds ?? []) as string[]).filter((x) => x !== otherTicketId);
-    const bLinks = ((b.linkedTicketIds ?? []) as string[]).filter((x) => x !== ticketId);
+    const existingALinks = ((a.linkedTicketIds ?? []) as string[]);
+    const existingBLinks = ((b.linkedTicketIds ?? []) as string[]);
+    const hadLink = existingALinks.includes(otherTicketId) || existingBLinks.includes(ticketId);
+
+    if (!hadLink) {
+      return a as unknown as Ticket;
+    }
+
+    const aLinks = existingALinks.filter((x) => x !== otherTicketId);
+    const bLinks = existingBLinks.filter((x) => x !== ticketId);
 
     const now = new Date();
     await this.db.update(tickets).set({ linkedTicketIds: aLinks, updatedAt: now }).where(eq(tickets.id, ticketId));

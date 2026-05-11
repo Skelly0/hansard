@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   insert: vi.fn(),
   isStaff: vi.fn(),
   updateSet: null as Record<string, unknown> | null,
+  updateSets: [] as Record<string, unknown>[],
   insertValues: [] as Record<string, unknown>[],
 }));
 
@@ -54,6 +55,7 @@ vi.mock('../../utils/permissions.js', () => ({
 class UpdateQuery {
   set(values: Record<string, unknown>) {
     mocks.updateSet = values;
+    mocks.updateSets.push(values);
     return this;
   }
 
@@ -124,6 +126,7 @@ describe('/party', () => {
     mocks.rows = [];
     mocks.selectRows = [];
     mocks.updateSet = null;
+    mocks.updateSets = [];
     mocks.insertValues = [];
     mocks.isStaff.mockResolvedValue(true);
     mocks.select.mockImplementation(() => new Query(mocks.selectRows.shift() ?? mocks.rows));
@@ -178,7 +181,8 @@ describe('/party', () => {
 
     await partyCommand.execute(interaction);
 
-    expect(mocks.updateSet).toMatchObject({ partyId: 'party-new' });
+    expect(mocks.updateSets).toContainEqual(expect.objectContaining({ partyId: 'party-new' }));
+    expect(mocks.updateSets).toContainEqual({ leaderId: null });
     expect(mocks.insertValues[0]).toMatchObject({
       playerId: 'target-player',
       eventType: 'party_change',
@@ -189,5 +193,42 @@ describe('/party', () => {
     expect(interaction.guild.members.fetch).toHaveBeenCalledWith('target-discord');
     expect(interaction.targetMember.roles.remove).toHaveBeenCalledWith('role-old');
     expect(interaction.targetMember.roles.add).toHaveBeenCalledWith('role-new');
+  });
+
+  it('clears the old party leader when leaving your party', async () => {
+    const interaction = {
+      deferReply: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      user: { id: 'player-discord', toString: () => '<@player-discord>' },
+      guild: {
+        members: {
+          cache: new Map([
+            ['player-discord', { roles: { remove: vi.fn().mockResolvedValue(undefined) } }],
+          ]),
+        },
+      },
+      options: {
+        getSubcommand: vi.fn(() => 'leave'),
+      },
+    } as any;
+
+    mocks.selectRows = [
+      [{
+        id: 'player-1',
+        discordId: 'player-discord',
+        characterName: 'Ada Vance',
+        partyId: 'party-old',
+      }],
+      [{ name: 'Old Party', discordRoleId: 'role-old' }],
+    ];
+
+    await partyCommand.execute(interaction);
+
+    expect(mocks.updateSets).toContainEqual(expect.objectContaining({ partyId: null }));
+    expect(mocks.updateSets).toContainEqual({ leaderId: null });
+    expect(mocks.insertValues[0]).toMatchObject({
+      oldValue: { partyId: 'party-old', partyName: 'Old Party' },
+      newValue: { partyId: null, partyName: 'Independent' },
+    });
   });
 });

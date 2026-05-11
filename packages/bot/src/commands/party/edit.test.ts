@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   select: vi.fn(),
   update: vi.fn(),
   isStaff: vi.fn(),
+  refreshPartyJoinMessage: vi.fn(),
   updateSet: null as Record<string, unknown> | null,
   updatedParty: {
     id: 'party-new',
@@ -36,6 +37,10 @@ vi.mock('../../db.js', () => ({
 
 vi.mock('../../utils/permissions.js', () => ({
   isStaff: mocks.isStaff,
+}));
+
+vi.mock('../../utils/partyJoinMessage.js', () => ({
+  refreshPartyJoinMessage: mocks.refreshPartyJoinMessage,
 }));
 
 import editPartyCommand from './edit';
@@ -104,6 +109,7 @@ function fakeInteraction(overrides: Record<string, unknown> = {}) {
   };
 
   return {
+    client: { user: { id: 'bot-user' } },
     deferReply: vi.fn().mockResolvedValue(undefined),
     editReply: vi.fn().mockResolvedValue(undefined),
     member: { roles: { cache: new Map() } },
@@ -123,6 +129,7 @@ describe('/party-edit', () => {
     mocks.selectRows = [];
     mocks.updateSet = null;
     mocks.isStaff.mockResolvedValue(true);
+    mocks.refreshPartyJoinMessage.mockResolvedValue({ id: 'join-board' });
     mocks.select.mockImplementation(() => new Query(mocks.selectRows.shift() ?? []));
     mocks.update.mockReturnValue(new UpdateQuery());
   });
@@ -175,5 +182,41 @@ describe('/party-edit', () => {
     await editPartyCommand.execute(interaction);
 
     expect(mocks.updateSet).toMatchObject({ leaderId: null });
+  });
+
+  it('refreshes the join board after editing a board-visible field', async () => {
+    const interaction = fakeInteraction({
+      options: {
+        getString: vi.fn((name: string) => {
+          if (name === 'party') return 'New Horizon';
+          if (name === 'name') return 'Aurora Accord';
+          return null;
+        }),
+        getRole: vi.fn(() => null),
+        getBoolean: vi.fn(() => null),
+        getUser: vi.fn(() => null),
+      },
+    });
+    mocks.selectRows = [[{ id: 'party-new', name: 'New Horizon', shortName: 'NH' }]];
+
+    await editPartyCommand.execute(interaction);
+
+    expect(mocks.refreshPartyJoinMessage).toHaveBeenCalledWith(interaction.client);
+  });
+
+  it('does not refresh the join board after editing a non-board field', async () => {
+    const interaction = fakeInteraction({
+      options: {
+        getString: vi.fn((name: string) => (name === 'party' ? 'New Horizon' : null)),
+        getRole: vi.fn(() => ({ id: 'role-new' })),
+        getBoolean: vi.fn(() => null),
+        getUser: vi.fn(() => null),
+      },
+    });
+    mocks.selectRows = [[{ id: 'party-new', name: 'New Horizon', shortName: 'NH' }]];
+
+    await editPartyCommand.execute(interaction);
+
+    expect(mocks.refreshPartyJoinMessage).not.toHaveBeenCalled();
   });
 });

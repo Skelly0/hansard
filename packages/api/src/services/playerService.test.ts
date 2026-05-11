@@ -318,10 +318,12 @@ describe('createCharacter starting favours', () => {
       shortName: null,
       isActive: true,
     }],
+    clockRows = [{ currentDate: '1910-01-01' }],
     insertedPlayer = makePlayerRow({ startingFavoursGranted: false }),
     updatedPlayer = makePlayerRow({ startingFavoursGranted: true }),
   }: {
     categories?: any[];
+    clockRows?: any[];
     insertedPlayer?: any;
     updatedPlayer?: any;
   } = {}) {
@@ -367,7 +369,7 @@ describe('createCharacter starting favours', () => {
     const select = vi.fn()
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue([{ currentDate: '1910-01-01' }]),
+          limit: vi.fn().mockResolvedValue(clockRows),
         }),
       })
       .mockReturnValueOnce({
@@ -463,6 +465,32 @@ describe('createCharacter starting favours', () => {
     expect(db._updateSet).not.toHaveBeenCalled();
     expect(db._balanceValues).not.toHaveBeenCalled();
     expect(db._transactionValues).not.toHaveBeenCalled();
+  });
+
+  it('anchors birthDate to 2075 when the simulation clock is missing', async () => {
+    const db = makeCreateCharacterDb({
+      clockRows: [],
+      insertedPlayer: makePlayerRow({
+        startingAge: 30,
+        currentAge: 30,
+        birthDate: '2045-01-01',
+        factionId: null,
+        startingFavoursGranted: false,
+      }),
+    });
+
+    await createCharacter(db, {
+      discordId: '123456',
+      discordUsername: 'alice',
+      characterName: 'Lady Alice',
+      startingAge: 30,
+    });
+
+    expect(db._playerValues).toHaveBeenCalledWith(expect.objectContaining({
+      startingAge: 30,
+      currentAge: 30,
+      birthDate: '2045-01-01',
+    }));
   });
 });
 

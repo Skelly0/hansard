@@ -3,6 +3,8 @@
 // simulation's date arithmetic and age computation.
 // ============================================================
 
+import { DEFAULT_SIMULATION_CURRENT_DATE } from '../constants/config.js';
+
 export type SimDateFormat = 'iso' | 'freeform';
 
 export interface ParsedSimDate {
@@ -134,10 +136,9 @@ export function calculateAge(birthDate: string | null, currentDate: string | nul
 export function birthDateForAge(currentDate: string, ageYears: number): string {
   const parsed = parseSimDate(currentDate);
   if (!parsed) {
-    // Fallback: use the wall-clock year if the sim clock holds an
-    // unparseable string. Shouldn't happen in practice.
-    const wallYear = new Date().getUTCFullYear();
-    return `${wallYear - ageYears}-01-01`;
+    // Fallback to the canonical season date. Shouldn't happen in practice;
+    // callers should pass the simulation clock's currentDate.
+    return birthDateForAge(DEFAULT_SIMULATION_CURRENT_DATE, ageYears);
   }
 
   const birthYear = parsed.year - ageYears;

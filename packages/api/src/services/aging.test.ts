@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseSimDate,
   calculateAge,
@@ -58,6 +58,17 @@ describe('birthDateForAge', () => {
 
   it('anchors birthDate to freeform sim date', () => {
     expect(birthDateForAge('Year 10, Month 4', 30)).toBe('Year -20, Month 1');
+  });
+
+  it('falls back to the 2075 season date instead of wall-clock time', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-11T12:00:00.000Z'));
+
+    try {
+      expect(birthDateForAge('not configured yet', 30)).toBe('2045-01-01');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

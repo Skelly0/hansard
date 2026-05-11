@@ -226,11 +226,10 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     return;
   }
 
-  // Quiet success — confirm in DM so the user knows it landed. Their reaction
-  // stays on the public vote message.
+  // Quiet success — confirm in DM so the user knows it landed.
   await notifyByDm(
     user,
-    `Your **${voteLabel}** vote on **${election.title}** has been recorded. Your reaction remains visible on the public vote message.`,
+    `Your **${voteLabel}** vote on **${election.title}** has been recorded.`,
   );
 }
 

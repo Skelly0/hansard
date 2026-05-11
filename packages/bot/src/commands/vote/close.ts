@@ -149,7 +149,7 @@ const command: Command = {
  * and FPTP the math is trivial enough to do inline; richer methods that
  * could ever support reaction mode would need a different path.
  */
-async function renderReactionResult(election: typeof elections.$inferSelect): Promise<void> {
+export async function renderReactionResult(election: typeof elections.$inferSelect): Promise<void> {
   if (!election.discordMessageId || !election.discordChannelId) return;
 
   // Fetch ballots

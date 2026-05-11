@@ -1,5 +1,10 @@
 import { Events, type Client } from 'discord.js';
 import { commands } from '../client.js';
+import { db } from '../db.js';
+import { renderReactionResult } from '../commands/vote/close.js';
+import { startVoteAutoCloseWorker } from '../services/voteAutoClose.js';
+
+let voteAutoCloseWorker: NodeJS.Timeout | null = null;
 
 export function registerReadyEvent(client: Client): void {
   client.once(Events.ClientReady, async (readyClient) => {
@@ -16,6 +21,14 @@ export function registerReadyEvent(client: Client): void {
       } catch (err) {
         console.error(`Failed to register commands in ${guild.name}:`, err);
       }
+    }
+
+    if (!voteAutoCloseWorker) {
+      voteAutoCloseWorker = startVoteAutoCloseWorker(db, {
+        renderReactionResult,
+        logger: console,
+      });
+      console.log('Vote auto-close worker started');
     }
   });
 }

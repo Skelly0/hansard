@@ -24,3 +24,16 @@ export function meetsVoteThreshold(
   const normalizedThreshold = normalizePassThreshold(threshold);
   return affirmativeVotes / countedVotes + THRESHOLD_EPSILON >= normalizedThreshold;
 }
+
+export function hasVotingCloseTimePassed(
+  votingClosesAt: Date | string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!votingClosesAt) return false;
+
+  const closeTime = votingClosesAt instanceof Date
+    ? votingClosesAt.getTime()
+    : new Date(votingClosesAt).getTime();
+
+  return Number.isFinite(closeTime) && closeTime <= now.getTime();
+}

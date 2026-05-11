@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VoteService } from './voteService';
 
 function makeNpcConfirmDb(election: any, updated = { id: 'election-1', status: 'tallied' }) {
@@ -213,6 +213,43 @@ describe('VoteService.getTurnout privacy', () => {
 });
 
 describe('VoteService character registration guards', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not allow votes after the scheduled close time even if the status is still open', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-11T12:00:00.000Z'));
+
+    const select = vi.fn()
+      .mockReturnValueOnce(selectLimit([{
+        id: 'election-1',
+        status: 'voting_open',
+        votingClosesAt: new Date('2026-05-11T11:59:59.000Z'),
+        config: {},
+        createdById: 'creator-player',
+      }]))
+      .mockReturnValueOnce(selectLimit([{
+        id: 'alive-player',
+        characterName: 'Ada Vance',
+        factionId: null,
+        partyId: null,
+        isAlive: true,
+      }]))
+      .mockReturnValueOnce(selectLimit([]));
+
+    const result = await new VoteService({ select } as any).getEligibility(
+      'election-1',
+      'alive-player',
+    );
+
+    expect(result).toEqual({
+      eligible: false,
+      reason: 'Voting has closed',
+    });
+    expect(select).toHaveBeenCalledTimes(1);
+  });
+
   it('does not allow OAuth-only rows to vote by default', async () => {
     const select = vi.fn()
       .mockReturnValueOnce(selectLimit([{

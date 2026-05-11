@@ -18,7 +18,7 @@ import type {
   ElectionType,
   ElectionStatus,
 } from '@hansard/shared';
-import { DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
+import { DEFAULT_VOTE_DURATION_MS, hasVotingCloseTimePassed } from '@hansard/shared';
 import { getStrategy } from './tallying/index.js';
 import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
 import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
@@ -150,6 +150,9 @@ export class VoteService {
   ): Promise<{ eligible: boolean; reason?: string }> {
     if (election.status !== 'voting_open') {
       return { eligible: false, reason: 'Voting is not open' };
+    }
+    if (hasVotingCloseTimePassed(election.votingClosesAt)) {
+      return { eligible: false, reason: 'Voting has closed' };
     }
 
     const [player] = await this.db
@@ -686,6 +689,9 @@ export class VoteService {
 
     if (election.status !== 'voting_open') {
       throw new Error('Voting is not open');
+    }
+    if (hasVotingCloseTimePassed(election.votingClosesAt)) {
+      throw new Error('Voting has closed');
     }
 
     // Validate ballot format against the election method

@@ -4,6 +4,7 @@ import {
 } from 'discord.js';
 import { and, eq } from 'drizzle-orm';
 import { ballots, players } from '@hansard/db';
+import { hasVotingCloseTimePassed } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
@@ -14,8 +15,8 @@ import { findElectionByReference } from './_electionReference.js';
  * /vote-eligibility election:<title-or-id> — invoking player checks if they can vote.
  *
  * Mirrors VoteService.getEligibility. Looks up the player by Discord ID,
- * checks election status, ensures they haven't voted yet, and (best-effort)
- * checks faction/party constraints from config.
+ * checks election status/window, ensures they haven't voted yet, and
+ * (best-effort) checks faction/party constraints from config.
  *
  * Public response (so the player can show staff if disputed) but ephemeral
  * to avoid spamming the channel.
@@ -71,6 +72,10 @@ const command: Command = {
     if (election.status !== 'voting_open') {
       eligible = false;
       reasons.push(`Voting is not open (status: \`${election.status}\`).`);
+    }
+    if (eligible && hasVotingCloseTimePassed(election.votingClosesAt)) {
+      eligible = false;
+      reasons.push('Voting has closed.');
     }
 
     if (eligible && player.isAlive === false) {

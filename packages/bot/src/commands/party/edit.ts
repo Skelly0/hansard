@@ -4,7 +4,10 @@ import { parties, players } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { refreshPartyJoinMessage } from '../../utils/partyJoinMessage.js';
 import type { Command } from '../../client.js';
+
+const PARTY_JOIN_BOARD_FIELDS = new Set(['name', 'shortName', 'ideology', 'colour', 'isActive', 'isInviteOnly']);
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -150,6 +153,14 @@ const command: Command = {
         .set(updates)
         .where(eq(parties.id, target.id))
         .returning();
+
+      if (Object.keys(updates).some((field) => PARTY_JOIN_BOARD_FIELDS.has(field))) {
+        try {
+          await refreshPartyJoinMessage(interaction.client);
+        } catch (error) {
+          console.warn(`[party-edit] failed to refresh party join board after editing ${updated.id}:`, error);
+        }
+      }
 
       const changed = Object.keys(updates).join(', ');
       await interaction.editReply({

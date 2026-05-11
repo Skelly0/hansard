@@ -312,6 +312,22 @@ async function withPartyJoinLock<T>(userId: string, task: () => Promise<T>): Pro
   }
 }
 
+async function clearPartyLeaderIfMatches(
+  tx: Pick<typeof db, 'update'>,
+  partyId: string | null,
+  playerId: string,
+): Promise<void> {
+  if (!partyId) return;
+
+  await tx
+    .update(parties)
+    .set({ leaderId: null })
+    .where(and(
+      eq(parties.id, partyId),
+      eq(parties.leaderId, playerId),
+    ));
+}
+
 export async function postPartyJoinMessage(
   client: Client,
   channelId = resolvePartyJoinChannelId(),
@@ -448,6 +464,8 @@ export async function handlePartyJoinReaction(reaction: ReactionInput, user: Use
           lastActiveAt: new Date(),
         })
         .where(eq(players.id, player.id));
+
+      await clearPartyLeaderIfMatches(tx, player.partyId, player.id);
 
       await tx.insert(playerEventLog).values({
         playerId: player.id,

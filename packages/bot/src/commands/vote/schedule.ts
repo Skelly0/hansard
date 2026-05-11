@@ -72,7 +72,6 @@ const command: Command = {
           { name: 'Confidence Vote', value: 'confidence_vote' },
           { name: 'Party Primary', value: 'party_primary' },
           { name: 'Custom Vote', value: 'custom' },
-          { name: 'Legislative Vote (Chancellor)', value: 'legislative_vote' },
           { name: 'Position Election (Chancellor)', value: 'position_election' },
           { name: 'Appointment Confirmation (Chancellor)', value: 'appointment_confirmation' },
           { name: 'General Election', value: 'general_election' },
@@ -157,6 +156,17 @@ const command: Command = {
     const durationHours = interaction.options.getNumber('duration-hours') ?? DEFAULT_VOTE_DURATION_HOURS;
     const description = interaction.options.getString('description')?.trim() || null;
     const majority = interaction.options.getString('majority') ?? 'simple';
+
+    if (electionType === 'legislative_vote') {
+      await interaction.editReply({
+        embeds: [
+          errorEmbed(
+            'Legislative bill votes cannot be scheduled with `/vote schedule`. Use `/vote create type:legislative_vote` so the vote links to a bill and updates bill status correctly.',
+          ),
+        ],
+      });
+      return;
+    }
 
     // Belt-and-braces: re-enforce the chancellor-only policy from create.ts.
     // `hasPermission('voting.create')` already gates this today, but if that

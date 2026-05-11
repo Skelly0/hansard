@@ -3,13 +3,25 @@ import {
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, parties, factions, playerEventLog } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 import { autocompleteParty } from './_partyAutocomplete.js';
+
+async function clearPartyLeaderIfMatches(partyId: string | null, playerId: string): Promise<void> {
+  if (!partyId) return;
+
+  await db
+    .update(parties)
+    .set({ leaderId: null })
+    .where(and(
+      eq(parties.id, partyId),
+      eq(parties.leaderId, playerId),
+    ));
+}
 
 async function handleJoin(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
@@ -97,6 +109,8 @@ async function handleJoin(interaction: ChatInputCommandInteraction): Promise<voi
       lastActiveAt: new Date(),
     })
     .where(eq(players.id, player.id));
+
+  await clearPartyLeaderIfMatches(player.partyId, player.id);
 
   // Log the event
   await db.insert(playerEventLog).values({
@@ -194,6 +208,8 @@ async function handleLeave(interaction: ChatInputCommandInteraction): Promise<vo
       lastActiveAt: new Date(),
     })
     .where(eq(players.id, player.id));
+
+  await clearPartyLeaderIfMatches(player.partyId, player.id);
 
   // Log the event
   await db.insert(playerEventLog).values({
@@ -304,6 +320,8 @@ async function handleAssign(interaction: ChatInputCommandInteraction): Promise<v
     .update(players)
     .set({ partyId: targetParty.id })
     .where(eq(players.id, targetPlayer.id));
+
+  await clearPartyLeaderIfMatches(targetPlayer.partyId, targetPlayer.id);
 
   await db.insert(playerEventLog).values({
     playerId: targetPlayer.id,

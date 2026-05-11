@@ -1,4 +1,5 @@
 import {
+  PermissionFlagsBits,
   SlashCommandBuilder,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
@@ -22,7 +23,8 @@ const MEDALS = ['\u{1F947}', '\u{1F948}', '\u{1F949}'];
 const command: Command = {
   data: new SlashCommandBuilder()
     .setName('favour-leaderboard')
-    .setDescription('Top favour holders — overall, or per category')
+    .setDescription('Top favour holders (staff only) — overall, or per category')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption((opt) =>
       opt
         .setName('category')

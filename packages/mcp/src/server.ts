@@ -51,7 +51,7 @@ export async function runServer(): Promise<void> {
       capabilities: { tools: {} },
       instructions:
         'Read-only access to the Hansard DPS season. Use these tools to look up players, ' +
-        'bills, votes, parties, offices, the simulation clock, favour balances, and documents. ' +
+        'bills, votes, tickets, parties, offices, the simulation clock, favour balances, and documents. ' +
         'No mutations are exposed in this version.',
     },
   );

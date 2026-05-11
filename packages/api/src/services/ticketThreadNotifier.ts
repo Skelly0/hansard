@@ -19,6 +19,7 @@
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const MAX_MESSAGE_LENGTH = 2000;
 const TOKEN_ENV_VARS = 'TICKET_THREAD_MIRROR_BOT_TOKEN or DISCORD_BOT_TOKEN';
+const SUPPRESSED_ALLOWED_MENTIONS = { parse: [] } as const;
 
 let warnedMissingToken = false;
 
@@ -91,7 +92,7 @@ async function sendOne(
         Authorization: `Bot ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, allowed_mentions: SUPPRESSED_ALLOWED_MENTIONS }),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');

@@ -39,11 +39,17 @@ import { handlePartyJoinReaction } from '../utils/partyJoinMessage.js';
  * that no command awaits. We can act freely.
  *
  * Errors are reported by DM to the reacting user where useful; we never reply
- * in the channel and we do not remove reactions from the vote message.
+ * in the channel and we do not remove reactions from the vote message. Success
+ * confirmation DMs can be enabled with REACTION_VOTE_CONFIRMATION_DMS=true.
  */
 
 type ReactionInput = MessageReaction | PartialMessageReaction;
 type UserInput = User | PartialUser;
+
+function shouldSendReactionVoteConfirmationDm(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.REACTION_VOTE_CONFIRMATION_DMS?.trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(value ?? '');
+}
 
 async function notifyByDm(user: UserInput, message: string): Promise<void> {
   try {
@@ -226,11 +232,13 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     return;
   }
 
-  // Quiet success — confirm in DM so the user knows it landed.
-  await notifyByDm(
-    user,
-    `Your **${voteLabel}** vote on **${election.title}** has been recorded.`,
-  );
+  // Quiet success — opt-in confirmation DM for servers that want it.
+  if (shouldSendReactionVoteConfirmationDm()) {
+    await notifyByDm(
+      user,
+      `Your **${voteLabel}** vote on **${election.title}** has been recorded.`,
+    );
+  }
 }
 
 export function registerMessageReactionAddEvent(client: Client): void {

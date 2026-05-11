@@ -25,7 +25,7 @@ import {
   playerEventLog,
   simulationClock,
 } from '@hansard/db';
-import { birthDateForAge } from '@hansard/shared';
+import { DEFAULT_SIMULATION_CURRENT_DATE, birthDateForAge } from '@hansard/shared';
 import { calculateStartingAgeFavourBonus } from '@hansard/api/services/playerService';
 import {
   grantStartingFactionFavours,
@@ -493,7 +493,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       .limit(1);
 
     const [clock] = await db.select().from(simulationClock).limit(1);
-    const simNow = clock?.currentDate ?? `${new Date().getUTCFullYear()}-01-01`;
+    const simNow = clock?.currentDate ?? DEFAULT_SIMULATION_CURRENT_DATE;
     const birthDate = birthDateForAge(simNow, startingAge);
 
     const creationResult = await db.transaction(async (tx) => {

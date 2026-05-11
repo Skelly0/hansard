@@ -17,7 +17,7 @@ import type {
   Ailment,
   ElectionConfig,
 } from '@hansard/shared';
-import { PlayerEventType, birthDateForAge } from '@hansard/shared';
+import { DEFAULT_SIMULATION_CURRENT_DATE, PlayerEventType, birthDateForAge } from '@hansard/shared';
 import { grantStartingFactionFavours } from './favourService.js';
 
 // ============================================================
@@ -139,9 +139,9 @@ export function calculateStartingAgeFavourBonus(age: number): number {
  */
 export async function createCharacter(db: Database, data: CreateCharacterInput): Promise<PlayerProfile> {
   // Anchor birthDate to the simulation clock's current date, not wall-clock time.
-  // Falls back to wall-clock year if the sim clock isn't initialised.
+  // Falls back to the 2075 season date if the sim clock isn't initialised.
   const [clock] = await db.select().from(simulationClock).limit(1);
-  const simNow = clock?.currentDate ?? `${new Date().getUTCFullYear()}-01-01`;
+  const simNow = clock?.currentDate ?? DEFAULT_SIMULATION_CURRENT_DATE;
   const birthDate = birthDateForAge(simNow, data.startingAge);
 
   const favourBonus = calculateStartingAgeFavourBonus(data.startingAge);

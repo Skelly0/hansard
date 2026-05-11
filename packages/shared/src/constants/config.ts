@@ -9,6 +9,9 @@ export const DEFAULT_BOT_NAME = 'Hansard';
 export const DEFAULT_VOTE_DURATION_HOURS = 24;
 export const DEFAULT_VOTE_DURATION_MS = DEFAULT_VOTE_DURATION_HOURS * 60 * 60 * 1000;
 
+/** Canonical season date used before a simulation clock row exists */
+export const DEFAULT_SIMULATION_CURRENT_DATE = '2075-01-01';
+
 /** Canonical supermajority threshold: exactly two-thirds of yea+nay votes */
 export const SUPERMAJORITY_PASS_THRESHOLD = 2 / 3;
 

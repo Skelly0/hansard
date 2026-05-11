@@ -31,10 +31,10 @@ import type { Command } from '../../client.js';
  *   later this guard preserves the create.ts policy.
  *
  * Why no auto-flip worker:
- * - The codebase has no scheduler/cron loop for elections. Drafts are flipped
- *   manually via `/vote-open`. This command therefore *records* the intended
- *   open time so the schedule is visible in `/vote-list`, but doesn't promise
- *   automatic activation. The embed makes that explicit.
+ * - The codebase has no auto-open worker for scheduled drafts. Drafts are
+ *   flipped manually via `/vote-open`. This command therefore *records* the
+ *   intended open time so the schedule is visible in `/vote-list`, but doesn't
+ *   promise automatic activation. The embed makes that explicit.
  *
  * Why no modal (unlike /vote create):
  * - A modal would need its own handler registered in events/interactionCreate.ts

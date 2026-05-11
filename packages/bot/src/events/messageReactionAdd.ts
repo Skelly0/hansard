@@ -9,6 +9,7 @@ import {
 import { and, eq } from 'drizzle-orm';
 import { ballots, candidates, elections, players } from '@hansard/db';
 import {
+  hasVotingCloseTimePassed,
   REACTION_CANDIDATE_EMOJIS,
   REACTION_EMOJI,
   REACTION_FPTP_MAX_CANDIDATES,
@@ -27,7 +28,7 @@ import { handlePartyJoinReaction } from '../utils/partyJoinMessage.js';
  *   1. Resolve player by Discord ID (require existing /character — we do NOT
  *      auto-create here: people may react out of curiosity).
  *   2. Map the emoji to a ballot value (yea/nay/abstain or candidate by index).
- *   3. Run eligibility checks (status==voting_open, faction/party filters).
+ *   3. Run eligibility checks (status/window open, faction/party filters).
  *   4. Atomically replace the existing ballot (delete + insert in a transaction)
  *      — reaction mode is public voting where changing your mind is
  *      part of the design.
@@ -100,6 +101,13 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
   }
 
   if (election.status !== 'voting_open') {
+    await notifyByDm(
+      user,
+      `Your reaction on **${election.title}** was not recorded — voting is closed.`,
+    );
+    return;
+  }
+  if (hasVotingCloseTimePassed(election.votingClosesAt)) {
     await notifyByDm(
       user,
       `Your reaction on **${election.title}** was not recorded — voting is closed.`,

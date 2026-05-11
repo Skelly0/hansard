@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Events } from 'discord.js';
-import { REACTION_CANDIDATE_EMOJIS } from '@hansard/shared';
+import { REACTION_CANDIDATE_EMOJIS, REACTION_EMOJI } from '@hansard/shared';
 
 const mocks = vi.hoisted(() => ({
   db: {
@@ -82,6 +82,53 @@ describe('MessageReactionAdd reaction voting', () => {
       values: mocks.insertValues.mockResolvedValue(undefined),
     });
     mocks.db.transaction.mockImplementation(async (fn: (tx: typeof mocks.tx) => Promise<void>) => fn(mocks.tx));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not record reaction ballots after the scheduled close time', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-11T12:00:00.000Z'));
+
+    mocks.db.select
+      .mockReturnValueOnce(selectLimit([{
+        id: 'election-1',
+        title: 'Bridge Security Act',
+        method: 'yea_nay_abstain',
+        status: 'voting_open',
+        votingClosesAt: new Date('2026-05-11T11:59:59.000Z'),
+        useReactions: true,
+        config: {},
+      }]));
+
+    let listener: ((reaction: unknown, user: unknown) => Promise<void>) | undefined;
+    registerMessageReactionAddEvent({
+      on: vi.fn((event, callback) => {
+        if (event === Events.MessageReactionAdd) listener = callback;
+      }),
+    } as any);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    await listener!(
+      {
+        partial: false,
+        message: { id: 'message-1' },
+        emoji: { name: REACTION_EMOJI.YEA },
+      },
+      {
+        id: 'discord-user-1',
+        bot: false,
+        partial: false,
+        send,
+      },
+    );
+
+    expect(mocks.insertValues).not.toHaveBeenCalled();
+    expect(mocks.db.transaction).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.stringContaining('voting is closed'));
   });
 
   it('records FPTP reaction ballots using candidate player IDs without sending success DMs by default', async () => {

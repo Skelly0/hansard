@@ -1,10 +1,13 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
-import { eq, asc } from 'drizzle-orm';
-import { parties } from '@hansard/db';
+import { and, asc, eq, isNotNull } from 'drizzle-orm';
+import { parties, players } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { refreshPartyJoinMessage } from '../../utils/partyJoinMessage.js';
 import type { Command } from '../../client.js';
+
+const PARTY_JOIN_BOARD_FIELDS = new Set(['name', 'shortName', 'ideology', 'colour', 'isActive', 'isInviteOnly']);
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -27,6 +30,12 @@ const command: Command = {
     )
     .addRoleOption((opt) =>
       opt.setName('discord-role').setDescription('New Discord role (omit + role-clear:true to remove)').setRequired(false),
+    )
+    .addUserOption((opt) =>
+      opt.setName('leader').setDescription('Set the party leader to an active party member').setRequired(false),
+    )
+    .addBooleanOption((opt) =>
+      opt.setName('leader-clear').setDescription('Clear the party leader').setRequired(false),
     )
     .addBooleanOption((opt) =>
       opt.setName('role-clear').setDescription('Clear the mapped Discord role').setRequired(false),
@@ -93,6 +102,37 @@ const command: Command = {
     if (discordRole) updates.discordRoleId = discordRole.id;
     else if (roleClear) updates.discordRoleId = null;
 
+    const leaderUser = interaction.options.getUser('leader');
+    const leaderClear = interaction.options.getBoolean('leader-clear');
+    if (leaderUser && leaderClear) {
+      await interaction.editReply({ embeds: [errorEmbed('Choose either a leader or `leader-clear`, not both.')] });
+      return;
+    }
+    if (leaderUser) {
+      const [leader] = await db
+        .select({ id: players.id, characterName: players.characterName })
+        .from(players)
+        .where(and(
+          eq(players.discordId, leaderUser.id),
+          eq(players.partyId, target.id),
+          eq(players.isActive, true),
+          eq(players.isAlive, true),
+          isNotNull(players.characterName),
+        ))
+        .limit(1);
+
+      if (!leader) {
+        await interaction.editReply({
+          embeds: [errorEmbed(`Leader must be an active member of ${target.name} with a living character.`)],
+        });
+        return;
+      }
+
+      updates.leaderId = leader.id;
+    } else if (leaderClear) {
+      updates.leaderId = null;
+    }
+
     const active = interaction.options.getBoolean('active');
     if (active !== null) {
       updates.isActive = active;
@@ -113,6 +153,14 @@ const command: Command = {
         .set(updates)
         .where(eq(parties.id, target.id))
         .returning();
+
+      if (Object.keys(updates).some((field) => PARTY_JOIN_BOARD_FIELDS.has(field))) {
+        try {
+          await refreshPartyJoinMessage(interaction.client);
+        } catch (error) {
+          console.warn(`[party-edit] failed to refresh party join board after editing ${updated.id}:`, error);
+        }
+      }
 
       const changed = Object.keys(updates).join(', ');
       await interaction.editReply({

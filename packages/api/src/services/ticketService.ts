@@ -40,7 +40,7 @@ export interface UpdateTicketData {
   tags?: string[];
   title?: string;
   description?: string;
-  discordThreadId?: string;
+  discordThreadId?: string | null;
 }
 
 export interface ListTicketsFilters {

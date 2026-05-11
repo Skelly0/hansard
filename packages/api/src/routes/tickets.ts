@@ -4,7 +4,7 @@ import { requireStaff } from '../middleware/requireStaff.js';
 import { TicketService } from '../services/ticketService.js';
 import '../plugins/db.js'; // augments FastifyInstance with .db
 import type { TicketStatus, TicketPriority } from '@hansard/shared';
-import type { TicketAccessContext } from '../services/ticketService.js';
+import type { TicketAccessContext, UpdateTicketData } from '../services/ticketService.js';
 
 /**
  * Ticket routes plugin.
@@ -192,13 +192,14 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       tags?: string[];
       title?: string;
       description?: string;
+      discordThreadId?: string | null;
     };
   }>(
     '/api/tickets/:id',
     { preHandler: [requireAuth] },
     async (request, reply) => {
       const user = getSessionActor(request);
-      const body = request.body;
+      const body = request.body ?? {};
 
       const ticket = await ticketService.getTicket(request.params.id, getViewerFromActor(user));
       if (!ticket) {
@@ -208,15 +209,18 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       const isStaff = user.isStaff;
       const isCreator = ticket.createdById === user.id;
 
-      // status / priority / assignedToId are staff-only
+      // status / priority / assignedToId / thread mirror target are staff-only
+      const wantsDiscordThreadEdit =
+        Object.prototype.hasOwnProperty.call(body, 'discordThreadId');
       const wantsStaffOnly =
         body.status !== undefined ||
         body.priority !== undefined ||
         body.assignedToId !== undefined ||
-        body.tags !== undefined;
+        body.tags !== undefined ||
+        wantsDiscordThreadEdit;
       if (wantsStaffOnly && !isStaff) {
         return reply.status(403).send({
-          error: 'Only staff can change status, priority, assignee, or tags',
+          error: 'Only staff can change status, priority, assignee, tags, or Discord thread',
         });
       }
 
@@ -229,9 +233,18 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         });
       }
 
+      const updates: UpdateTicketData = {};
+      if (body.status !== undefined) updates.status = body.status;
+      if (body.priority !== undefined) updates.priority = body.priority;
+      if (body.assignedToId !== undefined) updates.assignedToId = body.assignedToId;
+      if (body.tags !== undefined) updates.tags = body.tags;
+      if (body.title !== undefined) updates.title = body.title;
+      if (body.description !== undefined) updates.description = body.description;
+      if (wantsDiscordThreadEdit) updates.discordThreadId = body.discordThreadId ?? null;
+
       const updated = await ticketService.updateTicket(
         request.params.id,
-        body,
+        updates,
         user.id,
       );
 

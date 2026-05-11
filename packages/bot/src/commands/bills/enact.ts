@@ -7,6 +7,7 @@ import { db } from '../../db.js';
 import { bills, billStatusLog, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
+import { postLegislationEmbed } from '../../utils/legislationChannel.js';
 import type { Command } from '../../client.js';
 import { BillStatus } from '@hansard/shared';
 
@@ -169,6 +170,8 @@ const command: Command = {
           `**Effective:** <t:${Math.floor(now.getTime() / 1000)}:F>`,
         ].join('\n'),
       });
+
+      await postLegislationEmbed({ client: interaction.client, embed });
 
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {

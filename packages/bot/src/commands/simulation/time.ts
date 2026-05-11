@@ -65,6 +65,17 @@ const command: Command = {
     )
     .addSubcommand((sub) =>
       sub.setName('unpause').setDescription('Unpause the simulation clock'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('npc-house')
+        .setDescription('Toggle NPC house bill review')
+        .addBooleanOption((opt) =>
+          opt
+            .setName('active')
+            .setDescription('Whether passed bills should require NPC house review')
+            .setRequired(true),
+        ),
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -76,6 +87,7 @@ const command: Command = {
       case 'set': await handleSet(interaction); break;
       case 'pause': await handlePauseToggle(interaction, true); break;
       case 'unpause': await handlePauseToggle(interaction, false); break;
+      case 'npc-house': await handleNpcHouseToggle(interaction); break;
     }
   },
 };
@@ -299,6 +311,30 @@ async function handlePauseToggle(
     pause
       ? 'The simulation clock has been paused. Time will not advance until unpaused.'
       : 'The simulation clock is now running. Time can be advanced.',
+  );
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleNpcHouseToggle(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+  const active = interaction.options.getBoolean('active', true);
+  const clock = await fetchClock();
+
+  if (!clock) {
+    await interaction.editReply({ embeds: [errorEmbed('No simulation clock configured.')] });
+    return;
+  }
+
+  await db.update(simulationClock)
+    .set({ npcHouseActive: active, updatedAt: new Date() })
+    .where(eq(simulationClock.id, clock.id));
+
+  const embed = successEmbed(
+    active ? 'NPC House Activated' : 'NPC House Deactivated',
+    active
+      ? 'Passed bills will now wait for NPC house review before they can be enacted.'
+      : 'Passed bills will now become player-passed after the legislature vote, with no NPC house review.',
   );
 
   await interaction.editReply({ embeds: [embed] });

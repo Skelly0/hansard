@@ -45,6 +45,7 @@ export interface SimulationClock {
   startDate: string;
   seasonName: string;
   isPaused: boolean;
+  npcHouseActive: boolean;
   createdAt: string;
   updatedAt: string;
 }

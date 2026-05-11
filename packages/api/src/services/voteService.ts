@@ -7,7 +7,16 @@
  */
 import { eq, and, inArray, isNull, sql, gte, lte, or, ne } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
-import { elections, candidates, ballots, bills, players, officeHolders } from '@hansard/db';
+import {
+  elections,
+  candidates,
+  ballots,
+  bills,
+  billStatusLog,
+  players,
+  officeHolders,
+  simulationClock,
+} from '@hansard/db';
 import type {
   ElectionConfig,
   BallotVote,
@@ -18,7 +27,7 @@ import type {
   ElectionType,
   ElectionStatus,
 } from '@hansard/shared';
-import { DEFAULT_VOTE_DURATION_MS, hasVotingCloseTimePassed } from '@hansard/shared';
+import { BillStatus, DEFAULT_VOTE_DURATION_MS, hasVotingCloseTimePassed } from '@hansard/shared';
 import { getStrategy } from './tallying/index.js';
 import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
 import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
@@ -316,6 +325,60 @@ export class VoteService {
       .where(eq(bills.id, billId))
       .limit(1);
     return row?.slug ?? null;
+  }
+
+  private async isNpcHouseActive(): Promise<boolean> {
+    const [clock] = await this.db
+      .select({ npcHouseActive: simulationClock.npcHouseActive })
+      .from(simulationClock)
+      .limit(1);
+
+    return clock?.npcHouseActive ?? false;
+  }
+
+  private async updateRelatedBillAfterTally(
+    election: typeof elections.$inferSelect,
+    result: TallyResult,
+    talliedAt: Date,
+  ): Promise<void> {
+    if (
+      election.type !== 'legislative_vote' ||
+      !election.relatedBillId ||
+      result.runoffTriggered ||
+      typeof result.passed !== 'boolean'
+    ) {
+      return;
+    }
+
+    const npcHouseActive = result.passed ? await this.isNpcHouseActive() : false;
+    const playerVoteResult = result.passed ? 'passed' : 'rejected';
+    const toStatus = result.passed
+      ? npcHouseActive ? BillStatus.NPC_PENDING : BillStatus.PLAYER_PASSED
+      : BillStatus.PLAYER_REJECTED;
+
+    await this.db
+      .update(bills)
+      .set({
+        status: toStatus,
+        playerVoteResult,
+        playerVoteAt: talliedAt,
+        npcVoteRequired: npcHouseActive,
+        npcVote: npcHouseActive ? { status: 'pending' as const } : null,
+        updatedAt: talliedAt,
+      })
+      .where(eq(bills.id, election.relatedBillId));
+
+    await this.db.insert(billStatusLog).values({
+      billId: election.relatedBillId,
+      fromStatus: BillStatus.VOTING,
+      toStatus,
+      changedById: election.createdById,
+      notes: result.passed
+        ? npcHouseActive
+          ? `Player house vote passed (election ${election.id}); NPC house review is pending`
+          : `Player house vote passed (election ${election.id}); NPC house is inactive`
+        : `Player house vote rejected (election ${election.id})`,
+    });
   }
 
   private async enrichElectionsWithSlugs<T extends { id: string; relatedBillId: string | null }>(
@@ -808,15 +871,19 @@ export class VoteService {
       runoffTriggered: result.runoffTriggered,
     };
 
+    const talliedAt = new Date();
+
     // Save results and update status
     await this.db
       .update(elections)
       .set({
         results: electionResults,
         status: newStatus,
-        updatedAt: new Date(),
+        updatedAt: talliedAt,
       })
       .where(eq(elections.id, electionId));
+
+    await this.updateRelatedBillAfterTally(election, result, talliedAt);
 
     return electionResults;
   }

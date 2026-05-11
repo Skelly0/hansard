@@ -74,6 +74,7 @@ function selectOrderBy(rows: unknown[]) {
 describe('MessageReactionAdd reaction voting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.REACTION_VOTE_CONFIRMATION_DMS;
     mocks.tx.delete.mockReturnValue({
       where: vi.fn().mockResolvedValue(undefined),
     });
@@ -83,7 +84,7 @@ describe('MessageReactionAdd reaction voting', () => {
     mocks.db.transaction.mockImplementation(async (fn: (tx: typeof mocks.tx) => Promise<void>) => fn(mocks.tx));
   });
 
-  it('records FPTP reaction ballots using candidate player IDs', async () => {
+  it('records FPTP reaction ballots using candidate player IDs without sending success DMs by default', async () => {
     mocks.db.select
       .mockReturnValueOnce(selectLimit([{
         id: 'election-1',
@@ -111,6 +112,7 @@ describe('MessageReactionAdd reaction voting', () => {
     } as any);
 
     const remove = vi.fn().mockResolvedValue(undefined);
+    const send = vi.fn().mockResolvedValue(undefined);
 
     await listener!(
       {
@@ -123,7 +125,7 @@ describe('MessageReactionAdd reaction voting', () => {
         id: 'discord-user-1',
         bot: false,
         partial: false,
-        send: vi.fn().mockResolvedValue(undefined),
+        send,
       },
     );
 
@@ -133,6 +135,115 @@ describe('MessageReactionAdd reaction voting', () => {
       vote: { type: 'fptp', candidateId: 'candidate-player-1' },
     });
     expect(remove).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('sends reaction vote success DMs when explicitly enabled', async () => {
+    process.env.REACTION_VOTE_CONFIRMATION_DMS = 'true';
+
+    mocks.db.select
+      .mockReturnValueOnce(selectLimit([{
+        id: 'election-1',
+        title: 'Chancellor Election',
+        method: 'fptp',
+        status: 'voting_open',
+        useReactions: true,
+        config: {},
+      }]))
+      .mockReturnValueOnce(selectOrderBy([
+        { id: 'candidate-row-1', playerId: 'candidate-player-1' },
+      ]))
+      .mockReturnValueOnce(selectLimit([{
+        id: 'voter-player-1',
+        characterName: 'Ada Vance',
+        factionId: null,
+        partyId: null,
+      }]));
+
+    let listener: ((reaction: unknown, user: unknown) => Promise<void>) | undefined;
+    registerMessageReactionAddEvent({
+      on: vi.fn((event, callback) => {
+        if (event === Events.MessageReactionAdd) listener = callback;
+      }),
+    } as any);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    await listener!(
+      {
+        partial: false,
+        message: { id: 'message-1' },
+        emoji: { name: REACTION_CANDIDATE_EMOJIS[0] },
+      },
+      {
+        id: 'discord-user-1',
+        bot: false,
+        partial: false,
+        send,
+      },
+    );
+
+    expect(mocks.insertValues).toHaveBeenCalledWith({
+      electionId: 'election-1',
+      voterId: 'voter-player-1',
+      vote: { type: 'fptp', candidateId: 'candidate-player-1' },
+    });
+    expect(send).toHaveBeenCalledWith(
+      'Your **Candidate #1** vote on **Chancellor Election** has been recorded.',
+    );
+  });
+
+  it('records reaction ballots without sending success DMs when disabled', async () => {
+    process.env.REACTION_VOTE_CONFIRMATION_DMS = 'false';
+
+    mocks.db.select
+      .mockReturnValueOnce(selectLimit([{
+        id: 'election-1',
+        title: 'Chancellor Election',
+        method: 'fptp',
+        status: 'voting_open',
+        useReactions: true,
+        config: {},
+      }]))
+      .mockReturnValueOnce(selectOrderBy([
+        { id: 'candidate-row-1', playerId: 'candidate-player-1' },
+      ]))
+      .mockReturnValueOnce(selectLimit([{
+        id: 'voter-player-1',
+        characterName: 'Ada Vance',
+        factionId: null,
+        partyId: null,
+      }]));
+
+    let listener: ((reaction: unknown, user: unknown) => Promise<void>) | undefined;
+    registerMessageReactionAddEvent({
+      on: vi.fn((event, callback) => {
+        if (event === Events.MessageReactionAdd) listener = callback;
+      }),
+    } as any);
+
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    await listener!(
+      {
+        partial: false,
+        message: { id: 'message-1' },
+        emoji: { name: REACTION_CANDIDATE_EMOJIS[0] },
+      },
+      {
+        id: 'discord-user-1',
+        bot: false,
+        partial: false,
+        send,
+      },
+    );
+
+    expect(mocks.insertValues).toHaveBeenCalledWith({
+      electionId: 'election-1',
+      voterId: 'voter-player-1',
+      vote: { type: 'fptp', candidateId: 'candidate-player-1' },
+    });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('does not record reaction ballots for OAuth-only player rows', async () => {

@@ -30,7 +30,9 @@ import { getRequestedVoteInterface } from './_electionReference.js';
 import {
   buildSubmittedBillSelectOptions,
   createLegislativeBillVote,
+  createStandaloneLegislativeVote,
   listSubmittedBillsForVote,
+  STANDALONE_LEGISLATIVE_VOTE_OPTION_VALUE,
   type SubmittedBillSelectRow,
 } from './billVoteFlow.js';
 import {
@@ -296,37 +298,24 @@ async function handleLegislativeBillVoteCreate(
 
   if (!allowed) {
     await interaction.reply({
-      embeds: [errorEmbed('Only staff or an office holder with legislative leader permission can put bills to vote.')],
+      embeds: [errorEmbed('Only staff or an office holder with legislative leader permission can open legislative votes.')],
       ephemeral: true,
     });
     return;
   }
 
   const submittedBills = await listSubmittedBillsForVote(db);
-  if (submittedBills.length === 0) {
-    await interaction.reply({
-      embeds: [
-        createEmbed({
-          title: 'No Submitted Bills',
-          description: 'There are no submitted bills waiting for a legislative vote.',
-          system: 'bills',
-        }),
-      ],
-      ephemeral: true,
-    });
-    return;
-  }
 
   const selectCustomId = `vote_create_bill_select:${interaction.user.id}:${interaction.id}`;
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(selectCustomId)
-    .setPlaceholder('Select a submitted bill...')
-    .addOptions(buildSubmittedBillSelectOptions(submittedBills));
+    .setPlaceholder('Select a bill or standalone vote...')
+    .addOptions(buildSubmittedBillSelectOptions(submittedBills, { includeStandalone: true }));
 
   const reply = await interaction.reply({
     embeds: [
       createEmbed({
-        title: 'Select Bill for Vote',
+        title: 'Select Legislative Vote Subject',
         description: [
           `**Method:** ${METHOD_LABELS[options.method] ?? options.method}`,
           options.method === 'yea_nay_abstain'
@@ -334,7 +323,9 @@ async function handleLegislativeBillVoteCreate(
             : null,
           `**Interface:** ${options.iface === 'reactions' ? 'Reactions' : 'Buttons'}`,
           '',
-          'Choose one of the submitted bills below.',
+          submittedBills.length > 0
+            ? 'Choose a submitted bill, or choose a standalone vote for an agenda item without a bill.'
+            : 'No submitted bills are waiting. Choose the standalone option to open a legislative vote on another agenda item.',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -357,30 +348,34 @@ async function handleLegislativeBillVoteCreate(
     }) as StringSelectMenuInteraction;
   } catch {
     await interaction.editReply({
-      embeds: [errorEmbed('Bill selection timed out. Run `/vote create` again when you are ready.')],
+      embeds: [errorEmbed('Legislative vote subject selection timed out. Run `/vote create` again when you are ready.')],
       components: [],
     });
     return;
   }
 
-  const selectedBillId = billInteraction.values[0];
-  const selectedBill = submittedBills.find((bill) => bill.id === selectedBillId);
-  if (!selectedBill) {
+  const selectedValue = billInteraction.values[0];
+  const isStandaloneVote = selectedValue === STANDALONE_LEGISLATIVE_VOTE_OPTION_VALUE;
+  const selectedBill = isStandaloneVote
+    ? null
+    : submittedBills.find((bill) => bill.id === selectedValue) ?? null;
+
+  if (!isStandaloneVote && !selectedBill) {
     await billInteraction.update({
-      embeds: [errorEmbed('That bill is no longer available. Please run `/vote create` again.')],
+      embeds: [errorEmbed('That legislative vote subject is no longer available. Please run `/vote create` again.')],
       components: [],
     });
     return;
   }
 
-  const defaultDescription =
-    selectedBill.summary ??
-    `Legislative vote on ${formatBillDisplay(selectedBill)}.`;
-  const modalCustomId = `vote_create_bill_modal:${interaction.id}`;
+  const defaultDescription = selectedBill
+    ? selectedBill.summary ?? `Legislative vote on ${formatBillDisplay(selectedBill)}.`
+    : null;
+  const modalCustomId = `vote_create_bill_modal:${interaction.id}:${isStandaloneVote ? 'standalone' : selectedBill?.id}`;
 
   await billInteraction.showModal(
     buildVoteCreateModal(modalCustomId, {
-      title: `Vote on: ${selectedBill.title}`,
+      title: selectedBill ? `Vote on: ${selectedBill.title}` : undefined,
       description: defaultDescription,
       durationHours: DEFAULT_VOTE_DURATION_HOURS,
     }),
@@ -423,18 +418,29 @@ async function handleLegislativeBillVoteCreate(
     return;
   }
 
-  let result: Awaited<ReturnType<typeof createLegislativeBillVote>>;
+  let result: Awaited<ReturnType<typeof createLegislativeBillVote>>
+    | Awaited<ReturnType<typeof createStandaloneLegislativeVote>>;
   try {
-    result = await createLegislativeBillVote(db, {
-      billId: selectedBill.id,
-      creatorDiscordId: interaction.user.id,
-      title,
-      description,
-      method: options.method,
-      majority: options.majority,
-      durationHours,
-      useReactions,
-    });
+    result = selectedBill
+      ? await createLegislativeBillVote(db, {
+          billId: selectedBill.id,
+          creatorDiscordId: interaction.user.id,
+          title,
+          description,
+          method: options.method,
+          majority: options.majority,
+          durationHours,
+          useReactions,
+        })
+      : await createStandaloneLegislativeVote(db, {
+          creatorDiscordId: interaction.user.id,
+          title,
+          description,
+          method: options.method,
+          majority: options.majority,
+          durationHours,
+          useReactions,
+        });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create the legislative vote.';
     await modalSubmit.editReply({ embeds: [errorEmbed(message)] });
@@ -442,7 +448,9 @@ async function handleLegislativeBillVoteCreate(
   }
 
   const fields = [
-    { name: 'Bill', value: formatBillDisplay(selectedBill), inline: false },
+    selectedBill
+      ? { name: 'Bill', value: formatBillDisplay(selectedBill), inline: false }
+      : { name: 'Subject', value: 'Standalone legislative agenda item', inline: false },
     { name: 'Type', value: TYPE_LABELS.legislative_vote, inline: true },
     { name: 'Method', value: METHOD_LABELS[options.method] ?? options.method, inline: true },
     { name: 'Closes', value: `<t:${Math.floor(result.votingClosesAt.getTime() / 1000)}:R>`, inline: true },
@@ -459,9 +467,11 @@ async function handleLegislativeBillVoteCreate(
   await interaction.editReply({
     embeds: [
       createEmbed({
-        title: 'Bill Vote Created',
-        description: `Selected **${formatBillDisplay(selectedBill)}**.`,
-        system: 'bills',
+        title: selectedBill ? 'Bill Vote Created' : 'Legislative Vote Created',
+        description: selectedBill
+          ? `Selected **${formatBillDisplay(selectedBill)}**.`
+          : 'No submitted bill was linked to this vote.',
+        system: selectedBill ? 'bills' : 'voting',
       }),
     ],
     components: [],
@@ -470,10 +480,12 @@ async function handleLegislativeBillVoteCreate(
   if (channel && 'send' in channel) {
     const reactionInstructions = buildReactionVoteInstructions(options.method);
 
-    const billSource = await buildLinkedBillSourceDisplay(db, {
-      type: 'legislative_vote',
-      relatedBillId: selectedBill.id,
-    });
+    const billSource = selectedBill
+      ? await buildLinkedBillSourceDisplay(db, {
+          type: 'legislative_vote',
+          relatedBillId: selectedBill.id,
+        })
+      : { fields: [], embeds: [] };
     const publicEmbeds = buildLegislativeVotePublicEmbeds({
       title,
       description,
@@ -514,10 +526,12 @@ async function handleLegislativeBillVoteCreate(
           .update(elections)
           .set({ status: 'cancelled', updatedAt: new Date() })
           .where(eq(elections.id, result.electionId));
-        await db
-          .update(bills)
-          .set({ status: 'submitted', playerVoteId: null, updatedAt: new Date() })
-          .where(eq(bills.id, result.bill.id));
+        if (selectedBill) {
+          await db
+            .update(bills)
+            .set({ status: 'submitted', playerVoteId: null, updatedAt: new Date() })
+            .where(eq(bills.id, selectedBill.id));
+        }
 
         const message = error instanceof Error ? error.message : 'Failed to post vote message';
         await modalSubmit.editReply({ embeds: [errorEmbed(message)] });
@@ -533,7 +547,9 @@ async function handleLegislativeBillVoteCreate(
       createEmbed({
         title: useReactions ? 'Reaction Vote Posted' : 'Legislature Vote Opened',
         description: [
-          `**${formatBillDisplay(selectedBill)}** is now in voting.`,
+          selectedBill
+            ? `**${formatBillDisplay(selectedBill)}** is now in voting.`
+            : `**${title}** is now open for legislative voting.`,
           useReactions
             ? 'The public reaction vote has been posted in this channel.'
             : 'The election is recorded and available through the vote commands.',

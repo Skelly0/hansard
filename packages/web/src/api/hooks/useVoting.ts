@@ -51,7 +51,7 @@ export interface Election {
   votingClosesAt: string;
   status: string;
   results?: ElectionResults | null;
-  relatedBillId?: string;
+  relatedBillId?: string | null;
   relatedBillSlug?: string | null;
   createdById: string;
   createdBy?: { id: string; characterName: string };

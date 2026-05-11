@@ -153,6 +153,38 @@ describe('cancelVote', () => {
     expect(db.transaction).not.toHaveBeenCalled();
   });
 
+  it('cancels a standalone legislative vote without looking for a bill', async () => {
+    const election = openElection({
+      relatedBillId: null,
+    });
+    const updateValues: unknown[] = [];
+    const updatedElection = {
+      id: election.id,
+      title: election.title,
+      status: ElectionStatus.CANCELLED,
+    };
+    const updateChain = makeUpdateChain([updatedElection], updateValues);
+
+    const db: any = {
+      select: vi.fn(),
+      update: updateChain.update,
+      transaction: vi.fn(),
+    };
+
+    const result = await cancelVote(db, election as any, {
+      actorDiscordId: 'discord-1',
+      now: baseDate,
+    });
+
+    expect(result).toEqual({
+      election: updatedElection,
+      bill: null,
+      previousElectionStatus: ElectionStatus.VOTING_OPEN,
+    });
+    expect(db.select).not.toHaveBeenCalled();
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
   it('refuses to cancel certified elections', async () => {
     const db: any = { update: vi.fn(), transaction: vi.fn() };
 

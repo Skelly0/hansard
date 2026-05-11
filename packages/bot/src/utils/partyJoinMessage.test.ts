@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   },
   txSelectRows: [] as unknown[][],
   updateSet: null as Record<string, unknown> | null,
+  updateSets: [] as Record<string, unknown>[],
   insertValues: [] as Record<string, unknown>[],
 }));
 
@@ -31,6 +32,7 @@ vi.mock('@hansard/db', () => ({
     ideology: 'parties.ideology',
     colour: 'parties.colour',
     discordRoleId: 'parties.discordRoleId',
+    leaderId: 'parties.leaderId',
     isActive: 'parties.isActive',
     isInviteOnly: 'parties.isInviteOnly',
   },
@@ -80,6 +82,7 @@ class Query<T = unknown> implements PromiseLike<T[]> {
 class UpdateQuery {
   set(values: Record<string, unknown>) {
     mocks.updateSet = values;
+    mocks.updateSets.push(values);
     return this;
   }
 
@@ -129,6 +132,7 @@ describe('party join reaction message', () => {
     vi.clearAllMocks();
     delete process.env.PARTY_JOIN_MESSAGE_ID;
     mocks.updateSet = null;
+    mocks.updateSets = [];
     mocks.insertValues = [];
     mocks.txSelectRows = [];
     mocks.db.select.mockImplementation(() => new Query([]));
@@ -315,7 +319,8 @@ describe('party join reaction message', () => {
       } as any,
     );
 
-    expect(mocks.updateSet).toMatchObject({ partyId: 'party-new' });
+    expect(mocks.updateSets).toContainEqual(expect.objectContaining({ partyId: 'party-new' }));
+    expect(mocks.updateSets).toContainEqual({ leaderId: null });
     expect(mocks.db.transaction).toHaveBeenCalledOnce();
     expect(mocks.db.update).not.toHaveBeenCalled();
     expect(mocks.db.insert).not.toHaveBeenCalled();
@@ -372,7 +377,7 @@ describe('party join reaction message', () => {
       } as any,
     );
 
-    expect(mocks.updateSet).toMatchObject({ partyId: 'party-blue' });
+    expect(mocks.updateSets).toContainEqual(expect.objectContaining({ partyId: 'party-blue' }));
     expect(mocks.insertValues[0]).toMatchObject({
       newValue: { partyId: 'party-blue', partyName: 'Blue Party' },
     });

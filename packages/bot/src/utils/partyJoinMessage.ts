@@ -38,39 +38,38 @@ export interface PartyReactionOption {
   party: PartyJoinRow;
 }
 
-interface EmojiColour {
-  emoji: string;
-  rgb: readonly [number, number, number];
+interface EmojiHueGroup {
+  hue: number;
+  emojis: readonly string[];
 }
 
-const PARTY_REACTION_EMOJI_PALETTE: readonly EmojiColour[] = [
-  { emoji: '🔴', rgb: [237, 66, 69] },
-  { emoji: '🟥', rgb: [237, 66, 69] },
-  { emoji: '❤️', rgb: [237, 66, 69] },
-  { emoji: '🟠', rgb: [249, 115, 22] },
-  { emoji: '🟧', rgb: [249, 115, 22] },
-  { emoji: '🟡', rgb: [254, 231, 92] },
-  { emoji: '🟨', rgb: [254, 231, 92] },
-  { emoji: '💛', rgb: [254, 231, 92] },
-  { emoji: '🟢', rgb: [87, 242, 135] },
-  { emoji: '🟩', rgb: [87, 242, 135] },
-  { emoji: '💚', rgb: [87, 242, 135] },
-  { emoji: '🔵', rgb: [52, 152, 219] },
-  { emoji: '🟦', rgb: [52, 152, 219] },
-  { emoji: '💙', rgb: [52, 152, 219] },
-  { emoji: '🟣', rgb: [155, 89, 182] },
-  { emoji: '🟪', rgb: [155, 89, 182] },
-  { emoji: '💜', rgb: [155, 89, 182] },
-  { emoji: '🟤', rgb: [139, 69, 19] },
-  { emoji: '🟫', rgb: [139, 69, 19] },
-  { emoji: '🤎', rgb: [139, 69, 19] },
-  { emoji: '⚫', rgb: [47, 49, 54] },
-  { emoji: '⬛', rgb: [47, 49, 54] },
-  { emoji: '🖤', rgb: [47, 49, 54] },
-  { emoji: '⚪', rgb: [255, 255, 255] },
-  { emoji: '⬜', rgb: [255, 255, 255] },
-  { emoji: '🤍', rgb: [255, 255, 255] },
+interface HslColour {
+  hue: number;
+  saturation: number;
+  lightness: number;
+}
+
+const RED_EMOJIS = ['🔴', '🟥', '❤️'] as const;
+const ORANGE_EMOJIS = ['🟠', '🟧'] as const;
+const YELLOW_EMOJIS = ['🟡', '🟨', '💛'] as const;
+const GREEN_EMOJIS = ['🟢', '🟩', '💚'] as const;
+const BLUE_EMOJIS = ['🔵', '🟦', '💙'] as const;
+const PURPLE_EMOJIS = ['🟣', '🟪', '💜'] as const;
+const BROWN_EMOJIS = ['🟤', '🟫', '🤎'] as const;
+const BLACK_EMOJIS = ['⚫', '⬛', '🖤'] as const;
+const WHITE_EMOJIS = ['⚪', '⬜', '🤍'] as const;
+
+const CHROMATIC_PARTY_REACTION_EMOJI_GROUPS: readonly EmojiHueGroup[] = [
+  { hue: 0, emojis: RED_EMOJIS },
+  { hue: 30, emojis: ORANGE_EMOJIS },
+  { hue: 58, emojis: YELLOW_EMOJIS },
+  { hue: 130, emojis: GREEN_EMOJIS },
+  { hue: 215, emojis: BLUE_EMOJIS },
+  { hue: 280, emojis: PURPLE_EMOJIS },
 ];
+
+const BROWN_PARTY_REACTION_EMOJI_GROUP: EmojiHueGroup = { hue: 28, emojis: BROWN_EMOJIS };
+const NEUTRAL_PARTY_REACTION_EMOJIS = new Set<string>([...BLACK_EMOJIS, ...WHITE_EMOJIS]);
 
 const FALLBACK_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'] as const;
 const partyJoinLocks = new Map<string, Promise<void>>();
@@ -94,8 +93,131 @@ function parseHexColour(hex: string | null | undefined): [number, number, number
   ];
 }
 
-function colourDistance(a: readonly [number, number, number], b: readonly [number, number, number]): number {
-  return ((a[0] - b[0]) ** 2) + ((a[1] - b[1]) ** 2) + ((a[2] - b[2]) ** 2);
+function rgbToHsl(rgb: readonly [number, number, number]): HslColour {
+  const r = rgb[0] / 255;
+  const g = rgb[1] / 255;
+  const b = rgb[2] / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const lightness = (max + min) / 2;
+
+  if (max === min) {
+    return { hue: 0, saturation: 0, lightness };
+  }
+
+  const delta = max - min;
+  const saturation = delta / (1 - Math.abs((2 * lightness) - 1));
+  let hue: number;
+
+  if (max === r) {
+    hue = 60 * (((g - b) / delta) % 6);
+  } else if (max === g) {
+    hue = 60 * (((b - r) / delta) + 2);
+  } else {
+    hue = 60 * (((r - g) / delta) + 4);
+  }
+
+  return {
+    hue: hue < 0 ? hue + 360 : hue,
+    saturation,
+    lightness,
+  };
+}
+
+function hueDistance(a: number, b: number): number {
+  const distance = Math.abs(a - b) % 360;
+  return Math.min(distance, 360 - distance);
+}
+
+function hashString(input: string): number {
+  let hash = 0;
+  for (const char of input) {
+    hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
+  }
+  return hash;
+}
+
+function rotateGroups<T>(groups: readonly T[], offset: number): T[] {
+  if (groups.length === 0) return [];
+  const normalizedOffset = offset % groups.length;
+  return [
+    ...groups.slice(normalizedOffset),
+    ...groups.slice(0, normalizedOffset),
+  ];
+}
+
+function flattenEmojiGroups(groups: readonly EmojiHueGroup[]): string[] {
+  return groups.flatMap((group) => [...group.emojis]);
+}
+
+function orderedChromaticEmojiGroups(hsl: HslColour): EmojiHueGroup[] {
+  const hueSortedGroups = [...CHROMATIC_PARTY_REACTION_EMOJI_GROUPS]
+    .sort((a, b) => hueDistance(hsl.hue, a.hue) - hueDistance(hsl.hue, b.hue));
+
+  const isBrownish = hsl.lightness <= 0.42 && hsl.hue >= 15 && hsl.hue <= 50;
+  return isBrownish
+    ? [BROWN_PARTY_REACTION_EMOJI_GROUP, ...hueSortedGroups]
+    : [...hueSortedGroups, BROWN_PARTY_REACTION_EMOJI_GROUP];
+}
+
+function fallbackChromaticEmojisForParty(party: PartyJoinRow): string[] {
+  const groups = [
+    ...CHROMATIC_PARTY_REACTION_EMOJI_GROUPS,
+    BROWN_PARTY_REACTION_EMOJI_GROUP,
+  ];
+  return flattenEmojiGroups(rotateGroups(groups, hashString(party.name) % groups.length));
+}
+
+function uniqueEmojis(emojis: readonly string[]): string[] {
+  return [...new Set(emojis)];
+}
+
+function partyReactionEmojiCandidates(party: PartyJoinRow): string[] {
+  const rgb = parseHexColour(party.colour);
+  const fallbackChromaticEmojis = fallbackChromaticEmojisForParty(party);
+
+  if (!rgb) {
+    return uniqueEmojis([...fallbackChromaticEmojis, ...WHITE_EMOJIS, ...BLACK_EMOJIS]);
+  }
+
+  const hsl = rgbToHsl(rgb);
+
+  if (hsl.saturation < 0.12) {
+    if (hsl.lightness <= 0.08) {
+      return uniqueEmojis(['⚫', ...fallbackChromaticEmojis, '⬛', '🖤', ...WHITE_EMOJIS]);
+    }
+
+    if (hsl.lightness >= 0.92) {
+      return uniqueEmojis(['⚪', ...fallbackChromaticEmojis, '⬜', '🤍', ...BLACK_EMOJIS]);
+    }
+
+    return uniqueEmojis([...fallbackChromaticEmojis, ...WHITE_EMOJIS, ...BLACK_EMOJIS]);
+  }
+
+  return uniqueEmojis([
+    ...flattenEmojiGroups(orderedChromaticEmojiGroups(hsl)),
+    ...WHITE_EMOJIS,
+    ...BLACK_EMOJIS,
+  ]);
+}
+
+function preferredNeutralEmojiForParty(party: PartyJoinRow): string | null {
+  const rgb = parseHexColour(party.colour);
+  if (!rgb) return null;
+
+  const hsl = rgbToHsl(rgb);
+  if (hsl.saturation >= 0.12) return null;
+  if (hsl.lightness <= 0.08) return '⚫';
+  if (hsl.lightness >= 0.92) return '⚪';
+  return null;
+}
+
+function shouldKeepExistingPartyEmoji(party: PartyJoinRow, emoji: string): boolean {
+  if (!NEUTRAL_PARTY_REACTION_EMOJIS.has(emoji)) {
+    return true;
+  }
+
+  return preferredNeutralEmojiForParty(party) === emoji;
 }
 
 export function assignPartyReactionOptions(
@@ -107,7 +229,7 @@ export function assignPartyReactionOptions(
 
   for (const party of partiesToAssign) {
     const existingEmoji = existingEmojiByPartyName.get(party.name);
-    if (existingEmoji && !used.has(existingEmoji)) {
+    if (existingEmoji && !used.has(existingEmoji) && shouldKeepExistingPartyEmoji(party, existingEmoji)) {
       reserved.set(party.name, existingEmoji);
       used.add(existingEmoji);
     }
@@ -119,12 +241,9 @@ export function assignPartyReactionOptions(
       return { emoji: existingEmoji, party };
     }
 
-    const rgb = parseHexColour(party.colour) ?? [255, 255, 255];
-    const nearest = PARTY_REACTION_EMOJI_PALETTE
-      .filter((candidate) => !used.has(candidate.emoji))
-      .sort((a, b) => colourDistance(rgb, a.rgb) - colourDistance(rgb, b.rgb))[0];
+    const nearest = partyReactionEmojiCandidates(party).find((candidate) => !used.has(candidate));
     const fallback = FALLBACK_EMOJIS.find((emoji) => !used.has(emoji));
-    const emoji = nearest?.emoji ?? fallback ?? '▫️';
+    const emoji = nearest ?? fallback ?? '▫️';
     used.add(emoji);
     return { emoji, party };
   });
@@ -328,6 +447,44 @@ async function clearPartyLeaderIfMatches(
     ));
 }
 
+async function seedPartyJoinReactions(message: Message, reactionEmojis: readonly string[]): Promise<void> {
+  for (const emoji of reactionEmojis) {
+    try {
+      await message.react(emoji);
+    } catch (error) {
+      console.warn(`[party-join] failed to seed ${emoji} on ${message.id}:`, error);
+    }
+  }
+}
+
+async function removeStaleBotReactions(message: Message, reactionEmojis: readonly string[]): Promise<void> {
+  const botId = message.client.user?.id;
+  if (!botId) return;
+
+  const expectedEmojis = new Set(reactionEmojis);
+  for (const reaction of message.reactions.cache.values()) {
+    const emoji = reaction.emoji.name;
+    if (!emoji || expectedEmojis.has(emoji)) continue;
+
+    try {
+      await reaction.users.remove(botId);
+    } catch (error) {
+      console.warn(`[party-join] failed to remove stale ${emoji} reaction on ${message.id}:`, error);
+    }
+  }
+}
+
+async function resetPartyJoinReactions(message: Message, reactionEmojis: readonly string[]): Promise<void> {
+  try {
+    await message.reactions.removeAll();
+  } catch (error) {
+    console.warn(`[party-join] failed to clear reactions on ${message.id}; removing stale bot reactions instead:`, error);
+    await removeStaleBotReactions(message, reactionEmojis);
+  }
+
+  await seedPartyJoinReactions(message, reactionEmojis);
+}
+
 export async function postPartyJoinMessage(
   client: Client,
   channelId = resolvePartyJoinChannelId(),
@@ -342,13 +499,7 @@ export async function postPartyJoinMessage(
     embeds: payload.embeds,
   });
 
-  for (const emoji of payload.reactionEmojis) {
-    try {
-      await posted.react(emoji);
-    } catch (error) {
-      console.warn(`[party-join] failed to seed ${emoji} on ${posted.id}:`, error);
-    }
-  }
+  await seedPartyJoinReactions(posted, payload.reactionEmojis);
 
   return posted;
 }
@@ -373,13 +524,7 @@ export async function refreshPartyJoinMessage(
   );
   const edited = await currentMessage.edit({ embeds: payload.embeds });
 
-  for (const emoji of payload.reactionEmojis) {
-    try {
-      await edited.react(emoji);
-    } catch (error) {
-      console.warn(`[party-join] failed to seed ${emoji} on ${edited.id}:`, error);
-    }
-  }
+  await resetPartyJoinReactions(edited, payload.reactionEmojis);
 
   return edited;
 }

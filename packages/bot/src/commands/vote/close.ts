@@ -7,6 +7,7 @@ import {
 import { eq, inArray } from 'drizzle-orm';
 import { ballots, candidates, elections, players } from '@hansard/db';
 import { meetsVoteThreshold, SUPERMAJORITY_PASS_THRESHOLD } from '@hansard/shared';
+import { VoteService } from '@hansard/api/services/voteService';
 import { client } from '../../client.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
@@ -145,6 +146,18 @@ const command: Command = {
       } catch (error) {
         console.error('[vote-close] failed to render reaction result:', error);
         // Non-fatal — the election is still marked closed; staff can re-run results manually.
+      }
+    }
+
+    // ---- Legislative votes: auto-tally so the linked bill transitions ----
+    // Without this, /vote-close leaves the bill stuck in `voting` and
+    // /bill-enact rejects it. Mirrors what /vote-tally would do.
+    if (updated.type === 'legislative_vote' && updated.relatedBillId) {
+      try {
+        await new VoteService(db).tallyVotes(updated.id);
+      } catch (error) {
+        console.error('[vote-close] failed to auto-tally legislative vote:', error);
+        // Non-fatal — staff can re-run /vote-tally manually.
       }
     }
 

@@ -28,6 +28,7 @@ export type CloseDueVotesOptions = {
   now?: Date;
   limit?: number;
   renderReactionResult?: (election: ElectionRow) => Promise<void>;
+  tallyElection?: (election: ElectionRow) => Promise<void>;
   logger?: Pick<Console, 'error'>;
 };
 
@@ -96,6 +97,20 @@ export async function closeDueVotes(
           const failure = { id: updated.id, title: updated.title, error: errorMessage(error) };
           renderFailed.push(failure);
           logger.error(`[vote-auto-close] closed ${updated.id} but failed to render Discord results:`, error);
+        }
+      }
+
+      // Legislative votes: auto-tally so the linked bill transitions out of
+      // `voting`. Without this, /bill-enact rejects bills whose votes closed.
+      if (
+        options.tallyElection
+        && updated.type === 'legislative_vote'
+        && updated.relatedBillId
+      ) {
+        try {
+          await options.tallyElection(updated);
+        } catch (error) {
+          logger.error(`[vote-auto-close] closed ${updated.id} but failed to auto-tally:`, error);
         }
       }
     } catch (error) {

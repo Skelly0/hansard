@@ -75,8 +75,12 @@ function isDirectRun(): boolean {
 }
 
 if (isDirectRun()) {
-  runRefreshPartyJoinMessageScript().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+  runRefreshPartyJoinMessageScript()
+    .then(() => {
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
 }

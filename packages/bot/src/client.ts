@@ -21,10 +21,14 @@ export const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMessageReactions,
+    // Required for the /phone DM relay. Without this, messageCreate never fires
+    // for DMs, so dialed-call audio cannot be forwarded between players.
+    GatewayIntentBits.DirectMessages,
   ],
   // Partials are required for reaction events on messages cached before
   // the bot started — without these, MessageReactionAdd silently drops
-  // events for older vote embeds.
+  // events for older vote embeds. The same partials cover DM messages
+  // whose channels were not in cache at startup.
   partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 });
 

@@ -7,6 +7,7 @@ import { loadCommands } from './commandLoader.js';
 import { registerReadyEvent } from './events/ready.js';
 import { registerInteractionCreateEvent } from './events/interactionCreate.js';
 import { registerMessageReactionAddEvent } from './events/messageReactionAdd.js';
+import { registerMessageCreateEvent } from './events/messageCreate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
   registerReadyEvent(client);
   registerInteractionCreateEvent(client);
   registerMessageReactionAddEvent(client);
+  registerMessageCreateEvent(client);
 
   // Load commands
   await loadCommands(join(__dirname, 'commands'), commands);

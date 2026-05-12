@@ -14,6 +14,7 @@ import { handleTicketButton, handleSetPriorityButton } from '../components/ticke
 import { handleTicketModal } from '../components/ticketModals.js';
 import { handleVoteButton, handleVoteCancel, isVoteButton } from '../components/voteButtons.js';
 import { handleVoteCreateModal } from '../commands/vote/create.js';
+import { handlePhoneButton, isPhoneButton } from '../components/phoneButtons.js';
 
 async function handleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
   const command = commands.get(interaction.commandName);
@@ -74,6 +75,12 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
     } else {
       await handleVoteButton(interaction);
     }
+    return;
+  }
+
+  // Phone answer/decline buttons (persistent customIds on ring DMs)
+  if (isPhoneButton(interaction.customId)) {
+    await handlePhoneButton(interaction);
     return;
   }
 

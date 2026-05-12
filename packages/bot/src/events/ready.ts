@@ -3,8 +3,10 @@ import { commands } from '../client.js';
 import { db } from '../db.js';
 import { renderReactionResult } from '../commands/vote/close.js';
 import { startVoteAutoCloseWorker } from '../services/voteAutoClose.js';
+import { startPhoneRingTimeoutWorker } from '../services/phoneRingTimeout.js';
 
 let voteAutoCloseWorker: NodeJS.Timeout | null = null;
+let phoneRingTimeoutWorker: NodeJS.Timeout | null = null;
 
 export function registerReadyEvent(client: Client): void {
   client.once(Events.ClientReady, async (readyClient) => {
@@ -29,6 +31,14 @@ export function registerReadyEvent(client: Client): void {
         logger: console,
       });
       console.log('Vote auto-close worker started');
+    }
+
+    if (!phoneRingTimeoutWorker) {
+      phoneRingTimeoutWorker = startPhoneRingTimeoutWorker(db, {
+        client: readyClient,
+        logger: console,
+      });
+      console.log('Phone ring-timeout worker started');
     }
   });
 }

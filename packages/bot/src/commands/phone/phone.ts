@@ -1,0 +1,635 @@
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  InteractionContextType,
+  PermissionFlagsBits,
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+} from 'discord.js';
+import { eq } from 'drizzle-orm';
+import { players } from '@hansard/db';
+import { db } from '../../db.js';
+import { isStaff } from '../../utils/permissions.js';
+import { errorEmbed, successEmbed } from '../../utils/embeds.js';
+import {
+  PhoneService,
+  PhoneServiceError,
+} from '@hansard/api/services/phoneService';
+import { buildIncomingCallActions } from '../../components/phoneButtons.js';
+import { hangUpAndNotify } from '../../utils/phoneRelay.js';
+import { parseNumberOrThrow } from '../../utils/phoneNumber.js';
+import type { Command } from '../../client.js';
+
+const CALL_COLOUR = 0x9b7cb8;
+
+async function resolvePlayer(discordId: string): Promise<{ id: string; characterName: string | null; isAlive: boolean } | null> {
+  const [row] = await db
+    .select({ id: players.id, characterName: players.characterName, isAlive: players.isAlive })
+    .from(players)
+    .where(eq(players.discordId, discordId))
+    .limit(1);
+  return row ?? null;
+}
+
+async function requirePlayer(interaction: ChatInputCommandInteraction): Promise<{ id: string; characterName: string; isAlive: boolean } | null> {
+  const row = await resolvePlayer(interaction.user.id);
+  if (!row || !row.characterName) {
+    await interaction.editReply({
+      embeds: [errorEmbed('You need an active character before you can use the phone system.')],
+    });
+    return null;
+  }
+  return { id: row.id, characterName: row.characterName, isAlive: row.isAlive };
+}
+
+function svc(): PhoneService {
+  return new PhoneService(db);
+}
+
+// -----------------------------------------------------------------------------
+// register / numbers / delete
+// -----------------------------------------------------------------------------
+
+async function handleRegister(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+
+  const numberInput = interaction.options.getString('number', true);
+  const label = interaction.options.getString('label')?.trim() || null;
+
+  try {
+    parseNumberOrThrow(numberInput);
+  } catch (err) {
+    await interaction.editReply({
+      embeds: [errorEmbed(err instanceof Error ? err.message : 'Invalid phone number.')],
+    });
+    return;
+  }
+
+  try {
+    const row = await svc().registerNumber({ playerId: player.id, numberRaw: numberInput, label });
+    await interaction.editReply({
+      embeds: [
+        successEmbed(
+          'Number registered',
+          `\u{1F4DE} **${row.numberRaw}**${row.label ? ` *(${row.label})*` : ''}\nAnyone can dial this number to reach you. Use \`/phone delete\` to retire it.`,
+        ),
+      ],
+    });
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[/phone register] failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to register the number.')] });
+  }
+}
+
+async function handleNumbers(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+  const rows = await svc().listMyNumbers(player.id);
+  if (!rows.length) {
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Your phone lines')
+          .setColor(CALL_COLOUR)
+          .setDescription('No active numbers. Register one with `/phone register number:<digits>`.'),
+      ],
+    });
+    return;
+  }
+  const lines = rows.map((r) => `• **${r.numberRaw}**${r.label ? ` *(${r.label})*` : ''}`).join('\n');
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder().setTitle('Your phone lines').setColor(CALL_COLOUR).setDescription(lines),
+    ],
+  });
+}
+
+async function handleDelete(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+  const numberInput = interaction.options.getString('number', true);
+  const row = await svc().lookupNumber(numberInput);
+  if (!row || row.playerId !== player.id) {
+    await interaction.editReply({ embeds: [errorEmbed('You do not own an active line with that number.')] });
+    return;
+  }
+  try {
+    await svc().deactivateNumber(row.id, player.id, { userId: player.id, isStaff: false });
+    await interaction.editReply({
+      embeds: [successEmbed('Number retired', `\u{260E} **${row.numberRaw}** is no longer reachable.`)],
+    });
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[/phone delete] failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to retire the number.')] });
+  }
+}
+
+// -----------------------------------------------------------------------------
+// dial / hangup / history
+// -----------------------------------------------------------------------------
+
+async function handleDial(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+
+  const targetNumber = interaction.options.getString('number', true);
+  const fromNumber = interaction.options.getString('from');
+
+  const recipient = await svc().lookupNumber(targetNumber);
+  if (!recipient) {
+    await interaction.editReply({ embeds: [errorEmbed('No active line found with that number.')] });
+    return;
+  }
+
+  // Choose caller's number. If `from` provided, must own it; otherwise pick their first active.
+  const myNumbers = await svc().listMyNumbers(player.id);
+  if (!myNumbers.length) {
+    await interaction.editReply({
+      embeds: [errorEmbed('You need to register a phone number before dialing. Try `/phone register`.')],
+    });
+    return;
+  }
+  let callerNumber = myNumbers[0];
+  if (fromNumber) {
+    const resolved = await svc().lookupNumber(fromNumber);
+    if (!resolved || resolved.playerId !== player.id) {
+      await interaction.editReply({ embeds: [errorEmbed('You do not own that calling number.')] });
+      return;
+    }
+    callerNumber = resolved;
+  }
+
+  let participants;
+  try {
+    participants = await svc().initiateCall({
+      callerPlayerId: player.id,
+      callerNumberId: callerNumber.id,
+      recipientNumberId: recipient.id,
+    });
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[/phone dial] failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to start the call.')] });
+    return;
+  }
+
+  // DM the recipient with Answer/Decline.
+  let ringMessageId: string | null = null;
+  try {
+    const recipientUser = await interaction.client.users.fetch(participants.recipientPlayer.discordId);
+    const ringEmbed = new EmbedBuilder()
+      .setTitle('\u{1F4DE} Incoming call')
+      .setColor(CALL_COLOUR)
+      .setDescription(
+        `**${participants.callerNumber.numberRaw}** is calling **${participants.recipientNumber.numberRaw}**.\n\nMessages on this call are logged and cannot be edited or deleted. Answer to connect, or decline to send the caller a refusal.`,
+      )
+      .setFooter({ text: 'This ring expires in 60 seconds.' });
+    const row = buildIncomingCallActions(participants.call.id);
+    const ringMessage = await recipientUser.send({ embeds: [ringEmbed], components: [row] });
+    ringMessageId = ringMessage.id;
+  } catch (err) {
+    console.error('[/phone dial] recipient DM failed:', err);
+    // Mark call as missed/dm_closed and notify caller.
+    try {
+      await svc().endCall(participants.call.id, player.id, 'dm_closed');
+    } catch (innerErr) {
+      console.error('[/phone dial] failed to clean up after DM failure:', innerErr);
+    }
+    await interaction.editReply({
+      embeds: [errorEmbed('Recipient has DMs closed and could not be reached.')],
+    });
+    return;
+  }
+
+  // Caller-side ring confirmation. The ring message ID itself is not persisted —
+  // the answer/decline button handler edits it inline via interaction.message.
+  void ringMessageId;
+
+  // DM the caller "Ringing..."
+  try {
+    const callerUser = await interaction.client.users.fetch(participants.callerPlayer.discordId);
+    await callerUser.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('\u{1F4DE} Ringing...')
+          .setColor(CALL_COLOUR)
+          .setDescription(
+            `Calling **${participants.recipientNumber.numberRaw}** from **${participants.callerNumber.numberRaw}**. You'll be notified when they pick up.\n\nUse \`/phone hangup\` to cancel before they answer.`,
+          ),
+      ],
+    });
+  } catch {
+    /* caller has DMs closed — still let the slash reply confirm */
+  }
+
+  await interaction.editReply({
+    embeds: [
+      successEmbed(
+        'Dialing',
+        `Ringing **${participants.recipientNumber.numberRaw}**. Check your DMs — the call will connect there if it's answered.`,
+      ),
+    ],
+  });
+}
+
+async function handleHangup(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+
+  const openCall = await svc().findOpenCallForPlayer(player.id);
+  if (!openCall) {
+    await interaction.editReply({ embeds: [errorEmbed('You are not currently in a call.')] });
+    return;
+  }
+
+  try {
+    await svc().endCall(openCall.id, player.id, 'hangup_caller');
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[/phone hangup] failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to hang up.')] });
+    return;
+  }
+
+  await hangUpAndNotify(
+    interaction.client,
+    openCall.id,
+    openCall.callerPlayerId === player.id ? 'hangup_caller' : 'hangup_recipient',
+  );
+  await interaction.editReply({ embeds: [successEmbed('Call ended', 'The line is now free.')] });
+}
+
+async function handleHistory(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+  const { calls, total } = await svc().getCallHistory(player.id, { userId: player.id, isStaff: false }, { limit: 10 });
+  if (!total) {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle('Call history').setColor(CALL_COLOUR).setDescription('No calls yet.')],
+    });
+    return;
+  }
+  const lines = calls.map((c) => {
+    const role = c.callerPlayerId === player.id ? 'out' : 'in';
+    const stamp = c.startedAt.toISOString().slice(0, 16).replace('T', ' ');
+    return `\`${stamp}\` ${role === 'out' ? '\u{2192}' : '\u{2190}'} ${c.status}${c.endedReason ? ` (${c.endedReason})` : ''}`;
+  });
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle('Call history')
+        .setColor(CALL_COLOUR)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: `${calls.length} of ${total}` }),
+    ],
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Admin subcommand group (staff only at runtime)
+// -----------------------------------------------------------------------------
+
+async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<boolean> {
+  if (!(await isStaff(interaction.member))) {
+    await interaction.editReply({ embeds: [errorEmbed('Only staff can use phone admin tools.')] });
+    return false;
+  }
+  return true;
+}
+
+async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!(await ensureStaff(interaction))) return;
+  const numberInput = interaction.options.getString('number', true);
+  const reason = interaction.options.getString('reason') || null;
+  const mirrorUser = interaction.options.getUser('mirror-user');
+  const mirrorChannel = interaction.options.getChannel('mirror-channel');
+
+  const number = await svc().lookupNumber(numberInput);
+  if (!number) {
+    await interaction.editReply({ embeds: [errorEmbed('No active number matches that input.')] });
+    return;
+  }
+
+  const staffPlayer = await resolvePlayer(interaction.user.id);
+  if (!staffPlayer) {
+    await interaction.editReply({ embeds: [errorEmbed('Staff player record not found.')] });
+    return;
+  }
+
+  try {
+    const tap = await svc().setTap(
+      {
+        targetNumberId: number.id,
+        createdById: staffPlayer.id,
+        reason,
+        mirrorChannelId: mirrorChannel?.id ?? null,
+        mirrorUserId: mirrorUser?.id ?? null,
+      },
+      { userId: staffPlayer.id, isStaff: true },
+    );
+    await interaction.editReply({
+      embeds: [
+        successEmbed(
+          'Wiretap active',
+          [
+            `Tap ID: \`${tap.id}\``,
+            `Target: **${number.numberRaw}**`,
+            mirrorChannel ? `Mirror channel: <#${mirrorChannel.id}>` : 'Mirror channel: default `PHONE_TAP_CHANNEL_ID`',
+            mirrorUser ? `Mirror user: <@${mirrorUser.id}>` : null,
+            reason ? `Reason: ${reason}` : null,
+          ].filter(Boolean).join('\n'),
+        ),
+      ],
+    });
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[/phone admin tap-create] failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to set wiretap.')] });
+  }
+}
+
+async function handleAdminTapRevoke(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!(await ensureStaff(interaction))) return;
+  const tapId = interaction.options.getString('tap-id', true);
+  const notes = interaction.options.getString('notes') || undefined;
+  const staffPlayer = await resolvePlayer(interaction.user.id);
+  if (!staffPlayer) {
+    await interaction.editReply({ embeds: [errorEmbed('Staff player record not found.')] });
+    return;
+  }
+  try {
+    await svc().revokeTap(tapId, staffPlayer.id, { userId: staffPlayer.id, isStaff: true }, notes);
+    await interaction.editReply({ embeds: [successEmbed('Wiretap revoked', `Tap \`${tapId}\` is now inactive.`)] });
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[/phone admin tap-revoke] failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to revoke wiretap.')] });
+  }
+}
+
+async function handleAdminTapList(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!(await ensureStaff(interaction))) return;
+  const staffPlayer = await resolvePlayer(interaction.user.id);
+  if (!staffPlayer) {
+    await interaction.editReply({ embeds: [errorEmbed('Staff player record not found.')] });
+    return;
+  }
+  const taps = await svc().listTaps({ userId: staffPlayer.id, isStaff: true });
+  if (!taps.length) {
+    await interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle('Active wiretaps').setColor(CALL_COLOUR).setDescription('None.')],
+    });
+    return;
+  }
+  const lines = taps.slice(0, 20).map((t) => {
+    const targets = [t.mirrorChannelId ? `<#${t.mirrorChannelId}>` : null, t.mirrorUserId ? `<@${t.mirrorUserId}>` : null]
+      .filter(Boolean)
+      .join(', ') || 'default channel';
+    return `• \`${t.id}\` \u{2192} ${targets}${t.reason ? ` — ${t.reason.slice(0, 80)}` : ''}`;
+  });
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle('Active wiretaps')
+        .setColor(CALL_COLOUR)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: `${taps.length} active` }),
+    ],
+  });
+}
+
+async function handleAdminLookup(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!(await ensureStaff(interaction))) return;
+  const numberInput = interaction.options.getString('number', true);
+  const row = await svc().lookupNumber(numberInput);
+  if (!row) {
+    await interaction.editReply({ embeds: [errorEmbed('No active line with that number.')] });
+    return;
+  }
+  const [owner] = await db
+    .select({ id: players.id, characterName: players.characterName, discordId: players.discordId })
+    .from(players)
+    .where(eq(players.id, row.playerId))
+    .limit(1);
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle(`Number ${row.numberRaw}`)
+        .setColor(CALL_COLOUR)
+        .addFields(
+          { name: 'Owner', value: owner ? `${owner.characterName ?? '(no character)'} (<@${owner.discordId}>)` : 'Unknown', inline: false },
+          { name: 'Label', value: row.label ?? '—', inline: true },
+          { name: 'Registered', value: row.createdAt.toISOString().slice(0, 10), inline: true },
+        ),
+    ],
+  });
+}
+
+async function handleAdminForceEnd(interaction: ChatInputCommandInteraction): Promise<void> {
+  if (!(await ensureStaff(interaction))) return;
+  const callId = interaction.options.getString('call-id', true);
+  const reason = interaction.options.getString('reason') || undefined;
+  try {
+    await svc().forceEndCall(callId, interaction.user.id, reason);
+    await hangUpAndNotify(interaction.client, callId, 'force_ended_by_staff');
+    await interaction.editReply({ embeds: [successEmbed('Call ended', `Call \`${callId}\` was force-ended.`)] });
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[/phone admin force-end] failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to force-end call.')] });
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Command definition
+// -----------------------------------------------------------------------------
+
+const command: Command = {
+  data: new SlashCommandBuilder()
+    .setName('phone')
+    .setDescription('Phone registry: register numbers, dial others, manage wiretaps (staff only)')
+    // Available in both guild channels and DMs so /phone hangup works from the call DM.
+    .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM)
+    .addSubcommand((sub) =>
+      sub
+        .setName('register')
+        .setDescription('Register a new phone number to your character')
+        .addStringOption((opt) =>
+          opt.setName('number').setDescription('3-20 digits, optional leading +').setRequired(true).setMaxLength(32),
+        )
+        .addStringOption((opt) =>
+          opt.setName('label').setDescription('Optional vanity name like "Burner"').setRequired(false).setMaxLength(64),
+        ),
+    )
+    .addSubcommand((sub) => sub.setName('numbers').setDescription('List your active phone numbers'))
+    .addSubcommand((sub) =>
+      sub
+        .setName('delete')
+        .setDescription('Retire one of your phone numbers')
+        .addStringOption((opt) =>
+          opt.setName('number').setDescription('The number to retire').setRequired(true).setMaxLength(32),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('dial')
+        .setDescription('Call another player by their number')
+        .addStringOption((opt) =>
+          opt.setName('number').setDescription('Number to call').setRequired(true).setMaxLength(32),
+        )
+        .addStringOption((opt) =>
+          opt.setName('from').setDescription('Which of your numbers to call from').setRequired(false).setMaxLength(32),
+        ),
+    )
+    .addSubcommand((sub) => sub.setName('hangup').setDescription('End your current call'))
+    .addSubcommand((sub) => sub.setName('history').setDescription('Show your recent calls'))
+    .addSubcommandGroup((group) =>
+      group
+        .setName('admin')
+        .setDescription('Staff-only phone administration')
+        .addSubcommand((sub) =>
+          sub
+            .setName('tap-create')
+            .setDescription('Set a wiretap on a phone number')
+            .addStringOption((opt) =>
+              opt.setName('number').setDescription('Number to tap').setRequired(true).setMaxLength(32),
+            )
+            .addStringOption((opt) =>
+              opt.setName('reason').setDescription('Reason for the tap (audit)').setRequired(false).setMaxLength(512),
+            )
+            .addUserOption((opt) =>
+              opt.setName('mirror-user').setDescription('Optional Discord user to DM tap copies to').setRequired(false),
+            )
+            .addChannelOption((opt) =>
+              opt.setName('mirror-channel').setDescription('Override the default tap mirror channel').setRequired(false),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName('tap-revoke')
+            .setDescription('Revoke an active wiretap')
+            .addStringOption((opt) =>
+              opt.setName('tap-id').setDescription('Tap UUID from /phone admin tap-list').setRequired(true),
+            )
+            .addStringOption((opt) =>
+              opt.setName('notes').setDescription('Audit notes for the revocation').setRequired(false).setMaxLength(512),
+            ),
+        )
+        .addSubcommand((sub) => sub.setName('tap-list').setDescription('List active wiretaps'))
+        .addSubcommand((sub) =>
+          sub
+            .setName('lookup')
+            .setDescription('Find the owner of a phone number')
+            .addStringOption((opt) =>
+              opt.setName('number').setDescription('Number to look up').setRequired(true).setMaxLength(32),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName('force-end')
+            .setDescription('End an in-progress call (moderation)')
+            .addStringOption((opt) =>
+              opt.setName('call-id').setDescription('Call UUID').setRequired(true),
+            )
+            .addStringOption((opt) =>
+              opt.setName('reason').setDescription('Reason (audit)').setRequired(false).setMaxLength(64),
+            ),
+        ),
+    )
+    // Discord-level admin gate is *additionally* applied via runtime isStaff checks
+    // — keep the parent command visible so non-staff can still use /phone register etc.
+    // Do NOT set default_member_permissions on the parent, or non-staff lose user commands.
+    .setDefaultMemberPermissions(null) as SlashCommandBuilder,
+
+  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+    const group = interaction.options.getSubcommandGroup(false);
+    const sub = interaction.options.getSubcommand();
+
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      if (group === 'admin') {
+        switch (sub) {
+          case 'tap-create':
+            await handleAdminTapCreate(interaction);
+            break;
+          case 'tap-revoke':
+            await handleAdminTapRevoke(interaction);
+            break;
+          case 'tap-list':
+            await handleAdminTapList(interaction);
+            break;
+          case 'lookup':
+            await handleAdminLookup(interaction);
+            break;
+          case 'force-end':
+            await handleAdminForceEnd(interaction);
+            break;
+          default:
+            await interaction.editReply({ embeds: [errorEmbed(`Unknown admin subcommand: ${sub}`)] });
+        }
+        return;
+      }
+
+      switch (sub) {
+        case 'register':
+          await handleRegister(interaction);
+          break;
+        case 'numbers':
+          await handleNumbers(interaction);
+          break;
+        case 'delete':
+          await handleDelete(interaction);
+          break;
+        case 'dial':
+          await handleDial(interaction);
+          break;
+        case 'hangup':
+          await handleHangup(interaction);
+          break;
+        case 'history':
+          await handleHistory(interaction);
+          break;
+        default:
+          await interaction.editReply({ embeds: [errorEmbed(`Unknown subcommand: ${sub}`)] });
+      }
+    } catch (err) {
+      console.error(`[/phone ${group ?? ''} ${sub}] uncaught:`, err);
+      await interaction.editReply({ embeds: [errorEmbed('Something went wrong handling that command.')] });
+    }
+  },
+};
+
+// Suppress unused buttons import (kept for symmetry with similar files if extended later).
+void ActionRowBuilder;
+void ButtonBuilder;
+void ButtonStyle;
+void PermissionFlagsBits;
+
+export default command;

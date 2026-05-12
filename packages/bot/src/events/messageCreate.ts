@@ -80,9 +80,11 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
   if (!openCall) {
     if (shouldShowHint(message.author.id)) {
       try {
-        await message.reply(
-          'You\'re not in a call right now. Use `/phone dial <number>` to start one. (Messages outside a call are not stored or forwarded.)',
-        );
+        await message.reply({
+          content:
+            'You\'re not in a call right now. Use `/phone dial <number>` to start one. (Messages outside a call are not stored or forwarded.)',
+          allowedMentions: { repliedUser: false, parse: [] },
+        });
       } catch {
         /* DMs may be closed mid-stream; ignore */
       }
@@ -92,7 +94,10 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
 
   if (openCall.status === 'ringing') {
     try {
-      await message.reply('Your line is still ringing. Wait for the other side to pick up, or `/phone hangup` to cancel.');
+      await message.reply({
+        content: 'Your line is still ringing. Wait for the other side to pick up, or `/phone hangup` to cancel.',
+        allowedMentions: { repliedUser: false, parse: [] },
+      });
     } catch {
       /* ignore */
     }
@@ -125,7 +130,10 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
       // alive-check, applied to in-call writes.
       if (err.code === 'dead') {
         try {
-          await message.reply(err.message + ' The call has been ended.');
+          await message.reply({
+            content: err.message + ' The call has been ended.',
+            allowedMentions: { repliedUser: false, parse: [] },
+          });
         } catch {
           /* ignore */
         }
@@ -138,7 +146,10 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
         return;
       }
       try {
-        await message.reply(err.message);
+        await message.reply({
+          content: err.message,
+          allowedMentions: { repliedUser: false, parse: [] },
+        });
       } catch {
         /* ignore */
       }
@@ -169,7 +180,10 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
       console.error(`[phone:event] recipient ${err.discordUserId} has DMs closed; ending call`);
       try {
         // Let the sender know what happened, since their line goes silent otherwise.
-        await message.reply('The other party has DMs closed. The call has been ended.');
+        await message.reply({
+          content: 'The other party has DMs closed. The call has been ended.',
+          allowedMentions: { repliedUser: false, parse: [] },
+        });
       } catch {
         /* ignore */
       }

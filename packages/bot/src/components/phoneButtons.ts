@@ -124,6 +124,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
             .setColor(0x788c5d)
             .setDescription('Your call was answered. Type any message in this DM to speak. `/phone hangup` ends the call.'),
         ],
+        allowedMentions: { parse: [] },
       });
     } catch (err) {
       console.error('[phone:button] answer: failed to notify caller / open staff thread:', err);
@@ -182,6 +183,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
           .setColor(0xc25b4e)
           .setDescription('Your call was declined by the recipient.'),
       ],
+      allowedMentions: { parse: [] },
     });
   } catch (err) {
     console.error('[phone:button] decline: failed to notify caller:', err);

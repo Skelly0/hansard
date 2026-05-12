@@ -29,10 +29,32 @@ describe('migrate-phones', () => {
     expect(script).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "phone_threads_pair_unique"');
   });
 
-  it('constrains phone_numbers.number_normalized at the DB level', () => {
-    expect(script).toContain('"number_normalized" varchar(32) NOT NULL UNIQUE');
+  it('constrains phone_numbers.number_normalized shape at the DB level', () => {
+    // Uniqueness moved to a partial unique index (active rows only) — see next test.
+    expect(script).toContain('"number_normalized" varchar(32) NOT NULL');
+    expect(script).not.toContain('"number_normalized" varchar(32) NOT NULL UNIQUE');
     expect(script).toContain('phone_numbers_normalized_shape');
     expect(script).toContain("number_normalized ~ '^\\\\+?[0-9]{3,20}$'");
+  });
+
+  it('enforces uniqueness only on active phone numbers (retired digits can be re-registered)', () => {
+    // A retired number must not block its own player — or anyone — from claiming it later.
+    expect(script).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "phone_numbers_active_normalized_unique"');
+    expect(script).toMatch(/ON "phone_numbers" \("number_normalized"\) WHERE is_active = true/);
+  });
+
+  it('drops any legacy column-level UNIQUE on phone_numbers.number_normalized', () => {
+    // Migration must look up the auto-generated constraint name and drop it so the new
+    // partial unique index can take over for upgraded deployments.
+    expect(script).toContain('SELECT c.conname INTO uniq_name');
+    expect(script).toContain("c.conrelid = '\"phone_numbers\"'::regclass");
+    expect(script).toContain("ALTER TABLE \"phone_numbers\" DROP CONSTRAINT %I");
+  });
+
+  it('records the staff force-end actor on phone_calls', () => {
+    // Audit column for `forceEndCall` — staff actor uuid must be queryable without parsing
+    // `ended_reason`. Nullable: only set when staff force-ended the call.
+    expect(script).toContain('ADD COLUMN IF NOT EXISTS "force_ended_by_id" uuid REFERENCES "players"("id")');
   });
 
   it('constrains phone_calls.status to the documented enum values', () => {

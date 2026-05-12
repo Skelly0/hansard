@@ -205,33 +205,42 @@ async function sendStaffJoinPing(
       allowedMentions: { roles: staffRoleIds },
       content: `${mentions} new phone log requires oversight.`,
     });
-    // Best-effort: actually add the staff role's current members to the thread. A role ping
-    // notifies but does NOT auto-add to private threads. Without this, staff need to manually
-    // click into the thread before they receive updates.
-    try {
-      // Ensure the guild's member cache is reasonably warm. `Guild.members.fetch()` without
-      // args fetches all members (limited by `GuildMembers` intent — which we have).
-      // Skip if a fetch fails; we'll just miss best-effort auto-add.
-      await guild.members.fetch().catch(() => undefined);
-      const addBatch: Promise<unknown>[] = [];
-      const batchSize = 5;
-      for (const member of guild.members.cache.values()) {
-        if (member.user.bot) continue;
-        const hasStaffRole = member.roles.cache.some((r) => staffRoleIds.includes(r.id));
-        if (!hasStaffRole) continue;
-        addBatch.push(thread.members.add(member.id).catch((err: unknown) => {
-          console.error(`[phone:relay] failed to add staff member ${member.id} to thread:`, err);
-        }));
-        if (addBatch.length >= batchSize) {
-          await Promise.all(addBatch.splice(0, addBatch.length));
-        }
-      }
-      if (addBatch.length > 0) await Promise.all(addBatch);
-    } catch (err) {
-      console.error('[phone:relay] failed to auto-add staff to phone thread:', err);
-    }
+    // Fire-and-forget the staff member auto-add. `Guild.members.fetch()` without args pulls
+    // every member (in a 1000+ member guild that's a multi-second blocking RPC), and the
+    // first relayed message of a brand-new pair shouldn't pay that cost — the ping above
+    // already woke staff up. Subsequent messages reuse the thread.
+    void backgroundStaffAdd(thread, guild, staffRoleIds);
   } catch (err) {
     console.error('[phone:relay] failed to ping staff roles:', err);
+  }
+}
+
+async function backgroundStaffAdd(
+  thread: ThreadChannel,
+  guild: Guild,
+  staffRoleIds: string[],
+): Promise<void> {
+  try {
+    // Ensure the guild's member cache is reasonably warm. Limited by `GuildMembers` intent.
+    // Skip silently if a fetch fails — we'll just miss best-effort auto-add for now and the
+    // staff role ping is already in the thread.
+    await guild.members.fetch().catch(() => undefined);
+    const addBatch: Promise<unknown>[] = [];
+    const batchSize = 5;
+    for (const member of guild.members.cache.values()) {
+      if (member.user.bot) continue;
+      const hasStaffRole = member.roles.cache.some((r) => staffRoleIds.includes(r.id));
+      if (!hasStaffRole) continue;
+      addBatch.push(thread.members.add(member.id).catch((err: unknown) => {
+        console.error(`[phone:relay] failed to add staff member ${member.id} to thread:`, err);
+      }));
+      if (addBatch.length >= batchSize) {
+        await Promise.all(addBatch.splice(0, addBatch.length));
+      }
+    }
+    if (addBatch.length > 0) await Promise.all(addBatch);
+  } catch (err) {
+    console.error('[phone:relay] failed to auto-add staff to phone thread:', err);
   }
 }
 
@@ -323,7 +332,9 @@ async function sendToRecipient(
     for (let i = 0; i < chunks.length; i++) {
       const piece = chunks[i];
       const prefix = chunks.length > 1 ? `**${senderNumber.numberRaw}** [${i + 1}/${chunks.length}]: ` : `**${senderNumber.numberRaw}:** `;
-      const dm = await user.send({ content: `${prefix}${piece}` });
+      // Suppress mention parsing on user-content forwarding even though DMs cannot notify
+      // bystanders — defense in depth, matches the staff thread mirror at postToStaffThread.
+      const dm = await user.send({ content: `${prefix}${piece}`, allowedMentions: { parse: [] } });
       if (i === 0) firstId = dm.id;
     }
     return firstId;
@@ -381,6 +392,13 @@ async function deliverTapCopy(
   senderNumber: PhoneNumber,
   message: PhoneMessage,
 ): Promise<void> {
+  // Re-check that the tap is still active right before posting. `getActiveTapsForNumbers`
+  // snapshots the active-tap list at the start of `relayMessage`; a concurrent staff revoke
+  // or circuit-breaker auto-revoke between then and now should not produce a final mirror
+  // copy. Cheap (one indexed point lookup) and the source of truth on the storage side.
+  if (!(await svc.isTapActive(tap.id))) {
+    return;
+  }
   const recipient = sender.id === context.callerPlayer.id ? context.recipientPlayer : context.callerPlayer;
   const senderName = sender.characterName ?? 'Unknown';
   const recipientName = recipient.characterName ?? 'Unknown';
@@ -429,7 +447,7 @@ async function deliverTapCopy(
     if (tap.mirrorDiscordUserId) {
       try {
         const user = await client.users.fetch(tap.mirrorDiscordUserId);
-        const dm = await user.send({ embeds: [embed] });
+        const dm = await user.send({ embeds: [embed], allowedMentions: { parse: [] } });
         if (!mirrorMessageId && i === 0) mirrorMessageId = dm.id;
       } catch (err) {
         errors.push(err instanceof Error ? err.message : String(err));
@@ -506,7 +524,7 @@ export async function hangUpAndNotify(
   for (const player of [context.callerPlayer, context.recipientPlayer]) {
     try {
       const user = await client.users.fetch(player.discordId);
-      await user.send({ embeds: [embed] });
+      await user.send({ embeds: [embed], allowedMentions: { parse: [] } });
     } catch {
       /* DMs may be closed; ignore */
     }

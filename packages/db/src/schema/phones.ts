@@ -14,7 +14,10 @@ export const phoneNumbers = pgTable('phone_numbers', {
   playerId: uuid('player_id').references(() => players.id).notNull(),
 
   numberRaw: varchar('number_raw', { length: 32 }).notNull(),
-  numberNormalized: varchar('number_normalized', { length: 32 }).notNull().unique(),
+  // Uniqueness is enforced on the **active** subset only (see `activeNumberUnique` below) so a
+  // player can re-register a number after retiring it, or another player can claim a freed
+  // number. Retired rows keep `numberNormalized` in place for call-history lookups.
+  numberNormalized: varchar('number_normalized', { length: 32 }).notNull(),
 
   label: varchar('label', { length: 64 }),
   cachedCharacterName: varchar('cached_character_name', { length: 128 }),
@@ -26,6 +29,13 @@ export const phoneNumbers = pgTable('phone_numbers', {
 }, (table) => ({
   playerIdx: index('phone_numbers_player_idx').on(table.playerId),
   normalizedShape: check('phone_numbers_normalized_shape', sql`number_normalized ~ '^\\+?[0-9]{3,20}$'`),
+  // Partial unique index: only one *active* registration per normalized number. Retired rows
+  // (`is_active=false`) keep their digits in place for history lookups but don't block a new
+  // registration of the same digits. Service code also lookups by `numberNormalized + is_active`
+  // so dial routing always hits the active row.
+  activeNumberUnique: uniqueIndex('phone_numbers_active_normalized_unique')
+    .on(table.numberNormalized)
+    .where(sql`is_active = true`),
 }));
 
 // === PHONE CALLS ===
@@ -56,6 +66,12 @@ export const phoneCalls = pgTable('phone_calls', {
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   answeredAt: timestamp('answered_at', { withTimezone: true, mode: 'date' }),
   endedAt: timestamp('ended_at', { withTimezone: true, mode: 'date' }),
+
+  // Staff actor for force-end. The `ended_reason` already carries `force_ended_by_staff:<note>`,
+  // but the actor's identity must survive on a structured column so the audit trail is
+  // queryable without parsing the reason string. Same rogue-staff threat model as
+  // `phone_tap_audit_log`. Nullable: only set when the call was force-ended by staff.
+  forceEndedById: uuid('force_ended_by_id').references(() => players.id),
 }, (table) => ({
   // Same-role duplicate protection for open calls.
   oneOpenCaller: uniqueIndex('phone_calls_one_open_caller')

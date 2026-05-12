@@ -292,6 +292,27 @@ describe('PhoneService.recordMessage', () => {
     await expect(svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p1', content: 'hi' }))
       .rejects.toMatchObject({ code: 'dead' });
   });
+
+  it('runs the status check + insert inside db.transaction (FOR UPDATE locks the call row)', async () => {
+    // The transactional wrapping is what closes the recordMessage / concurrent endCall race.
+    // Without it, a status check that wins the read could insert into a call that another
+    // hand has already marked `ended`. We assert the txn boundary directly.
+    const txCounter = { count: 0 };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'call-1', status: 'active', callerPlayerId: 'p1', recipientPlayerId: 'p2' }],
+        [{ isAlive: true }],
+      ],
+      insertReturning: [
+        [{ id: 'm1', callId: 'call-1', senderPlayerId: 'p1', content: 'hi' }],
+      ],
+      transactionCalls: txCounter,
+    });
+    const svc = new PhoneService(db);
+    const row = await svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p1', content: 'hi' });
+    expect(txCounter.count).toBe(1);
+    expect(row.id).toBe('m1');
+  });
 });
 
 describe('PhoneService.getCallHistory', () => {
@@ -376,6 +397,26 @@ describe('PhoneService.endCall reason derivation', () => {
     expect(result.endedReason).toBe('hangup_recipient');
   });
 
+  it('routes recipient hangup on a still-ringing call to `declined_by_recipient` (matches Decline button)', async () => {
+    // Audit consistency: `/phone hangup` from the recipient during ringing must produce the
+    // same `(status, endedReason)` pair as clicking the Decline button.
+    const db = makeDb({
+      selectQueues: [
+        [{
+          id: 'call-1',
+          status: 'ringing',
+          callerPlayerId: 'caller',
+          recipientPlayerId: 'recipient',
+        }],
+      ],
+      updateReturning: [[{ id: 'call-1', status: 'declined', endedReason: 'declined_by_recipient' }]],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.endCall('call-1', 'recipient');
+    expect(result.endedReason).toBe('declined_by_recipient');
+    expect(result.status).toBe('declined');
+  });
+
   it('refuses non-participants from ending the call', async () => {
     const db = makeDb({
       selectQueues: [
@@ -389,6 +430,111 @@ describe('PhoneService.endCall reason derivation', () => {
     });
     const svc = new PhoneService(db);
     await expect(svc.endCall('call-1', 'stranger')).rejects.toMatchObject({ code: 'forbidden' });
+  });
+});
+
+describe('PhoneService.forceEndCall', () => {
+  it('persists the staff actor on force_ended_by_id so the audit trail is queryable', async () => {
+    // M1: rogue-staff threat model — the actor must survive on a structured column, not
+    // just embedded in the reason string. Verify both that the update succeeds and that
+    // the audit column is populated.
+    const captured: Record<string, unknown>[] = [];
+    const db = {
+      transaction: async (fn: (tx: unknown) => unknown) => fn(db),
+      select: () => {
+        // Single call — return the active call once.
+        let resolved: Promise<unknown> | null = null;
+        const queue = [[{ id: 'call-1', status: 'active', callerPlayerId: 'c', recipientPlayerId: 'r' }]];
+        const ensure = () => (resolved ??= Promise.resolve(queue.shift() ?? []));
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (ok: (v: unknown) => unknown, err?: (r: unknown) => unknown) => ensure().then(ok, err);
+            }
+            return () => new Proxy({}, handler);
+          },
+        };
+        return new Proxy({}, handler);
+      },
+      update: () => ({
+        set: (values: Record<string, unknown>) => {
+          captured.push(values);
+          return {
+            where: () => ({
+              returning: () => Promise.resolve([{ id: 'call-1', status: 'ended', endedReason: 'force_ended_by_staff:test', forceEndedById: 'staff-uuid' }]),
+            }),
+          };
+        },
+      }),
+    } as any;
+    const svc = new PhoneService(db);
+    const result = await svc.forceEndCall('call-1', 'staff-uuid', 'test');
+    expect(result.forceEndedById).toBe('staff-uuid');
+    // The persisted update payload must include the actor.
+    expect(captured[0]).toMatchObject({ forceEndedById: 'staff-uuid', status: 'ended' });
+  });
+
+  it('preserves up to 59 chars of the reason note (column budget after `force_ended_by_staff:` prefix)', async () => {
+    // N4: previous slice(0, 48) truncated unnecessarily; the column is varchar(80) and the
+    // prefix is 21 chars, so 59 is the safe maximum.
+    const captured: Record<string, unknown>[] = [];
+    const longNote = 'x'.repeat(64);
+    const db = {
+      transaction: async (fn: (tx: unknown) => unknown) => fn(db),
+      select: () => {
+        let resolved: Promise<unknown> | null = null;
+        const queue = [[{ id: 'call-1', status: 'active', callerPlayerId: 'c', recipientPlayerId: 'r' }]];
+        const ensure = () => (resolved ??= Promise.resolve(queue.shift() ?? []));
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (ok: (v: unknown) => unknown, err?: (r: unknown) => unknown) => ensure().then(ok, err);
+            }
+            return () => new Proxy({}, handler);
+          },
+        };
+        return new Proxy({}, handler);
+      },
+      update: () => ({
+        set: (values: Record<string, unknown>) => {
+          captured.push(values);
+          return {
+            where: () => ({
+              returning: () => Promise.resolve([{ id: 'call-1' }]),
+            }),
+          };
+        },
+      }),
+    } as any;
+    const svc = new PhoneService(db);
+    await svc.forceEndCall('call-1', 'staff-uuid', longNote);
+    expect(captured[0].endedReason).toBe(`force_ended_by_staff:${'x'.repeat(59)}`);
+  });
+});
+
+describe('PhoneService.isTapActive', () => {
+  it('returns true when the tap row reports is_active=true', async () => {
+    const db = makeDb({
+      selectQueues: [[{ isActive: true }]],
+    });
+    const svc = new PhoneService(db);
+    expect(await svc.isTapActive('tap-1')).toBe(true);
+  });
+
+  it('returns false when the tap row reports is_active=false (revoked between snapshot and delivery)', async () => {
+    const db = makeDb({
+      selectQueues: [[{ isActive: false }]],
+    });
+    const svc = new PhoneService(db);
+    expect(await svc.isTapActive('tap-1')).toBe(false);
+  });
+
+  it('returns false when the tap row is missing', async () => {
+    const db = makeDb({
+      selectQueues: [[]],
+    });
+    const svc = new PhoneService(db);
+    expect(await svc.isTapActive('tap-1')).toBe(false);
   });
 });
 

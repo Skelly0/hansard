@@ -447,9 +447,16 @@ export class PhoneService {
   }
 
   /**
-   * Player-initiated hangup. The ended reason is **always derived from the actor's role** —
-   * callers can't pass `'hangup_recipient'` and vice versa. System reasons (`relay_failed`,
-   * `dm_closed`, ring expiry, force-end by staff) have dedicated methods below.
+   * Player-initiated hangup. The ended reason is **always derived from the actor's role and
+   * call state** — callers can't pass `'hangup_recipient'` and vice versa. The four cases:
+   *   - caller hangs up while ringing → `cancelled_by_caller` (status flips to `'ended'`)
+   *   - caller hangs up while active  → `hangup_caller`
+   *   - recipient hangs up while ringing → `declined_by_recipient` (status flips to `'declined'`,
+   *     mirroring the dedicated `declineCall` path so audit reads stay aligned regardless of
+   *     entry point — slash hangup vs. Decline button)
+   *   - recipient hangs up while active  → `hangup_recipient`
+   * System reasons (`relay_failed`, `dm_closed`, ring expiry, force-end by staff) have
+   * dedicated methods below.
    */
   async endCall(callId: string, actingPlayerId: string): Promise<PhoneCall> {
     const call = await this.requireCall(callId);
@@ -462,16 +469,22 @@ export class PhoneService {
       throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
     }
 
-    const endedReason: 'hangup_caller' | 'hangup_recipient' | 'cancelled_by_caller' =
-      call.status === 'ringing' && isCaller
+    const isRinging = call.status === 'ringing';
+    const endedReason: 'hangup_caller' | 'hangup_recipient' | 'cancelled_by_caller' | 'declined_by_recipient' =
+      isRinging && isCaller
         ? 'cancelled_by_caller'
-        : isCaller
-          ? 'hangup_caller'
-          : 'hangup_recipient';
+        : isRinging
+          ? 'declined_by_recipient'
+          : isCaller
+            ? 'hangup_caller'
+            : 'hangup_recipient';
+    // Use 'declined' as the terminal status for a recipient-ringing decline so the audit
+    // matches the button-driven `declineCall` path; everything else lands on 'ended'.
+    const terminalStatus: 'ended' | 'declined' = endedReason === 'declined_by_recipient' ? 'declined' : 'ended';
 
     const [updated] = await this.db
       .update(phoneCalls)
-      .set({ status: 'ended', endedAt: new Date(), endedReason })
+      .set({ status: terminalStatus, endedAt: new Date(), endedReason })
       .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, ['ringing', 'active'])))
       .returning();
 
@@ -498,7 +511,14 @@ export class PhoneService {
     return updated ?? null;
   }
 
-  async forceEndCall(callId: string, _actingStaffId: string, reason?: string): Promise<PhoneCall> {
+  /**
+   * Staff force-end. Records the acting staff member's player UUID on `phone_calls.force_ended_by_id`
+   * so the audit trail is queryable without parsing `ended_reason`. The reason note is sliced to
+   * 59 chars — `varchar(80)` minus `'force_ended_by_staff:'` (21 chars) — so the full slash-
+   * option max-length-64 input is preserved up to the column budget instead of being truncated
+   * to 48 unnecessarily.
+   */
+  async forceEndCall(callId: string, actingStaffId: string, reason?: string): Promise<PhoneCall> {
     const call = await this.requireCall(callId);
     if (call.status !== 'ringing' && call.status !== 'active') {
       throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
@@ -508,7 +528,8 @@ export class PhoneService {
       .set({
         status: 'ended',
         endedAt: new Date(),
-        endedReason: reason ? `${PHONE_FORCE_END_REASON_PREFIX}${reason.slice(0, 48)}` : 'force_ended_by_staff',
+        endedReason: reason ? `${PHONE_FORCE_END_REASON_PREFIX}${reason.slice(0, 59)}` : 'force_ended_by_staff',
+        forceEndedById: actingStaffId,
       })
       .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, ['ringing', 'active'])))
       .returning();
@@ -607,33 +628,48 @@ export class PhoneService {
   // Messages
   // ----------------------------------------------------------
 
+  /**
+   * Persist a relayed message into the call's frozen transcript. Wrapped in a transaction
+   * with `SELECT ... FOR UPDATE` on the call row so a concurrent `endCall` / `systemEndCall`
+   * cannot transition the call between our status check and the insert — the invariant
+   * "messages exist only on calls that were active when the message arrived" must hold
+   * regardless of timing.
+   */
   async recordMessage(input: RecordMessageInput): Promise<PhoneMessage> {
-    const call = await this.requireCall(input.callId);
-    if (call.status !== 'active') {
-      throw new PhoneServiceError('invalid_state', `Call is ${call.status}, cannot record messages.`);
-    }
-    if (call.callerPlayerId !== input.senderPlayerId && call.recipientPlayerId !== input.senderPlayerId) {
-      throw new PhoneServiceError('forbidden', 'You are not in this call.');
-    }
-    const [sender] = await this.db
-      .select({ isAlive: players.isAlive })
-      .from(players)
-      .where(eq(players.id, input.senderPlayerId))
-      .limit(1);
-    if (!sender || !sender.isAlive) {
-      throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
-    }
+    return this.db.transaction(async (tx) => {
+      const [call] = await tx
+        .select()
+        .from(phoneCalls)
+        .where(eq(phoneCalls.id, input.callId))
+        .for('update')
+        .limit(1);
+      if (!call) throw new PhoneServiceError('not_found', 'Call not found.');
+      if (call.status !== 'active') {
+        throw new PhoneServiceError('invalid_state', `Call is ${call.status}, cannot record messages.`);
+      }
+      if (call.callerPlayerId !== input.senderPlayerId && call.recipientPlayerId !== input.senderPlayerId) {
+        throw new PhoneServiceError('forbidden', 'You are not in this call.');
+      }
+      const [sender] = await tx
+        .select({ isAlive: players.isAlive })
+        .from(players)
+        .where(eq(players.id, input.senderPlayerId))
+        .limit(1);
+      if (!sender || !sender.isAlive) {
+        throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
+      }
 
-    const [row] = await this.db
-      .insert(phoneMessages)
-      .values({
-        callId: input.callId,
-        senderPlayerId: input.senderPlayerId,
-        content: input.content,
-        senderDiscordMessageId: input.senderDiscordMessageId ?? null,
-      })
-      .returning();
-    return row;
+      const [row] = await tx
+        .insert(phoneMessages)
+        .values({
+          callId: input.callId,
+          senderPlayerId: input.senderPlayerId,
+          content: input.content,
+          senderDiscordMessageId: input.senderDiscordMessageId ?? null,
+        })
+        .returning();
+      return row;
+    });
   }
 
   async updateMessageMirrorIds(
@@ -796,6 +832,21 @@ export class PhoneService {
       .select()
       .from(phoneTaps)
       .where(and(inArray(phoneTaps.targetNumberId, numberIds), eq(phoneTaps.isActive, true)));
+  }
+
+  /**
+   * Cheap point check that a tap is still active. Used by the relay between snapshotting
+   * the active-tap list and posting each delivery: a concurrent `revokeTap` /
+   * `autoRevokeBrokenTap` between the list lookup and the per-tap fan-out should not produce
+   * a final mirror copy to the now-revoked destination.
+   */
+  async isTapActive(tapId: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ isActive: phoneTaps.isActive })
+      .from(phoneTaps)
+      .where(eq(phoneTaps.id, tapId))
+      .limit(1);
+    return Boolean(row?.isActive);
   }
 
   async recordTapDelivery(

@@ -5,6 +5,7 @@ import {
   SlashCommandBuilder,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
+  type Guild,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { players } from '@hansard/db';
@@ -213,7 +214,11 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
       )
       .setFooter({ text: 'This ring expires in 60 seconds.' });
     const row = buildIncomingCallActions(participants.call.id);
-    const ringMessage = await recipientUser.send({ embeds: [ringEmbed], components: [row] });
+    const ringMessage = await recipientUser.send({
+      embeds: [ringEmbed],
+      components: [row],
+      allowedMentions: { parse: [] },
+    });
     ringMessageId = ringMessage.id;
   } catch (err) {
     console.error('[phone:cmd] dial: recipient DM failed:', err);
@@ -251,6 +256,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
             `Calling **${participants.recipientNumber.numberRaw}** from **${participants.callerNumber.numberRaw}**. You'll be notified when they pick up.\n\nUse \`/phone hangup\` to cancel before they answer.`,
           ),
       ],
+      allowedMentions: { parse: [] },
     });
   } catch {
     /* caller has DMs closed — still let the slash reply confirm */
@@ -352,6 +358,21 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
 // Admin subcommand group (staff only at runtime)
 // -----------------------------------------------------------------------------
 
+/**
+ * Resolve the set of guilds to check for staff-role membership. If `PHONE_GUILD_ID` is set,
+ * we restrict to that one guild so staff trust does not leak across guilds in multi-guild
+ * deployments (e.g. a staff member in an unrelated guild should not be trusted as staff
+ * for this game's phone admin actions). Single-guild deployments keep the legacy behavior.
+ */
+function guildsForStaffCheck(interaction: ChatInputCommandInteraction): Iterable<Guild> {
+  const configured = process.env.PHONE_GUILD_ID?.trim();
+  if (configured) {
+    const guild = interaction.client.guilds.cache.get(configured);
+    return guild ? [guild] : [];
+  }
+  return interaction.client.guilds.cache.values();
+}
+
 async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<boolean> {
   // In DM context `interaction.member` is null, so `isStaff(...)` would always refuse. Fall
   // back to (a) the DB `players.isStaff` flag, and (b) checking whether the invoking user
@@ -367,9 +388,10 @@ async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<bo
       .where(eq(players.discordId, interaction.user.id))
       .limit(1);
     if (row?.isStaff) return true;
-    // Role-only-staff fallback: walk every guild the bot is in, find the invoker as a
-    // GuildMember, and check whether they hold any resolved staff role.
-    for (const guild of interaction.client.guilds.cache.values()) {
+    // Role-only-staff fallback: walk the configured-or-all guilds, find the invoker as a
+    // GuildMember, and check whether they hold any resolved staff role. When `PHONE_GUILD_ID`
+    // is set we restrict to that one guild so staff trust cannot leak across guilds.
+    for (const guild of guildsForStaffCheck(interaction)) {
       try {
         const member = await guild.members.fetch(interaction.user.id).catch(() => null);
         if (!member) continue;
@@ -393,7 +415,9 @@ async function discordUserIsStaff(interaction: ChatInputCommandInteraction, disc
     .limit(1);
   if (row?.isStaff) return true;
 
-  for (const guild of interaction.client.guilds.cache.values()) {
+  // Same `PHONE_GUILD_ID` containment as `ensureStaff` so a tap mirror-user from a different
+  // guild does not pass the staff check.
+  for (const guild of guildsForStaffCheck(interaction)) {
     try {
       const member = await guild.members.fetch(discordUserId).catch(() => null);
       if (!member) continue;
@@ -561,8 +585,16 @@ async function handleAdminForceEnd(interaction: ChatInputCommandInteraction): Pr
   if (!(await ensureStaff(interaction))) return;
   const callId = interaction.options.getString('call-id', true);
   const reason = interaction.options.getString('reason') || undefined;
+  // Resolve the staff member's player row so the audit column receives a player UUID
+  // (matching `players.id`), not a raw Discord snowflake. Without this lookup the
+  // `force_ended_by_id` FK would be wrong and follow-up "who ended this?" queries broken.
+  const staffPlayer = await resolvePlayer(interaction.user.id);
+  if (!staffPlayer) {
+    await interaction.editReply({ embeds: [errorEmbed('Staff player record not found.')] });
+    return;
+  }
   try {
-    await svc().forceEndCall(callId, interaction.user.id, reason);
+    await svc().forceEndCall(callId, staffPlayer.id, reason);
     await hangUpAndNotify(interaction.client, callId, 'force_ended_by_staff');
     await interaction.editReply({ embeds: [successEmbed('Call ended', `Call \`${callId}\` was force-ended.`)] });
   } catch (err) {

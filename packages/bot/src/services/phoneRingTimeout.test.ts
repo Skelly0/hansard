@@ -44,4 +44,26 @@ describe('expireRingingCalls', () => {
     // No client passed — call should succeed without throwing.
     await expect(expireRingingCalls(db as any, {})).resolves.toBeDefined();
   });
+
+  it('logs and returns an empty list when the DB call throws', async () => {
+    const failingDb = {
+      update: vi.fn(() => {
+        throw new Error('boom');
+      }),
+    };
+    const logger = { error: vi.fn(), log: vi.fn() };
+    const { expired } = await expireRingingCalls(failingDb as any, { logger });
+    expect(expired).toEqual([]);
+    expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+describe('sweepStrandedActiveCalls', () => {
+  it('returns the swept active calls', async () => {
+    const { sweepStrandedActiveCalls } = await import('./phoneRingTimeout.js');
+    const swept = [{ id: 'call-1', status: 'ended', endedReason: 'session_reset' }];
+    const db = buildDb(swept);
+    const { ended } = await sweepStrandedActiveCalls(db as any, { maxAgeMs: 1000 });
+    expect(ended).toEqual(swept);
+  });
 });

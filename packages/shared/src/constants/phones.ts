@@ -49,3 +49,44 @@ export function isValidPhoneNumber(input: string): boolean {
 export function formatPhoneNumber(raw: string): string {
   return raw.trim();
 }
+
+/**
+ * Map a `phone_calls.ended_reason` value to a human-readable description for `/phone history`,
+ * the staff thread "call ended" embed, and web call logs. Keeps the strings in one place so
+ * UI surfaces stay aligned.
+ *
+ * `force_ended_by_staff:<note>` is normalized to "Ended by staff: <note>".
+ */
+export function formatPhoneEndedReason(reason: string | null | undefined): string {
+  if (!reason) return 'Ended';
+  if (reason.startsWith('force_ended_by_staff:')) {
+    const note = reason.slice('force_ended_by_staff:'.length).trim();
+    return note ? `Ended by staff: ${note}` : 'Ended by staff';
+  }
+  switch (reason) {
+    case 'hangup_caller': return 'Caller hung up';
+    case 'hangup_recipient': return 'Recipient hung up';
+    case 'cancelled_by_caller': return 'Cancelled before pickup';
+    case 'declined_by_recipient': return 'Declined';
+    case 'ring_timeout': return 'No answer';
+    case 'force_ended_by_staff': return 'Ended by staff';
+    case 'dm_closed': return 'Recipient unreachable';
+    case 'relay_failed': return 'Relay failed';
+    case 'session_reset': return 'Bot restart';
+    case 'number_deactivated': return 'Line retired';
+    default: return reason;
+  }
+}
+
+/** Format a `phone_calls.status` value for player-facing surfaces. */
+export function formatPhoneCallStatus(status: string): string {
+  switch (status) {
+    case 'ringing': return 'Ringing';
+    case 'active': return 'Active';
+    case 'ended': return 'Ended';
+    case 'declined': return 'Declined';
+    case 'missed': return 'Missed';
+    case 'cancelled': return 'Cancelled';
+    default: return status;
+  }
+}

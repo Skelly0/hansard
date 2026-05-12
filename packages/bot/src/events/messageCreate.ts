@@ -7,17 +7,38 @@ import {
   PhoneServiceError,
   type CallParticipants,
 } from '@hansard/api/services/phoneService';
-import { relayMessage, hangUpAndNotify, postCallOpenedToStaffThread } from '../utils/phoneRelay.js';
+import {
+  relayMessage,
+  hangUpAndNotify,
+  postCallOpenedToStaffThread,
+  RecipientDmClosedError,
+} from '../utils/phoneRelay.js';
 
-// Players who have been told "you're not in a call" in the last minute. Avoids spamming
-// hint replies if they type several lines into the DM while no call is active.
-const recentHinted = new Map<string, number>();
 const HINT_COOLDOWN_MS = 60 * 1000;
+const HINT_MAP_MAX = 500;
+
+/**
+ * Bounded LRU-ish cooldown map for "you're not in a call" hints. Prevents an unbounded
+ * memory leak from random DMs at the bot. Eviction is simple: when the map exceeds
+ * HINT_MAP_MAX, drop the oldest half. Discord DM volume to the bot is low enough that
+ * this is well below O(call rate).
+ */
+const recentHinted = new Map<string, number>();
 
 function shouldShowHint(discordId: string): boolean {
   const last = recentHinted.get(discordId) ?? 0;
   if (Date.now() - last < HINT_COOLDOWN_MS) return false;
   recentHinted.set(discordId, Date.now());
+  if (recentHinted.size > HINT_MAP_MAX) {
+    // Drop the earliest-inserted half. Insertion order is preserved by Map iteration.
+    const drop = Math.floor(HINT_MAP_MAX / 2);
+    let i = 0;
+    for (const key of recentHinted.keys()) {
+      if (i >= drop) break;
+      recentHinted.delete(key);
+      i++;
+    }
+  }
   return true;
 }
 
@@ -31,22 +52,25 @@ async function resolvePlayer(discordId: string): Promise<{ id: string; isAlive: 
 }
 
 async function handleDmMessage(client: Client, message: Message): Promise<void> {
-  // Fully fetch if partial (older messages or first DM after restart arrive partial).
   if (message.partial) {
     try {
       await message.fetch();
     } catch (err) {
-      console.error('[phone] failed to hydrate DM:', err);
+      console.error(`[phone:event] failed to hydrate DM ${message.id} from ${message.author?.id ?? '?'}:`, err);
       return;
     }
   }
   if (message.author.bot) return;
-  if (!message.content || message.content.startsWith('/')) return;
+  if (!message.content) return;
+
+  // NOTE: do NOT filter on `startsWith('/')`. In DM channels Discord delivers actual slash
+  // commands as separate Interaction events, not as messages — so any `/`-prefixed message
+  // here is plain text the player typed and should be relayed (and frozen) like any other.
 
   const player = await resolvePlayer(message.author.id);
   if (!player || !player.characterName) {
-    // OAuth-only placeholder accounts and non-registered Discord users get no reply —
-    // we don't want to leak "this bot exists for X reason" to randos.
+    // OAuth-only placeholders and non-registered Discord users get no reply — we don't want
+    // to leak the bot's existence/purpose to randos.
     return;
   }
 
@@ -78,12 +102,11 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
   try {
     participants = await svc.getCallParticipants(openCall.id);
   } catch (err) {
-    console.error('[phone] failed to load participants for active call:', err);
+    console.error('[phone:event] failed to load participants for active call:', err);
     return;
   }
 
   const senderIsCaller = participants.callerPlayer.id === player.id;
-  // First message of a brand-new call: post the "call opened" header to the staff thread.
   const hasStaffThread = Boolean(openCall.staffThreadId);
 
   let persisted;
@@ -103,7 +126,7 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
       }
       return;
     }
-    console.error('[phone] failed to record message:', err);
+    console.error('[phone:event] failed to record message:', err);
     return;
   }
 
@@ -113,12 +136,28 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
     }
     await relayMessage(client, participants, persisted, senderIsCaller);
   } catch (err) {
-    console.error('[phone] relay error, ending call:', err);
+    if (err instanceof RecipientDmClosedError) {
+      console.error(`[phone:event] recipient ${err.discordUserId} has DMs closed; ending call`);
+      try {
+        // Let the sender know what happened, since their line goes silent otherwise.
+        await message.reply('The other party has DMs closed. The call has been ended.');
+      } catch {
+        /* ignore */
+      }
+      try {
+        await svc.systemEndCall(openCall.id, 'dm_closed');
+        await hangUpAndNotify(client, openCall.id, 'dm_closed');
+      } catch (innerErr) {
+        console.error('[phone:event] failed to end call after recipient DM closed:', innerErr);
+      }
+      return;
+    }
+    console.error('[phone:event] relay error, ending call:', err);
     try {
-      await svc.endCall(openCall.id, player.id, 'relay_failed');
+      await svc.systemEndCall(openCall.id, 'relay_failed');
       await hangUpAndNotify(client, openCall.id, 'relay_failed');
     } catch (innerErr) {
-      console.error('[phone] failed to end call after relay error:', innerErr);
+      console.error('[phone:event] failed to end call after relay error:', innerErr);
     }
   }
 }
@@ -129,7 +168,7 @@ export function registerMessageCreateEvent(client: Client): void {
       if (message.channel.type !== ChannelType.DM) return;
       await handleDmMessage(client, message);
     } catch (err) {
-      console.error('Unhandled error in messageCreate handler:', err);
+      console.error('[phone:event] unhandled error in messageCreate:', err);
     }
   });
 }

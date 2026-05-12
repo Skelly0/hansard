@@ -1,12 +1,12 @@
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
+  ChannelType,
   EmbedBuilder,
   InteractionContextType,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
+  type GuildChannel,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { players } from '@hansard/db';
@@ -188,26 +188,28 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
   }
 
   // DM the recipient with Answer/Decline.
-  let ringMessageId: string | null = null;
   try {
     const recipientUser = await interaction.client.users.fetch(participants.recipientPlayer.discordId);
+    // Real phones don't tell the recipient which of their own numbers was dialed. Show just
+    // the calling number.
     const ringEmbed = new EmbedBuilder()
       .setTitle('\u{1F4DE} Incoming call')
       .setColor(CALL_COLOUR)
       .setDescription(
-        `**${participants.callerNumber.numberRaw}** is calling **${participants.recipientNumber.numberRaw}**.\n\nMessages on this call are logged and cannot be edited or deleted. Answer to connect, or decline to send the caller a refusal.`,
+        `**${participants.callerNumber.numberRaw}** is calling you.\n\nMessages on this call are logged and cannot be edited or deleted. Answer to connect, or decline to send the caller a refusal.`,
       )
       .setFooter({ text: 'This ring expires in 60 seconds.' });
     const row = buildIncomingCallActions(participants.call.id);
     const ringMessage = await recipientUser.send({ embeds: [ringEmbed], components: [row] });
-    ringMessageId = ringMessage.id;
+    // Persist the ring message ID so terminal transitions (hangup, decline, expiry, force-end)
+    // can edit the DM to disable stale Answer/Decline buttons.
+    await svc().setRingMessageId(participants.call.id, ringMessage.id);
   } catch (err) {
-    console.error('[/phone dial] recipient DM failed:', err);
-    // Mark call as missed/dm_closed and notify caller.
+    console.error('[phone:cmd] dial: recipient DM failed:', err);
     try {
-      await svc().endCall(participants.call.id, player.id, 'dm_closed');
+      await svc().systemEndCall(participants.call.id, 'dm_closed');
     } catch (innerErr) {
-      console.error('[/phone dial] failed to clean up after DM failure:', innerErr);
+      console.error('[phone:cmd] dial: failed to clean up after DM failure:', innerErr);
     }
     await interaction.editReply({
       embeds: [errorEmbed('Recipient has DMs closed and could not be reached.')],
@@ -215,11 +217,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
-  // Caller-side ring confirmation. The ring message ID itself is not persisted —
-  // the answer/decline button handler edits it inline via interaction.message.
-  void ringMessageId;
-
-  // DM the caller "Ringing..."
+  // Caller "Ringing..." DM echoes which of their numbers was used — surprising-number issue.
   try {
     const callerUser = await interaction.client.users.fetch(participants.callerPlayer.discordId);
     await callerUser.send({
@@ -240,7 +238,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
     embeds: [
       successEmbed(
         'Dialing',
-        `Ringing **${participants.recipientNumber.numberRaw}**. Check your DMs — the call will connect there if it's answered.`,
+        `Ringing **${participants.recipientNumber.numberRaw}** from **${participants.callerNumber.numberRaw}**${fromNumber ? '' : ' *(default line)*'}. Check your DMs — the call will connect there if it's answered.`,
       ),
     ],
   });
@@ -256,23 +254,22 @@ async function handleHangup(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
 
+  let ended;
   try {
-    await svc().endCall(openCall.id, player.id, 'hangup_caller');
+    ended = await svc().endCall(openCall.id, player.id);
   } catch (err) {
     if (err instanceof PhoneServiceError) {
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       return;
     }
-    console.error('[/phone hangup] failed:', err);
+    console.error('[phone:cmd] hangup failed:', err);
     await interaction.editReply({ embeds: [errorEmbed('Failed to hang up.')] });
     return;
   }
 
-  await hangUpAndNotify(
-    interaction.client,
-    openCall.id,
-    openCall.callerPlayerId === player.id ? 'hangup_caller' : 'hangup_recipient',
-  );
+  // Use the reason the service actually wrote — it derives it from the actor role.
+  const notifyReason = (ended.endedReason ?? 'hangup_caller') as Parameters<typeof hangUpAndNotify>[2];
+  await hangUpAndNotify(interaction.client, openCall.id, notifyReason);
   await interaction.editReply({ embeds: [successEmbed('Call ended', 'The line is now free.')] });
 }
 
@@ -286,10 +283,16 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
     });
     return;
   }
+  const { formatPhoneCallStatus, formatPhoneEndedReason } = await import('@hansard/shared');
   const lines = calls.map((c) => {
-    const role = c.callerPlayerId === player.id ? 'out' : 'in';
+    const isOutbound = c.callerPlayerId === player.id;
     const stamp = c.startedAt.toISOString().slice(0, 16).replace('T', ' ');
-    return `\`${stamp}\` ${role === 'out' ? '\u{2192}' : '\u{2190}'} ${c.status}${c.endedReason ? ` (${c.endedReason})` : ''}`;
+    const other = isOutbound ? c.recipient : c.caller;
+    const name = other.characterName ?? other.numberRaw ?? 'Unknown';
+    const arrow = isOutbound ? '\u{2192}' : '\u{2190}';
+    const status = formatPhoneCallStatus(c.status);
+    const ended = c.endedReason ? ` \u{2014} ${formatPhoneEndedReason(c.endedReason)}` : '';
+    return `\`${stamp}\` ${arrow} **${name}** (${other.numberRaw ?? '?'}) \u{2014} ${status}${ended}`;
   });
   await interaction.editReply({
     embeds: [
@@ -307,11 +310,21 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
 // -----------------------------------------------------------------------------
 
 async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<boolean> {
-  if (!(await isStaff(interaction.member))) {
-    await interaction.editReply({ embeds: [errorEmbed('Only staff can use phone admin tools.')] });
-    return false;
+  // In DM context `interaction.member` is null, so isStaff() would always refuse. Fall back
+  // to a direct DB lookup keyed on the Discord user ID — same trust source isStaff already
+  // consults, just without requiring a GuildMember object.
+  if (interaction.member) {
+    if (await isStaff(interaction.member)) return true;
+  } else {
+    const [row] = await db
+      .select({ isStaff: players.isStaff })
+      .from(players)
+      .where(eq(players.discordId, interaction.user.id))
+      .limit(1);
+    if (row?.isStaff) return true;
   }
-  return true;
+  await interaction.editReply({ embeds: [errorEmbed('Only staff can use phone admin tools.')] });
+  return false;
 }
 
 async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -320,6 +333,16 @@ async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): P
   const reason = interaction.options.getString('reason') || null;
   const mirrorUser = interaction.options.getUser('mirror-user');
   const mirrorChannel = interaction.options.getChannel('mirror-channel');
+
+  // Channel-type validation: a wiretap fed into a public channel would broadcast wiretap
+  // traffic to the whole guild. Refuse any channel where `@everyone` retains ViewChannel.
+  if (mirrorChannel) {
+    const channelError = validateTapMirrorChannel(mirrorChannel);
+    if (channelError) {
+      await interaction.editReply({ embeds: [errorEmbed(channelError)] });
+      return;
+    }
+  }
 
   const number = await svc().lookupNumber(numberInput);
   if (!number) {
@@ -340,7 +363,7 @@ async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): P
         createdById: staffPlayer.id,
         reason,
         mirrorChannelId: mirrorChannel?.id ?? null,
-        mirrorUserId: mirrorUser?.id ?? null,
+        mirrorDiscordUserId: mirrorUser?.id ?? null,
       },
       { userId: staffPlayer.id, isStaff: true },
     );
@@ -363,9 +386,43 @@ async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): P
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       return;
     }
-    console.error('[/phone admin tap-create] failed:', err);
+    console.error('[phone:cmd] admin tap-create failed:', err);
     await interaction.editReply({ embeds: [errorEmbed('Failed to set wiretap.')] });
   }
+}
+
+/**
+ * Return null if the channel is safe for wiretap mirroring, otherwise an error message.
+ * Rejects: DMs, public announcement channels, and any guild channel where `@everyone` has
+ * ViewChannel — i.e. anything that would leak wiretap traffic outside staff visibility.
+ */
+function validateTapMirrorChannel(channel: { id: string; type: ChannelType } | GuildChannel): string | null {
+  // Discord enum members for non-text channels (voice/stage/etc) — refuse anything that's
+  // not text-based.
+  const allowedTypes = new Set<ChannelType>([
+    ChannelType.GuildText,
+    ChannelType.PrivateThread,
+    ChannelType.PublicThread,
+    ChannelType.AnnouncementThread,
+    ChannelType.GuildAnnouncement,
+  ]);
+  if (!allowedTypes.has(channel.type as ChannelType)) {
+    return 'Wiretap mirror channel must be a text channel or thread.';
+  }
+  // Public announcement channels are visible to anyone with read access — refuse.
+  if (channel.type === ChannelType.GuildAnnouncement) {
+    return 'Wiretap mirror cannot be an announcement channel — it would broadcast to everyone with read access.';
+  }
+  // Verify @everyone cannot view. This is the security-critical check.
+  const guildChannel = channel as GuildChannel;
+  if ('permissionOverwrites' in guildChannel && guildChannel.permissionOverwrites?.cache) {
+    const everyoneOverwrite = guildChannel.permissionOverwrites.cache.get(guildChannel.guild.id);
+    const everyoneDeniesView = everyoneOverwrite?.deny?.has?.('ViewChannel');
+    if (!everyoneDeniesView) {
+      return 'Wiretap mirror channel must be private — @everyone must not have View Channel permission. Pick a staff channel or omit `mirror-channel` to use the default tap channel.';
+    }
+  }
+  return null;
 }
 
 async function handleAdminTapRevoke(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -405,7 +462,7 @@ async function handleAdminTapList(interaction: ChatInputCommandInteraction): Pro
     return;
   }
   const lines = taps.slice(0, 20).map((t) => {
-    const targets = [t.mirrorChannelId ? `<#${t.mirrorChannelId}>` : null, t.mirrorUserId ? `<@${t.mirrorUserId}>` : null]
+    const targets = [t.mirrorChannelId ? `<#${t.mirrorChannelId}>` : null, t.mirrorDiscordUserId ? `<@${t.mirrorDiscordUserId}>` : null]
       .filter(Boolean)
       .join(', ') || 'default channel';
     return `• \`${t.id}\` \u{2192} ${targets}${t.reason ? ` — ${t.reason.slice(0, 80)}` : ''}`;
@@ -493,7 +550,12 @@ const command: Command = {
         .setName('delete')
         .setDescription('Retire one of your phone numbers')
         .addStringOption((opt) =>
-          opt.setName('number').setDescription('The number to retire').setRequired(true).setMaxLength(32),
+          opt
+            .setName('number')
+            .setDescription('The number to retire')
+            .setRequired(true)
+            .setMaxLength(32)
+            .setAutocomplete(true),
         ),
     )
     .addSubcommand((sub) =>
@@ -504,7 +566,12 @@ const command: Command = {
           opt.setName('number').setDescription('Number to call').setRequired(true).setMaxLength(32),
         )
         .addStringOption((opt) =>
-          opt.setName('from').setDescription('Which of your numbers to call from').setRequired(false).setMaxLength(32),
+          opt
+            .setName('from')
+            .setDescription('Which of your numbers to call from (defaults to most recent)')
+            .setRequired(false)
+            .setMaxLength(32)
+            .setAutocomplete(true),
         ),
     )
     .addSubcommand((sub) => sub.setName('hangup').setDescription('End your current call'))
@@ -567,6 +634,44 @@ const command: Command = {
     // Do NOT set default_member_permissions on the parent, or non-staff lose user commands.
     .setDefaultMemberPermissions(null) as SlashCommandBuilder,
 
+  async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    const focused = interaction.options.getFocused(true);
+    if (focused.name !== 'number' && focused.name !== 'from') {
+      await interaction.respond([]);
+      return;
+    }
+    const sub = interaction.options.getSubcommand();
+    // Autocomplete only fires for the caller's own numbers on `delete` / `dial from`.
+    if (sub !== 'delete' && !(sub === 'dial' && focused.name === 'from')) {
+      await interaction.respond([]);
+      return;
+    }
+    const [row] = await db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.discordId, interaction.user.id))
+      .limit(1);
+    if (!row) {
+      await interaction.respond([]);
+      return;
+    }
+    const numbers = await svc().listMyNumbers(row.id);
+    const q = String(focused.value ?? '').toLowerCase();
+    const filtered = numbers
+      .filter((n) =>
+        !q
+        || n.numberRaw.toLowerCase().includes(q)
+        || n.numberNormalized.toLowerCase().includes(q)
+        || (n.label?.toLowerCase().includes(q) ?? false),
+      )
+      .slice(0, 25)
+      .map((n) => ({
+        name: n.label ? `${n.numberRaw} — ${n.label}` : n.numberRaw,
+        value: n.numberRaw,
+      }));
+    await interaction.respond(filtered);
+  },
+
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const group = interaction.options.getSubcommandGroup(false);
     const sub = interaction.options.getSubcommand();
@@ -626,10 +731,8 @@ const command: Command = {
   },
 };
 
-// Suppress unused buttons import (kept for symmetry with similar files if extended later).
-void ActionRowBuilder;
-void ButtonBuilder;
-void ButtonStyle;
+// PermissionFlagsBits stays imported for any future tightening of admin gating at the Discord
+// metadata layer; runtime staff checks remain the authoritative source.
 void PermissionFlagsBits;
 
 export default command;

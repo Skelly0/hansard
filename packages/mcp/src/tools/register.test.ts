@@ -174,4 +174,51 @@ describe('MCP phone tools', () => {
       { userId: session.playerId, isStaff: false },
     );
   });
+
+  it('returns an empty payload when getCallTranscript yields null (call not found)', async () => {
+    phoneServiceMocks.getCallTranscript.mockResolvedValue(null);
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(session) } as never,
+    });
+    const tool = tools.get('get_phone_call_transcript');
+    const result = await tool!.handler({ callId: '00000000-0000-4000-8000-00000000aaaa' });
+    const payload = JSON.parse((result as { content: [{ text: string }] }).content[0].text);
+    expect(payload).toEqual({ call: null, messages: [] });
+  });
+
+  it('surfaces forbidden errors from the service as structured MCP errors', async () => {
+    const forbidden = Object.assign(new Error('You can only view your own call history.'), {
+      name: 'PhoneServiceError',
+      code: 'forbidden',
+    });
+    phoneServiceMocks.getCallHistory.mockRejectedValue(forbidden);
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(session) } as never,
+    });
+    const tool = tools.get('get_phone_call_history');
+    const result = await tool!.handler({ playerId: '00000000-0000-4000-8000-000000000002', limit: 10, offset: 0 });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result as { content: [{ text: string }] }).content[0].text).toContain('only view your own');
+  });
+
+  it('passes isStaff: true through to the service for staff sessions', async () => {
+    phoneServiceMocks.getCallHistory.mockResolvedValue({ calls: [], total: 0 });
+    const staffSession = { ...session, isStaff: true };
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(staffSession) } as never,
+    });
+    const tool = tools.get('get_phone_call_history');
+    await tool!.handler({ playerId: '00000000-0000-4000-8000-000000000099', limit: 5, offset: 0 });
+    expect(phoneServiceMocks.getCallHistory).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000099',
+      { userId: staffSession.playerId, isStaff: true },
+      { limit: 5, offset: 0 },
+    );
+  });
 });

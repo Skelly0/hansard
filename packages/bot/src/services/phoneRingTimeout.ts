@@ -30,7 +30,7 @@ export async function expireRingingCalls(
   try {
     expired = await svc.expireRingingCalls(now);
   } catch (error) {
-    logger.error('[phone-ring-timeout] failed to mark expired calls:', error);
+    logger.error('[phone:worker] failed to mark expired calls:', error);
     return { expired: [] };
   }
 
@@ -38,13 +38,49 @@ export async function expireRingingCalls(
     await Promise.all(
       expired.map((call) =>
         hangUpAndNotify(options.client!, call.id, 'ring_timeout').catch((err: unknown) => {
-          logger.error(`[phone-ring-timeout] failed to notify ${call.id}:`, err);
+          logger.error(`[phone:worker] failed to notify ${call.id}:`, err);
         }),
       ),
     );
   }
 
   return { expired };
+}
+
+/**
+ * One-shot startup sweep that ends calls left in `active` after a previous bot crash.
+ * Without this, the partial-unique-index slot stays occupied forever and the participants
+ * keep typing messages that nobody is consuming.
+ */
+export async function sweepStrandedActiveCalls(
+  db: Database,
+  options: { now?: Date; maxAgeMs?: number; client?: Client; logger?: Pick<Console, 'error' | 'log'> } = {},
+): Promise<{ ended: PhoneCall[] }> {
+  const svc = new PhoneService(db);
+  const logger = options.logger ?? console;
+
+  let ended: PhoneCall[] = [];
+  try {
+    ended = await svc.sweepStrandedActiveCalls({ now: options.now, maxAgeMs: options.maxAgeMs });
+  } catch (error) {
+    logger.error('[phone:worker] failed to sweep stranded active calls:', error);
+    return { ended: [] };
+  }
+
+  if (ended.length > 0) {
+    logger.log(`[phone:worker] startup swept ${ended.length} stranded active call(s)`);
+  }
+
+  if (options.client && ended.length > 0) {
+    await Promise.all(
+      ended.map((call) =>
+        hangUpAndNotify(options.client!, call.id, 'session_reset').catch((err: unknown) => {
+          logger.error(`[phone:worker] failed to notify on stranded ${call.id}:`, err);
+        }),
+      ),
+    );
+  }
+  return { ended };
 }
 
 export function startPhoneRingTimeoutWorker(
@@ -55,16 +91,19 @@ export function startPhoneRingTimeoutWorker(
   const logger = options.logger ?? console;
   let running = false;
 
+  // One-shot startup sweep for stranded active calls. Runs alongside the interval tick.
+  void sweepStrandedActiveCalls(db, { client: options.client, logger });
+
   const tick = async () => {
     if (running) return;
     running = true;
     try {
       const { expired } = await expireRingingCalls(db, { client: options.client, logger });
       if (expired.length > 0) {
-        logger.log(`[phone-ring-timeout] expired ${expired.length} unanswered call(s)`);
+        logger.log(`[phone:worker] expired ${expired.length} unanswered call(s)`);
       }
     } catch (error) {
-      logger.error('[phone-ring-timeout] worker tick failed:', error);
+      logger.error('[phone:worker] tick failed:', error);
     } finally {
       running = false;
     }

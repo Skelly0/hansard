@@ -1,5 +1,6 @@
 import {
   ChannelType,
+  DiscordAPIError,
   EmbedBuilder,
   type Client,
   type Guild,
@@ -14,16 +15,61 @@ import {
   type PhoneNumber,
   type PhoneTap,
 } from '@hansard/api/services/phoneService';
-import { sendTicketStaffPing } from './ticketStaffPing.js';
+import { resolveStaffRoleIds } from './staffRoles.js';
 
 const PHONE_LOG_CHANNEL_ENV = 'PHONE_LOG_CHANNEL_ID';
 const PHONE_TAP_CHANNEL_ENV = 'PHONE_TAP_CHANNEL_ID';
 const PHONE_GUILD_ENV = 'PHONE_GUILD_ID';
 
 const CALL_COLOR = 0x9b7cb8;
+const STAFF_PALETTE = 0x788c5d;
+const ENDED_PALETTE = 0x9c9890;
+const TAP_PALETTE = 0xc25b4e;
 
-function truncate(s: string, max = 1800): string {
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+/** Discord DM content cap is 2000; budget for the "+number:" prefix leaves us ~1900 safe. */
+const DM_CONTENT_BUDGET = 1900;
+/** Embed description cap is 4096; leave room for the source prefix and footer. */
+const EMBED_DESC_BUDGET = 4000;
+
+export class RecipientDmClosedError extends Error {
+  constructor(public discordUserId: string, public cause: unknown) {
+    super(`Recipient ${discordUserId} has DMs closed`);
+    this.name = 'RecipientDmClosedError';
+  }
+}
+
+function isDmClosedError(err: unknown): boolean {
+  if (err instanceof DiscordAPIError) {
+    // 50007 = Cannot send messages to this user (DMs disabled / not friends).
+    return err.code === 50007 || err.code === '50007';
+  }
+  if (err && typeof err === 'object' && 'code' in err) {
+    const code = (err as { code: unknown }).code;
+    return code === 50007 || code === '50007';
+  }
+  return false;
+}
+
+function chunkForDm(text: string): string[] {
+  return chunkText(text, DM_CONTENT_BUDGET);
+}
+function chunkForEmbed(text: string): string[] {
+  return chunkText(text, EMBED_DESC_BUDGET);
+}
+function chunkText(text: string, budget: number): string[] {
+  if (text.length <= budget) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > budget) {
+    // Try to break at a newline or space within the budget.
+    let cut = remaining.lastIndexOf('\n', budget);
+    if (cut < budget * 0.6) cut = remaining.lastIndexOf(' ', budget);
+    if (cut < budget * 0.6) cut = budget;
+    chunks.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
 }
 
 function resolveGuild(client: Client): Guild | null {
@@ -33,6 +79,9 @@ function resolveGuild(client: Client): Guild | null {
     if (cached) return cached;
   }
   // Single-guild deployment fallback (mirrors how /ticket create operates from DMs).
+  if (client.guilds.cache.size > 1 && !configured) {
+    console.warn('[phone:relay] Multiple guilds in cache and PHONE_GUILD_ID unset — picking arbitrary guild');
+  }
   return client.guilds.cache.first() ?? null;
 }
 
@@ -44,14 +93,19 @@ async function fetchPhoneLogChannel(client: Client): Promise<TextChannel | null>
     if (!channel || channel.type !== ChannelType.GuildText) return null;
     return channel as TextChannel;
   } catch (err) {
-    console.error('[phone] failed to fetch PHONE_LOG_CHANNEL_ID:', err);
+    console.error('[phone:relay] failed to fetch PHONE_LOG_CHANNEL_ID:', err);
     return null;
   }
 }
 
+// Per-pair mutex preventing two simultaneous first-messages from each creating a Discord thread.
+// Keyed by `${minPlayerId}:${maxPlayerId}`. Cleared after the thread is created (success or fail).
+const threadCreateLocks = new Map<string, Promise<ThreadChannel | null>>();
+
 /**
  * Look up or create the per-pair private thread that staff use to oversee all calls
- * between the same two players. Reused across multiple calls.
+ * between the same two players. Reused across multiple calls. Per-pair in-memory mutex
+ * prevents concurrent first-message races from orphaning a Discord thread.
  */
 export async function ensurePhoneThread(
   client: Client,
@@ -73,46 +127,54 @@ export async function ensurePhoneThread(
         return fetched as ThreadChannel;
       }
     } catch (err) {
-      console.error('[phone] failed to fetch persisted phone thread, recreating:', err);
+      console.error('[phone:relay] failed to fetch persisted phone thread, recreating:', err);
     }
   }
 
-  const channel = await fetchPhoneLogChannel(client);
-  if (!channel) {
-    console.warn('[phone] PHONE_LOG_CHANNEL_ID not configured — no staff mirror created');
-    return null;
-  }
+  const lockKey = `${pair[0]}:${pair[1]}`;
+  const inflight = threadCreateLocks.get(lockKey);
+  if (inflight) return inflight;
 
-  const guild = resolveGuild(client);
-  if (!guild) {
-    console.warn('[phone] no guild available for staff thread creation');
-    return null;
-  }
+  const created = (async () => {
+    const channel = await fetchPhoneLogChannel(client);
+    if (!channel) {
+      console.warn('[phone:relay] PHONE_LOG_CHANNEL_ID not configured — no staff mirror created');
+      return null;
+    }
 
-  const callerName = participants.callerPlayer.characterName ?? 'Unknown';
-  const recipientName = participants.recipientPlayer.characterName ?? 'Unknown';
-  const threadName = `\u{260E} ${callerName} \u{2194} ${recipientName}`.slice(0, 95);
+    const guild = resolveGuild(client);
+    if (!guild) {
+      console.warn('[phone:relay] no guild available for staff thread creation');
+      return null;
+    }
 
-  let thread: ThreadChannel;
-  try {
-    thread = await channel.threads.create({
-      name: threadName,
-      type: ChannelType.PrivateThread,
-      invitable: false,
-      autoArchiveDuration: 1440,
-      reason: `Phone log for ${callerName} and ${recipientName}`,
-    });
-  } catch (err) {
-    console.error('[phone] failed to create phone thread:', err);
-    return null;
-  }
+    const callerName = participants.callerPlayer.characterName ?? 'Unknown';
+    const recipientName = participants.recipientPlayer.characterName ?? 'Unknown';
+    const threadName = `\u{260E} ${callerName} \u{2194} ${recipientName}`.slice(0, 95);
 
-  await svc.persistThread(pair, thread.id);
+    let thread: ThreadChannel;
+    try {
+      thread = await channel.threads.create({
+        name: threadName,
+        type: ChannelType.PrivateThread,
+        invitable: false,
+        autoArchiveDuration: 1440,
+        reason: `Phone log for ${callerName} and ${recipientName}`,
+      });
+    } catch (err) {
+      console.error('[phone:relay] failed to create phone thread:', err);
+      return null;
+    }
 
-  // Ping staff so the role gets added to the private thread (same pattern as /ticket create).
-  await sendStaffJoinPing(thread, guild, callerName, recipientName);
+    await svc.persistThread(pair, thread.id);
+    await sendStaffJoinPing(thread, guild, callerName, recipientName);
+    return thread;
+  })().finally(() => {
+    threadCreateLocks.delete(lockKey);
+  });
 
-  return thread;
+  threadCreateLocks.set(lockKey, created);
+  return created;
 }
 
 async function sendStaffJoinPing(
@@ -121,22 +183,16 @@ async function sendStaffJoinPing(
   callerName: string,
   recipientName: string,
 ): Promise<void> {
-  // Reuse the existing staff role resolver by adapting the message content. The helper
-  // signature takes a "ticketNumber" so we wrap with a custom send.
   try {
     await thread.send({
       allowedMentions: { roles: [] },
-      content: `\u{1F4DE} Phone log opened: **${callerName}** \u{2194} **${recipientName}**. Pinging staff to attach the role.`,
+      content: `\u{1F4DE} Phone log opened: **${callerName}** \u{2194} **${recipientName}**.`,
     });
   } catch (err) {
-    console.error('[phone] failed to send opener message:', err);
+    console.error('[phone:relay] failed to send opener message:', err);
   }
-  // Delegate to the shared staff ping helper. The "ticketNumber" arg is treated as
-  // a string template only, but the helper hardcodes the wording. Build our own ping
-  // using the same env-var resolution semantics by calling it with 0 first won't work —
-  // so just resolve roles directly here.
   try {
-    const staffRoleIds = await resolveStaffRoleIdsForGuild(guild);
+    const staffRoleIds = await resolveStaffRoleIds(guild);
     if (staffRoleIds.length === 0) return;
     const mentions = staffRoleIds.map((id) => `<@&${id}>`).join(' ');
     await thread.send({
@@ -144,30 +200,8 @@ async function sendStaffJoinPing(
       content: `${mentions} new phone log requires oversight.`,
     });
   } catch (err) {
-    console.error('[phone] failed to ping staff roles:', err);
+    console.error('[phone:relay] failed to ping staff roles:', err);
   }
-}
-
-async function resolveStaffRoleIdsForGuild(guild: Guild): Promise<string[]> {
-  // Mirror the env+name fallback chain in ticketStaffPing — duplicated here because the
-  // public helper is hardcoded to ticket wording. Kept narrow.
-  const envIds = parseRoleIds(process.env['STAFF_ROLE_IDS']).concat(parseRoleIds(process.env['STAFF_ROLE_ID']));
-  if (envIds.length) return [...new Set(envIds)];
-
-  const cached = guild.roles.cache.find((r) => r.name === 'Staff');
-  if (cached) return [cached.id];
-  try {
-    const fetched = await guild.roles.fetch();
-    const found = fetched.find((r) => r.name === 'Staff');
-    return found ? [found.id] : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseRoleIds(value: string | undefined): string[] {
-  if (!value) return [];
-  return value.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 
 interface RelayContext {
@@ -179,8 +213,9 @@ interface RelayContext {
 }
 
 /**
- * Relay a recorded message from `senderPlayerId` to the other party,
- * mirror it to the staff thread, and fan out to any active taps.
+ * Relay a recorded message from `senderPlayerId` to the other party, mirror to the staff thread,
+ * and fan out to active taps. Throws `RecipientDmClosedError` if the recipient's DM channel is
+ * closed (50007) so the caller can end the call and surface the failure.
  *
  * `message` is the already-persisted `phone_messages` row from `recordMessage`.
  */
@@ -196,6 +231,7 @@ export async function relayMessage(
   const senderNumber = senderIsCaller ? context.callerNumber : context.recipientNumber;
 
   const recipientCopyId = await sendToRecipient(client, recipient.discordId, senderNumber, message.content);
+
   const staffThread = await ensurePhoneThread(client, context);
   let staffMirrorId: string | null = null;
   if (staffThread) {
@@ -210,9 +246,6 @@ export async function relayMessage(
     staffMirrorMessageId: staffMirrorId,
   });
 
-  // Fan out to active taps on either number. Taps on *either* line for this call get
-  // a copy — staff might tap the caller's burner while the recipient's main line is
-  // also tapped.
   const taps = await svc.getActiveTapsForNumbers([context.callerNumber.id, context.recipientNumber.id]);
   if (taps.length === 0) return;
 
@@ -227,14 +260,22 @@ async function sendToRecipient(
   senderNumber: PhoneNumber,
   content: string,
 ): Promise<string | null> {
+  const chunks = chunkForDm(content);
+  let firstId: string | null = null;
   try {
     const user = await client.users.fetch(recipientDiscordId);
-    const dm = await user.send({
-      content: `**${senderNumber.numberRaw}:** ${truncate(content)}`,
-    });
-    return dm.id;
+    for (let i = 0; i < chunks.length; i++) {
+      const piece = chunks[i];
+      const prefix = chunks.length > 1 ? `**${senderNumber.numberRaw}** [${i + 1}/${chunks.length}]: ` : `**${senderNumber.numberRaw}:** `;
+      const dm = await user.send({ content: `${prefix}${piece}` });
+      if (i === 0) firstId = dm.id;
+    }
+    return firstId;
   } catch (err) {
-    console.error('[phone] failed to deliver to recipient DM:', err);
+    console.error('[phone:relay] recipient DM failed:', err);
+    if (isDmClosedError(err)) {
+      throw new RecipientDmClosedError(recipientDiscordId, err);
+    }
     return null;
   }
 }
@@ -249,17 +290,28 @@ async function postToStaffThread(
   const recipient = sender.id === context.callerPlayer.id ? context.recipientPlayer : context.callerPlayer;
   const senderName = sender.characterName ?? 'Unknown';
   const recipientName = recipient.characterName ?? 'Unknown';
-  const embed = new EmbedBuilder()
-    .setColor(CALL_COLOR)
-    .setAuthor({ name: `${senderName} (${senderNumber.numberRaw})` })
-    .setDescription(truncate(content))
-    .setFooter({ text: `to ${recipientName}` })
-    .setTimestamp(new Date());
+  const chunks = chunkForEmbed(content);
+  let firstId: string | null = null;
   try {
-    const sent = await thread.send({ embeds: [embed], allowedMentions: { parse: [] } });
-    return sent.id;
+    for (let i = 0; i < chunks.length; i++) {
+      const piece = chunks[i];
+      const embed = new EmbedBuilder()
+        .setColor(CALL_COLOR)
+        .setAuthor({
+          name:
+            chunks.length > 1
+              ? `${senderName} (${senderNumber.numberRaw}) [${i + 1}/${chunks.length}]`
+              : `${senderName} (${senderNumber.numberRaw})`,
+        })
+        .setDescription(piece)
+        .setFooter({ text: `to ${recipientName}` })
+        .setTimestamp(new Date());
+      const sent = await thread.send({ embeds: [embed], allowedMentions: { parse: [] } });
+      if (i === 0) firstId = sent.id;
+    }
+    return firstId;
   } catch (err) {
-    console.error('[phone] failed to mirror to staff thread:', err);
+    console.error('[phone:relay] failed to mirror to staff thread:', err);
     return null;
   }
 }
@@ -276,43 +328,54 @@ async function deliverTapCopy(
   const recipient = sender.id === context.callerPlayer.id ? context.recipientPlayer : context.callerPlayer;
   const senderName = sender.characterName ?? 'Unknown';
   const recipientName = recipient.characterName ?? 'Unknown';
-  const embed = new EmbedBuilder()
-    .setColor(0xc25b4e)
-    .setAuthor({ name: `\u{1F575}\u{FE0F} Wiretap — ${senderName} (${senderNumber.numberRaw})` })
-    .setDescription(truncate(message.content))
-    .setFooter({ text: `to ${recipientName} \u{2022} call ${context.call.id.slice(0, 8)}` })
-    .setTimestamp(new Date());
+  // Use full content here too — taps are an audit channel, fidelity is the whole point.
+  const chunks = chunkForEmbed(message.content);
 
   const channelId = tap.mirrorChannelId ?? process.env[PHONE_TAP_CHANNEL_ENV]?.trim();
   let mirrorMessageId: string | null = null;
   let lastError: string | null = null;
 
-  if (channelId) {
-    try {
-      const channel = await client.channels.fetch(channelId);
-      if (channel && 'send' in channel && typeof (channel as { send?: unknown }).send === 'function') {
-        const sent = await (channel as TextChannel | ThreadChannel).send({
-          embeds: [embed],
-          allowedMentions: { parse: [] },
-        });
-        mirrorMessageId = sent.id;
-      } else {
-        lastError = 'tap channel is not sendable';
-      }
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      console.error('[phone] tap channel delivery failed:', err);
-    }
-  }
+  for (let i = 0; i < chunks.length; i++) {
+    const piece = chunks[i];
+    const embed = new EmbedBuilder()
+      .setColor(TAP_PALETTE)
+      .setAuthor({
+        name:
+          chunks.length > 1
+            ? `\u{1F575}\u{FE0F} Wiretap — ${senderName} (${senderNumber.numberRaw}) [${i + 1}/${chunks.length}]`
+            : `\u{1F575}\u{FE0F} Wiretap — ${senderName} (${senderNumber.numberRaw})`,
+      })
+      .setDescription(piece)
+      .setFooter({ text: `to ${recipientName} \u{2022} call ${context.call.id.slice(0, 8)}` })
+      .setTimestamp(new Date());
 
-  if (tap.mirrorUserId) {
-    try {
-      const user = await client.users.fetch(tap.mirrorUserId);
-      const dm = await user.send({ embeds: [embed] });
-      if (!mirrorMessageId) mirrorMessageId = dm.id;
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      console.error('[phone] tap user DM failed:', err);
+    if (channelId) {
+      try {
+        const channel = await client.channels.fetch(channelId);
+        if (channel && 'send' in channel && typeof (channel as { send?: unknown }).send === 'function') {
+          const sent = await (channel as TextChannel | ThreadChannel).send({
+            embeds: [embed],
+            allowedMentions: { parse: [] },
+          });
+          if (i === 0) mirrorMessageId = sent.id;
+        } else {
+          lastError = 'tap channel is not sendable';
+        }
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        console.error('[phone:relay] tap channel delivery failed:', err);
+      }
+    }
+
+    if (tap.mirrorDiscordUserId) {
+      try {
+        const user = await client.users.fetch(tap.mirrorDiscordUserId);
+        const dm = await user.send({ embeds: [embed] });
+        if (!mirrorMessageId && i === 0) mirrorMessageId = dm.id;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        console.error('[phone:relay] tap user DM failed:', err);
+      }
     }
   }
 
@@ -324,34 +387,48 @@ async function deliverTapCopy(
 
 /**
  * Best-effort: notify both parties + the staff thread that a call has ended,
- * regardless of which side hung up.
+ * regardless of which side hung up. Also disables any persisted ring-DM buttons.
  */
 export async function hangUpAndNotify(
   client: Client,
   callId: string,
-  endedReason: 'hangup_caller' | 'hangup_recipient' | 'ring_timeout' | 'force_ended_by_staff' | 'dm_closed' | 'relay_failed',
+  endedReason:
+    | 'hangup_caller'
+    | 'hangup_recipient'
+    | 'cancelled_by_caller'
+    | 'declined_by_recipient'
+    | 'ring_timeout'
+    | 'force_ended_by_staff'
+    | 'dm_closed'
+    | 'relay_failed'
+    | 'session_reset'
+    | 'number_deactivated',
 ): Promise<void> {
   const svc = new PhoneService(db);
   let context: RelayContext;
   try {
     context = await svc.getCallParticipants(callId);
   } catch (err) {
-    console.error('[phone] hangup notify: could not load call participants:', err);
+    console.error('[phone:relay] hangup notify: could not load call participants:', err);
     return;
   }
 
   const reasonText: Record<typeof endedReason, string> = {
     hangup_caller: 'The caller hung up.',
     hangup_recipient: 'The recipient hung up.',
+    cancelled_by_caller: 'The caller cancelled before you picked up.',
+    declined_by_recipient: 'The recipient declined the call.',
     ring_timeout: 'The recipient did not answer in time.',
     force_ended_by_staff: 'A staff member ended this call.',
     dm_closed: 'The other party could not be reached via DM.',
     relay_failed: 'The relay failed; the call was ended automatically.',
+    session_reset: 'The call was reset by a bot restart.',
+    number_deactivated: 'One of the lines on this call was retired.',
   };
 
   const embed = new EmbedBuilder()
     .setTitle('\u{260E} Call ended')
-    .setColor(0x9c9890)
+    .setColor(ENDED_PALETTE)
     .setDescription(reasonText[endedReason]);
 
   for (const player of [context.callerPlayer, context.recipientPlayer]) {
@@ -363,6 +440,25 @@ export async function hangUpAndNotify(
     }
   }
 
+  // Disable buttons on the ring DM if persisted. Only relevant when the call terminated
+  // while still in `ringing` status — but cheap to check.
+  if (context.call.ringDiscordMessageId) {
+    try {
+      const recipientUser = await client.users.fetch(context.recipientPlayer.discordId);
+      const dm = await recipientUser.createDM();
+      const message = await dm.messages.fetch(context.call.ringDiscordMessageId);
+      const disabledEmbed = new EmbedBuilder()
+        .setTitle('\u{260E} Call ended')
+        .setColor(ENDED_PALETTE)
+        .setDescription(reasonText[endedReason]);
+      await message.edit({ embeds: [disabledEmbed], components: [] });
+    } catch (err) {
+      // Recipient may have closed DMs, ring message may have been deleted, or it was
+      // never sent in the first place. Best-effort — log and continue.
+      console.error('[phone:relay] failed to disable ring DM buttons:', err);
+    }
+  }
+
   if (context.call.staffThreadId) {
     try {
       const thread = await client.channels.fetch(context.call.staffThreadId);
@@ -370,7 +466,7 @@ export async function hangUpAndNotify(
         await (thread as ThreadChannel).send({ embeds: [embed], allowedMentions: { parse: [] } });
       }
     } catch (err) {
-      console.error('[phone] hangup notify: failed to update staff thread:', err);
+      console.error('[phone:relay] hangup notify: failed to update staff thread:', err);
     }
   }
 }
@@ -387,7 +483,7 @@ export async function postCallOpenedToStaffThread(
   }
   const embed = new EmbedBuilder()
     .setTitle('\u{1F4DE} Call connected')
-    .setColor(0x788c5d)
+    .setColor(STAFF_PALETTE)
     .addFields(
       { name: 'Caller', value: `${context.callerPlayer.characterName ?? '?'} (${context.callerNumber.numberRaw})`, inline: true },
       { name: 'Recipient', value: `${context.recipientPlayer.characterName ?? '?'} (${context.recipientNumber.numberRaw})`, inline: true },
@@ -396,6 +492,9 @@ export async function postCallOpenedToStaffThread(
   try {
     await thread.send({ embeds: [embed], allowedMentions: { parse: [] } });
   } catch (err) {
-    console.error('[phone] failed to post call-opened event to staff thread:', err);
+    console.error('[phone:relay] failed to post call-opened event to staff thread:', err);
   }
 }
+
+// Internal helper exposed for testing the chunker without spinning up a Discord client.
+export const __internal = { chunkText };

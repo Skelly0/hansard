@@ -4,7 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { client, commands } from './client.js';
 import { loadCommands } from './commandLoader.js';
-import { registerReadyEvent } from './events/ready.js';
+import { registerReadyEvent, stopBackgroundWorkers } from './events/ready.js';
 import { registerInteractionCreateEvent } from './events/interactionCreate.js';
 import { registerMessageReactionAddEvent } from './events/messageReactionAdd.js';
 import { registerMessageCreateEvent } from './events/messageCreate.js';
@@ -33,16 +33,32 @@ async function main(): Promise<void> {
   await client.login(token);
 }
 
-// Graceful shutdown
-function shutdown(signal: string): void {
+// Graceful shutdown. Stop the background workers first so a SIGTERM landing mid-tick can't
+// tear down an in-flight DB op; then give the runtime a brief moment to flush the final
+// state before destroying the gateway connection.
+let isShuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
   const botName = process.env.BOT_DISPLAY_NAME || 'Hansard';
   console.log(`\n${botName} received ${signal}. Shutting down gracefully...`);
-  client.destroy();
+  try {
+    stopBackgroundWorkers();
+  } catch (err) {
+    console.error('Error stopping background workers:', err);
+  }
+  // Give any pending writes (worker ticks, in-flight relays) a short window to settle.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  try {
+    client.destroy();
+  } catch (err) {
+    console.error('Error destroying client:', err);
+  }
   process.exit(0);
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 
 // Catch unhandled errors so the bot doesn't silently die
 process.on('unhandledRejection', (error) => {

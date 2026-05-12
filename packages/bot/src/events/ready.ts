@@ -8,6 +8,21 @@ import { startPhoneRingTimeoutWorker } from '../services/phoneRingTimeout.js';
 let voteAutoCloseWorker: NodeJS.Timeout | null = null;
 let phoneRingTimeoutWorker: NodeJS.Timeout | null = null;
 
+/**
+ * Stop all background workers. Called from the shutdown handler so a SIGTERM doesn't
+ * tear down an in-flight DB write mid-tick.
+ */
+export function stopBackgroundWorkers(): void {
+  if (voteAutoCloseWorker) {
+    clearInterval(voteAutoCloseWorker);
+    voteAutoCloseWorker = null;
+  }
+  if (phoneRingTimeoutWorker) {
+    clearInterval(phoneRingTimeoutWorker);
+    phoneRingTimeoutWorker = null;
+  }
+}
+
 export function registerReadyEvent(client: Client): void {
   client.once(Events.ClientReady, async (readyClient) => {
     const botName = process.env.BOT_DISPLAY_NAME || 'Hansard';

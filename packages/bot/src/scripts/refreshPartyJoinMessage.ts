@@ -5,6 +5,9 @@ import { Events, type Client } from 'discord.js';
 import { client } from '../client.js';
 import { refreshPartyJoinMessage } from '../utils/partyJoinMessage.js';
 
+const CLIENT_READY_TIMEOUT_MS = 120_000;
+const REFRESH_TIMEOUT_MS = 90_000;
+
 function reactionEmojisFromDescription(description: string | null | undefined): string[] {
   if (!description) return [];
 
@@ -24,9 +27,25 @@ export async function runRefreshPartyJoinMessageScript(
   }
 
   await new Promise<void>((resolve, reject) => {
+    const readyTimeout = setTimeout(() => {
+      botClient.destroy();
+      reject(new Error('Timed out waiting for Discord client ready.'));
+    }, CLIENT_READY_TIMEOUT_MS);
+
     botClient.once(Events.ClientReady, async () => {
+      clearTimeout(readyTimeout);
+      logger.log('Discord client ready; refreshing party join board.');
+
+      let refreshTimeout: NodeJS.Timeout | null = null;
       try {
-        const message = await refreshPartyJoinMessage(botClient);
+        const message = await Promise.race([
+          refreshPartyJoinMessage(botClient),
+          new Promise<never>((_, refreshReject) => {
+            refreshTimeout = setTimeout(() => {
+              refreshReject(new Error('Timed out refreshing party join board.'));
+            }, REFRESH_TIMEOUT_MS);
+          }),
+        ]);
         if (!message) {
           throw new Error('No current party join board was found.');
         }
@@ -38,11 +57,13 @@ export async function runRefreshPartyJoinMessageScript(
       } catch (error) {
         reject(error);
       } finally {
+        if (refreshTimeout) clearTimeout(refreshTimeout);
         botClient.destroy();
       }
     });
 
     botClient.login(token).catch((error) => {
+      clearTimeout(readyTimeout);
       botClient.destroy();
       reject(error);
     });

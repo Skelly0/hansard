@@ -87,6 +87,8 @@ export type Permission =
 
 const PERMISSION_ALIASES: Record<string, string[]> = {
   'bills.create': ['legislative_leader'],
+  'bills.edit': ['legislative_leader'],
+  'bills.delete': ['legislative_leader'],
   'voting.create': ['call_elections', 'legislative_leader'],
   'voting.close': ['call_elections', 'legislative_leader'],
   'voting.cancel': ['legislative_leader'],

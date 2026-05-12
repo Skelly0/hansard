@@ -90,6 +90,8 @@ export interface CallParticipants {
   recipientPlayer: { id: string; characterName: string | null; discordId: string; isAlive: boolean };
 }
 
+type DbOrTx = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
+
 /**
  * Custom error subclass so callers (Discord commands, web routes) can map known refusals
  * to friendly UI replies without parsing message strings.
@@ -133,54 +135,58 @@ export class PhoneService {
     }
     const normalized = normalizePhoneNumber(input.numberRaw);
 
-    const [player] = await this.db
-      .select({
-        id: players.id,
-        characterName: players.characterName,
-        isAlive: players.isAlive,
-      })
-      .from(players)
-      .where(eq(players.id, input.playerId))
-      .limit(1);
+    return this.db.transaction(async (tx) => {
+      await lockPhoneKey(tx, 'player', input.playerId);
 
-    if (!player) throw new PhoneServiceError('not_found', 'Player not found.');
-    if (!player.characterName) {
-      throw new PhoneServiceError('no_character', PHONE_INELIGIBLE_NO_CHARACTER);
-    }
-    if (!player.isAlive) {
-      throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
-    }
-
-    const [{ value: activeCount }] = await this.db
-      .select({ value: count() })
-      .from(phoneNumbers)
-      .where(and(eq(phoneNumbers.playerId, input.playerId), eq(phoneNumbers.isActive, true)));
-
-    if (activeCount >= PHONE_NUMBERS_PER_PLAYER_LIMIT) {
-      throw new PhoneServiceError(
-        'limit_reached',
-        `You already have ${PHONE_NUMBERS_PER_PLAYER_LIMIT} active phone numbers. Delete one before registering another.`,
-      );
-    }
-
-    try {
-      const [row] = await this.db
-        .insert(phoneNumbers)
-        .values({
-          playerId: input.playerId,
-          numberRaw: input.numberRaw.trim(),
-          numberNormalized: normalized,
-          label: input.label ?? null,
-          cachedCharacterName: player.characterName,
+      const [player] = await tx
+        .select({
+          id: players.id,
+          characterName: players.characterName,
+          isAlive: players.isAlive,
         })
-        .returning();
-      return row;
-    } catch (err) {
-      if (isUniqueViolation(err)) {
-        throw new PhoneServiceError('number_taken', PHONE_NUMBER_TAKEN);
+        .from(players)
+        .where(eq(players.id, input.playerId))
+        .limit(1);
+
+      if (!player) throw new PhoneServiceError('not_found', 'Player not found.');
+      if (!player.characterName) {
+        throw new PhoneServiceError('no_character', PHONE_INELIGIBLE_NO_CHARACTER);
       }
-      throw err;
-    }
+      if (!player.isAlive) {
+        throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
+      }
+
+      const [{ value: activeCount }] = await tx
+        .select({ value: count() })
+        .from(phoneNumbers)
+        .where(and(eq(phoneNumbers.playerId, input.playerId), eq(phoneNumbers.isActive, true)));
+
+      if (activeCount >= PHONE_NUMBERS_PER_PLAYER_LIMIT) {
+        throw new PhoneServiceError(
+          'limit_reached',
+          `You already have ${PHONE_NUMBERS_PER_PLAYER_LIMIT} active phone numbers. Delete one before registering another.`,
+        );
+      }
+
+      try {
+        const [row] = await tx
+          .insert(phoneNumbers)
+          .values({
+            playerId: input.playerId,
+            numberRaw: input.numberRaw.trim(),
+            numberNormalized: normalized,
+            label: input.label ?? null,
+            cachedCharacterName: player.characterName,
+          })
+          .returning();
+        return row;
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new PhoneServiceError('number_taken', PHONE_NUMBER_TAKEN);
+        }
+        throw err;
+      }
+    });
   }
 
   async listMyNumbers(playerId: string): Promise<PhoneNumber[]> {
@@ -192,42 +198,47 @@ export class PhoneService {
   }
 
   async deactivateNumber(numberId: string, actingPlayerId: string, viewer: PhoneViewer): Promise<void> {
-    const [row] = await this.db
-      .select()
-      .from(phoneNumbers)
-      .where(eq(phoneNumbers.id, numberId))
-      .limit(1);
+    await this.db.transaction(async (tx) => {
+      await lockPhoneKey(tx, 'number', numberId);
 
-    if (!row || !row.isActive) {
-      throw new PhoneServiceError('not_found', 'No such active number.');
-    }
-    if (!viewer.isStaff && row.playerId !== actingPlayerId) {
-      throw new PhoneServiceError('forbidden', 'You can only delete your own phone numbers.');
-    }
+      const [row] = await tx
+        .select()
+        .from(phoneNumbers)
+        .where(eq(phoneNumbers.id, numberId))
+        .limit(1);
 
-    // Refuse if the line is on an open call — caller would lose mid-call routing and the
-    // recipient's UI would show a number that no longer exists. Staff can force-end first.
-    const [openCall] = await this.db
-      .select({ id: phoneCalls.id })
-      .from(phoneCalls)
-      .where(
-        and(
-          inArray(phoneCalls.status, ['ringing', 'active']),
-          or(eq(phoneCalls.callerNumberId, numberId), eq(phoneCalls.recipientNumberId, numberId)),
-        ),
-      )
-      .limit(1);
-    if (openCall) {
-      throw new PhoneServiceError(
-        'invalid_state',
-        'That number is currently on a call. Hang up first, then try again.',
-      );
-    }
+      if (!row || !row.isActive) {
+        throw new PhoneServiceError('not_found', 'No such active number.');
+      }
+      if (!viewer.isStaff && row.playerId !== actingPlayerId) {
+        throw new PhoneServiceError('forbidden', 'You can only delete your own phone numbers.');
+      }
+      await lockPhoneKey(tx, 'player', row.playerId);
 
-    await this.db
-      .update(phoneNumbers)
-      .set({ isActive: false, deactivatedAt: new Date() })
-      .where(eq(phoneNumbers.id, numberId));
+      // Refuse if the line is on an open call — caller would lose mid-call routing and the
+      // recipient's UI would show a number that no longer exists. Staff can force-end first.
+      const [openCall] = await tx
+        .select({ id: phoneCalls.id })
+        .from(phoneCalls)
+        .where(
+          and(
+            inArray(phoneCalls.status, ['ringing', 'active']),
+            or(eq(phoneCalls.callerNumberId, numberId), eq(phoneCalls.recipientNumberId, numberId)),
+          ),
+        )
+        .limit(1);
+      if (openCall) {
+        throw new PhoneServiceError(
+          'invalid_state',
+          'That number is currently on a call. Hang up first, then try again.',
+        );
+      }
+
+      await tx
+        .update(phoneNumbers)
+        .set({ isActive: false, deactivatedAt: new Date() })
+        .where(and(eq(phoneNumbers.id, numberId), eq(phoneNumbers.isActive, true)));
+    });
   }
 
   async lookupNumber(numberRaw: string): Promise<PhoneNumber | null> {
@@ -246,99 +257,130 @@ export class PhoneService {
   // ----------------------------------------------------------
 
   async initiateCall(input: InitiateCallInput): Promise<CallParticipants> {
-    const [callerNumber] = await this.db
-      .select()
-      .from(phoneNumbers)
-      .where(eq(phoneNumbers.id, input.callerNumberId))
-      .limit(1);
-    const [recipientNumber] = await this.db
-      .select()
-      .from(phoneNumbers)
-      .where(eq(phoneNumbers.id, input.recipientNumberId))
-      .limit(1);
+    return this.db.transaction(async (tx) => {
+      await lockPhoneKeys(tx, [
+        ['number', input.callerNumberId],
+        ['number', input.recipientNumberId],
+      ]);
 
-    if (!callerNumber || !callerNumber.isActive) {
-      throw new PhoneServiceError('number_not_found', 'Your calling number is not active.');
-    }
-    if (!recipientNumber || !recipientNumber.isActive) {
-      throw new PhoneServiceError('number_not_found', PHONE_NUMBER_NOT_FOUND);
-    }
-    if (callerNumber.playerId !== input.callerPlayerId) {
-      throw new PhoneServiceError('forbidden', 'You can only dial from your own numbers.');
-    }
-    if (recipientNumber.playerId === input.callerPlayerId) {
-      throw new PhoneServiceError('self_call', 'You cannot call yourself.');
-    }
+      const [callerNumber] = await tx
+        .select()
+        .from(phoneNumbers)
+        .where(eq(phoneNumbers.id, input.callerNumberId))
+        .limit(1);
+      const [recipientNumber] = await tx
+        .select()
+        .from(phoneNumbers)
+        .where(eq(phoneNumbers.id, input.recipientNumberId))
+        .limit(1);
 
-    const [callerPlayer] = await this.db
-      .select({
-        id: players.id,
-        characterName: players.characterName,
-        discordId: players.discordId,
-        isAlive: players.isAlive,
-      })
-      .from(players)
-      .where(eq(players.id, callerNumber.playerId))
-      .limit(1);
-    const [recipientPlayer] = await this.db
-      .select({
-        id: players.id,
-        characterName: players.characterName,
-        discordId: players.discordId,
-        isAlive: players.isAlive,
-      })
-      .from(players)
-      .where(eq(players.id, recipientNumber.playerId))
-      .limit(1);
+      if (!callerNumber || !callerNumber.isActive) {
+        throw new PhoneServiceError('number_not_found', 'Your calling number is not active.');
+      }
+      if (!recipientNumber || !recipientNumber.isActive) {
+        throw new PhoneServiceError('number_not_found', PHONE_NUMBER_NOT_FOUND);
+      }
+      if (callerNumber.playerId !== input.callerPlayerId) {
+        throw new PhoneServiceError('forbidden', 'You can only dial from your own numbers.');
+      }
+      if (recipientNumber.playerId === input.callerPlayerId) {
+        throw new PhoneServiceError('self_call', 'You cannot call yourself.');
+      }
 
-    if (!callerPlayer || !callerPlayer.characterName) {
-      throw new PhoneServiceError('no_character', PHONE_INELIGIBLE_NO_CHARACTER);
-    }
-    if (!callerPlayer.isAlive) {
-      throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
-    }
-    if (!recipientPlayer) {
-      throw new PhoneServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
-    }
-    if (!recipientPlayer.isAlive) {
-      throw new PhoneServiceError('recipient_dead', PHONE_INELIGIBLE_DEAD);
-    }
-    if (!recipientPlayer.characterName) {
-      // Recipient is an OAuth placeholder without a character.
-      throw new PhoneServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
-    }
+      await lockPhoneKeys(tx, [
+        ['player', callerNumber.playerId],
+        ['player', recipientNumber.playerId],
+      ]);
 
-    const ringExpiresAt = new Date(Date.now() + PHONE_RING_TIMEOUT_MS);
-
-    let call: PhoneCall;
-    try {
-      const [row] = await this.db
-        .insert(phoneCalls)
-        .values({
-          callerNumberId: callerNumber.id,
-          recipientNumberId: recipientNumber.id,
-          callerPlayerId: callerPlayer.id,
-          recipientPlayerId: recipientPlayer.id,
-          status: 'ringing',
-          ringExpiresAt,
-          ringDiscordMessageId: input.ringDiscordMessageId ?? null,
+      const [callerPlayer] = await tx
+        .select({
+          id: players.id,
+          characterName: players.characterName,
+          discordId: players.discordId,
+          isAlive: players.isAlive,
         })
-        .returning();
-      call = row;
-    } catch (err) {
-      if (isUniqueViolation(err)) {
+        .from(players)
+        .where(eq(players.id, callerNumber.playerId))
+        .limit(1);
+      const [recipientPlayer] = await tx
+        .select({
+          id: players.id,
+          characterName: players.characterName,
+          discordId: players.discordId,
+          isAlive: players.isAlive,
+        })
+        .from(players)
+        .where(eq(players.id, recipientNumber.playerId))
+        .limit(1);
+
+      if (!callerPlayer || !callerPlayer.characterName) {
+        throw new PhoneServiceError('no_character', PHONE_INELIGIBLE_NO_CHARACTER);
+      }
+      if (!callerPlayer.isAlive) {
+        throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
+      }
+      if (!recipientPlayer) {
+        throw new PhoneServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
+      }
+      if (!recipientPlayer.isAlive) {
+        throw new PhoneServiceError('recipient_dead', PHONE_INELIGIBLE_DEAD);
+      }
+      if (!recipientPlayer.characterName) {
+        // Recipient is an OAuth placeholder without a character.
+        throw new PhoneServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
+      }
+
+      const [openCall] = await tx
+        .select({ id: phoneCalls.id })
+        .from(phoneCalls)
+        .where(
+          and(
+            inArray(phoneCalls.status, ['ringing', 'active']),
+            or(
+              eq(phoneCalls.callerPlayerId, callerPlayer.id),
+              eq(phoneCalls.recipientPlayerId, callerPlayer.id),
+              eq(phoneCalls.callerPlayerId, recipientPlayer.id),
+              eq(phoneCalls.recipientPlayerId, recipientPlayer.id),
+            ),
+          ),
+        )
+        .limit(1);
+      if (openCall) {
         throw new PhoneServiceError('already_on_call', PHONE_ALREADY_ON_CALL);
       }
-      throw err;
-    }
 
-    return {
-      call,
-      callerNumber,
-      recipientNumber,
-      callerPlayer,
-      recipientPlayer,
-    };
+      const ringExpiresAt = new Date(Date.now() + PHONE_RING_TIMEOUT_MS);
+
+      let call: PhoneCall;
+      try {
+        const [row] = await tx
+          .insert(phoneCalls)
+          .values({
+            callerNumberId: callerNumber.id,
+            recipientNumberId: recipientNumber.id,
+            callerPlayerId: callerPlayer.id,
+            recipientPlayerId: recipientPlayer.id,
+            status: 'ringing',
+            ringExpiresAt,
+            ringDiscordMessageId: input.ringDiscordMessageId ?? null,
+          })
+          .returning();
+        call = row;
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new PhoneServiceError('already_on_call', PHONE_ALREADY_ON_CALL);
+        }
+        throw err;
+      }
+
+      return {
+        call,
+        callerNumber,
+        recipientNumber,
+        callerPlayer,
+        recipientPlayer,
+      };
+    });
   }
 
   async answerCall(callId: string, actingPlayerId: string): Promise<PhoneCall> {
@@ -349,12 +391,20 @@ export class PhoneService {
     if (call.status !== 'ringing') {
       throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
     }
+    const now = new Date();
+    if (call.ringExpiresAt && call.ringExpiresAt <= now) {
+      await this.db
+        .update(phoneCalls)
+        .set({ status: 'missed', endedAt: now, endedReason: 'ring_timeout' })
+        .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing'), sql`ring_expires_at <= ${now}`));
+      throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
+    }
     await this.assertActingPlayerAlive(actingPlayerId);
 
     const [updated] = await this.db
       .update(phoneCalls)
-      .set({ status: 'active', answeredAt: new Date() })
-      .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing')))
+      .set({ status: 'active', answeredAt: now })
+      .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing'), sql`(ring_expires_at IS NULL OR ring_expires_at > ${now})`))
       .returning();
 
     if (!updated) {
@@ -775,7 +825,7 @@ export class PhoneService {
       .select({ error: phoneMessageTapDeliveries.error })
       .from(phoneMessageTapDeliveries)
       .where(eq(phoneMessageTapDeliveries.tapId, tapId))
-      .orderBy(desc(phoneMessageTapDeliveries.id))
+      .orderBy(desc(phoneMessageTapDeliveries.createdAt))
       .limit(limit);
     let consecutive = 0;
     for (const row of rows) {
@@ -955,6 +1005,22 @@ export class PhoneService {
     if (!call) throw new PhoneServiceError('not_found', 'Call not found.');
     return call;
   }
+}
+
+type PhoneLockScope = 'number' | 'player';
+
+async function lockPhoneKeys(db: DbOrTx, keys: Array<[PhoneLockScope, string]>): Promise<void> {
+  const uniqueKeys = Array.from(new Set(keys.map(([scope, id]) => `${scope}:${id}`))).sort();
+  for (const key of uniqueKeys) {
+    const [scope, id] = key.split(':', 2) as [PhoneLockScope, string];
+    await lockPhoneKey(db, scope, id);
+  }
+}
+
+async function lockPhoneKey(db: DbOrTx, scope: PhoneLockScope, id: string): Promise<void> {
+  const executor = (db as { execute?: (query: SQL) => Promise<unknown> }).execute;
+  if (typeof executor !== 'function') return;
+  await executor.call(db, sql`SELECT pg_advisory_xact_lock(hashtext(${`phone:${scope}:${id}`}))`);
 }
 
 function isUniqueViolation(err: unknown): boolean {

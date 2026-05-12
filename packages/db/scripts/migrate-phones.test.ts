@@ -77,6 +77,13 @@ describe('migrate-phones', () => {
     expect(script).toMatch(/WHERE recipient_discord_message_id IS NULL/);
   });
 
+  it('timestamps tap deliveries so failure streaks can be ordered by recency', () => {
+    expect(script).toContain('"created_at" timestamptz NOT NULL DEFAULT now()');
+    expect(script).toContain('ALTER TABLE "phone_message_tap_deliveries" ADD COLUMN IF NOT EXISTS "created_at"');
+    expect(script).toContain('CREATE INDEX IF NOT EXISTS "phone_message_tap_deliveries_tap_created_idx"');
+    expect(script).toContain('ON "phone_message_tap_deliveries" ("tap_id", "created_at" DESC)');
+  });
+
   it('indexes active calls for the stranded-call startup sweep', () => {
     expect(script).toContain('CREATE INDEX IF NOT EXISTS "phone_calls_active_started_idx"');
     expect(script).toMatch(/WHERE status = 'active'/);
@@ -89,6 +96,14 @@ describe('migrate-phones', () => {
     expect(script).toMatch(/ADD CONSTRAINT "phone_calls_status_check"[\s\S]*?NOT VALID/);
     expect(script).toMatch(/ADD CONSTRAINT "phone_threads_ordered_pair"[\s\S]*?NOT VALID/);
     expect(script).toMatch(/ADD CONSTRAINT "phone_tap_audit_log_action_check"[\s\S]*?NOT VALID/);
+  });
+
+  it('implements the documented --validate path for NOT VALID constraints', () => {
+    expect(script).toContain("const validate = process.argv.includes('--validate')");
+    expect(script).toContain('ALTER TABLE "phone_numbers" VALIDATE CONSTRAINT "phone_numbers_normalized_shape"');
+    expect(script).toContain('ALTER TABLE "phone_calls" VALIDATE CONSTRAINT "phone_calls_status_check"');
+    expect(script).toContain('ALTER TABLE "phone_threads" VALIDATE CONSTRAINT "phone_threads_ordered_pair"');
+    expect(script).toContain('ALTER TABLE "phone_tap_audit_log" VALIDATE CONSTRAINT "phone_tap_audit_log_action_check"');
   });
 
   it('wraps every statement in a single transaction via sql.begin', () => {

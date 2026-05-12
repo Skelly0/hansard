@@ -16,6 +16,7 @@ import {
   type PhoneTap,
 } from '@hansard/api/services/phoneService';
 import { resolveStaffRoleIds } from './staffRoles.js';
+import { validateTapMirrorChannel } from './tapMirrorChannel.js';
 import {
   PHONE_FORCE_END_REASON_PREFIX,
   PHONE_TAP_FAILURE_THRESHOLD,
@@ -212,21 +213,20 @@ async function sendStaffJoinPing(
       // args fetches all members (limited by `GuildMembers` intent — which we have).
       // Skip if a fetch fails; we'll just miss best-effort auto-add.
       await guild.members.fetch().catch(() => undefined);
-      const addPromises: Promise<unknown>[] = [];
+      const addBatch: Promise<unknown>[] = [];
+      const batchSize = 5;
       for (const member of guild.members.cache.values()) {
         if (member.user.bot) continue;
         const hasStaffRole = member.roles.cache.some((r) => staffRoleIds.includes(r.id));
         if (!hasStaffRole) continue;
-        // Sequence in a controlled-concurrency batch to avoid burning the thread-add bucket.
-        addPromises.push(thread.members.add(member.id).catch((err: unknown) => {
+        addBatch.push(thread.members.add(member.id).catch((err: unknown) => {
           console.error(`[phone:relay] failed to add staff member ${member.id} to thread:`, err);
         }));
+        if (addBatch.length >= batchSize) {
+          await Promise.all(addBatch.splice(0, addBatch.length));
+        }
       }
-      // Cap concurrency at 5 to avoid a thundering herd of thread-member-add requests.
-      const batchSize = 5;
-      for (let i = 0; i < addPromises.length; i += batchSize) {
-        await Promise.all(addPromises.slice(i, i + batchSize));
-      }
+      if (addBatch.length > 0) await Promise.all(addBatch);
     } catch (err) {
       console.error('[phone:relay] failed to auto-add staff to phone thread:', err);
     }
@@ -261,8 +261,6 @@ export async function relayMessage(
   const recipient = senderIsCaller ? context.recipientPlayer : context.callerPlayer;
   const senderNumber = senderIsCaller ? context.callerNumber : context.recipientNumber;
 
-  const recipientCopyId = await sendToRecipient(client, recipient.discordId, senderNumber, message.content);
-
   const staffThread = await ensurePhoneThread(client, context);
   let staffMirrorId: string | null = null;
   if (staffThread) {
@@ -272,13 +270,24 @@ export async function relayMessage(
     }
   }
 
+  let recipientCopyId: string | null = null;
+  let recipientDeliveryError: unknown = null;
+  try {
+    recipientCopyId = await sendToRecipient(client, recipient.discordId, senderNumber, message.content);
+  } catch (err) {
+    recipientDeliveryError = err;
+  }
+
   await svc.updateMessageMirrorIds(message.id, {
     recipientDiscordMessageId: recipientCopyId,
     staffMirrorMessageId: staffMirrorId,
   });
 
   const taps = await svc.getActiveTapsForNumbers([context.callerNumber.id, context.recipientNumber.id]);
-  if (taps.length === 0) return;
+  if (taps.length === 0) {
+    if (recipientDeliveryError) throw recipientDeliveryError;
+    return;
+  }
 
   // Sequence tap fanout instead of Promise.all to avoid a Discord global-50-msgs/s spike
   // when a single message routes to many taps. Each tap is independent — at most one tap
@@ -297,6 +306,8 @@ export async function relayMessage(
       console.error('[phone:relay] tap circuit-breaker check failed:', err);
     }
   }
+
+  if (recipientDeliveryError) throw recipientDeliveryError;
 }
 
 async function sendToRecipient(
@@ -321,7 +332,7 @@ async function sendToRecipient(
     if (isDmClosedError(err)) {
       throw new RecipientDmClosedError(recipientDiscordId, err);
     }
-    return null;
+    throw err;
   }
 }
 
@@ -378,7 +389,7 @@ async function deliverTapCopy(
 
   const channelId = tap.mirrorChannelId ?? process.env[PHONE_TAP_CHANNEL_ENV]?.trim();
   let mirrorMessageId: string | null = null;
-  let lastError: string | null = null;
+  const errors: string[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const piece = chunks[i];
@@ -397,17 +408,20 @@ async function deliverTapCopy(
     if (channelId) {
       try {
         const channel = await client.channels.fetch(channelId);
-        if (channel && 'send' in channel && typeof (channel as { send?: unknown }).send === 'function') {
+        const channelError = channel ? validateTapMirrorChannel(channel as never) : 'tap channel not found';
+        if (channelError) {
+          errors.push(channelError);
+        } else if (channel && 'send' in channel && typeof (channel as { send?: unknown }).send === 'function') {
           const sent = await (channel as TextChannel | ThreadChannel).send({
             embeds: [embed],
             allowedMentions: { parse: [] },
           });
           if (i === 0) mirrorMessageId = sent.id;
         } else {
-          lastError = 'tap channel is not sendable';
+          errors.push('tap channel is not sendable');
         }
       } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
+        errors.push(err instanceof Error ? err.message : String(err));
         console.error('[phone:relay] tap channel delivery failed:', err);
       }
     }
@@ -418,7 +432,7 @@ async function deliverTapCopy(
         const dm = await user.send({ embeds: [embed] });
         if (!mirrorMessageId && i === 0) mirrorMessageId = dm.id;
       } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
+        errors.push(err instanceof Error ? err.message : String(err));
         console.error('[phone:relay] tap user DM failed:', err);
       }
     }
@@ -426,7 +440,7 @@ async function deliverTapCopy(
 
   await svc.recordTapDelivery(message.id, tap.id, {
     mirrorMessageId,
-    error: mirrorMessageId ? null : lastError ?? 'no tap target configured',
+    error: errors.length ? errors.join('; ') : mirrorMessageId ? null : 'no tap target configured',
   });
 }
 
@@ -555,4 +569,4 @@ export async function postCallOpenedToStaffThread(
 }
 
 // Internal helper exposed for testing the chunker without spinning up a Discord client.
-export const __internal = { chunkText };
+export const __internal = { chunkText, validateTapMirrorChannel };

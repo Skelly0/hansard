@@ -5,7 +5,6 @@ import {
   SlashCommandBuilder,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
-  type GuildChannel,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { players } from '@hansard/db';
@@ -19,6 +18,7 @@ import {
 import { buildIncomingCallActions } from '../../components/phoneButtons.js';
 import { hangUpAndNotify } from '../../utils/phoneRelay.js';
 import { resolveStaffRoleIds } from '../../utils/staffRoles.js';
+import { validateTapMirrorChannel } from '../../utils/tapMirrorChannel.js';
 import {
   formatPhoneCallStatus,
   formatPhoneEndedReason,
@@ -385,6 +385,28 @@ async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<bo
   return false;
 }
 
+async function discordUserIsStaff(interaction: ChatInputCommandInteraction, discordUserId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ isStaff: players.isStaff })
+    .from(players)
+    .where(eq(players.discordId, discordUserId))
+    .limit(1);
+  if (row?.isStaff) return true;
+
+  for (const guild of interaction.client.guilds.cache.values()) {
+    try {
+      const member = await guild.members.fetch(discordUserId).catch(() => null);
+      if (!member) continue;
+      const staffRoleIds = await resolveStaffRoleIds(guild);
+      if (staffRoleIds.length === 0) continue;
+      if (member.roles.cache.some((r) => staffRoleIds.includes(r.id))) return true;
+    } catch (err) {
+      console.error('[phone:cmd] mirror-user staff check failed:', err);
+    }
+  }
+  return false;
+}
+
 async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!(await ensureStaff(interaction))) return;
   const numberInput = interaction.options.getString('number', true);
@@ -400,6 +422,12 @@ async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): P
       await interaction.editReply({ embeds: [errorEmbed(channelError)] });
       return;
     }
+  }
+  if (mirrorUser && !(await discordUserIsStaff(interaction, mirrorUser.id))) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Wiretap mirror user must be a staff member. Use a staff channel, yourself, or omit `mirror-user`.')],
+    });
+    return;
   }
 
   const number = await svc().lookupNumber(numberInput);
@@ -447,59 +475,6 @@ async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): P
     console.error('[phone:cmd] admin tap-create failed:', err);
     await interaction.editReply({ embeds: [errorEmbed('Failed to set wiretap.')] });
   }
-}
-
-/**
- * Return null if the channel is safe for wiretap mirroring, otherwise an error message.
- *
- * Allowed: `GuildText` and `PrivateThread`. The check on private threads walks up to the
- * parent channel — a thread itself has no `@everyone` overwrites, so we must validate
- * inheritance.
- *
- * Rejects: DMs, voice/stage/forum/category, announcement channels (visible to followers),
- * public threads (even under a private parent — non-staff can be added), and any guild
- * channel where `@everyone` has effective `ViewChannel`. Effective check uses
- * `permissionsFor(@everyone)` so category-inherited deny is honored (avoids false-positive
- * refusals of staff-category channels with no channel-level overwrite).
- */
-export function validateTapMirrorChannel(
-  channel: { id: string; type: ChannelType } | GuildChannel,
-): string | null {
-  // Reject anything that isn't GuildText or PrivateThread. Public threads, announcement
-  // channels, announcement threads, voice/stage/forum/category all refused.
-  if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.PrivateThread) {
-    return 'Wiretap mirror channel must be a text channel or private thread (no public threads or announcement channels).';
-  }
-
-  const guildChannel = channel as GuildChannel & { parent?: GuildChannel | null };
-
-  // For private threads, walk to the parent and validate THAT — threads inherit visibility
-  // from their parent, so a private thread under a public parent is still readable by
-  // anyone who can see the parent listing.
-  let channelToCheck: GuildChannel = guildChannel;
-  if (channel.type === ChannelType.PrivateThread) {
-    const parent = guildChannel.parent;
-    if (!parent) {
-      return 'Private thread has no resolvable parent channel — refusing to use as wiretap mirror.';
-    }
-    channelToCheck = parent;
-  }
-
-  // Effective `permissionsFor(@everyone)` honors category and role-default inheritance —
-  // a staff channel whose @everyone is denied at the category level (very common layout)
-  // passes here, where a raw `permissionOverwrites.cache` check would falsely refuse it.
-  if (!('permissionsFor' in channelToCheck) || typeof channelToCheck.permissionsFor !== 'function') {
-    return 'Cannot resolve permissions for the chosen channel.';
-  }
-  const everyone = channelToCheck.guild.roles.everyone;
-  const everyonePerms = channelToCheck.permissionsFor(everyone);
-  if (!everyonePerms) {
-    return 'Cannot resolve @everyone permissions for the chosen channel.';
-  }
-  if (everyonePerms.has('ViewChannel')) {
-    return 'Wiretap mirror channel must be private — @everyone must not have View Channel permission. Pick a staff channel or omit `mirror-channel` to use the default tap channel.';
-  }
-  return null;
 }
 
 async function handleAdminTapRevoke(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -828,3 +803,4 @@ const command: Command = {
 };
 
 export default command;
+export { validateTapMirrorChannel };

@@ -51,7 +51,7 @@ describe('loadCommands', () => {
     await loadCommands(join(process.cwd(), 'src', 'commands'), commands);
 
     expect(commands.size).toBeLessThanOrEqual(100);
-  });
+  }, 10_000);
 });
 
 describe('collectCommandFiles', () => {

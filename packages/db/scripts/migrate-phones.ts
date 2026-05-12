@@ -7,6 +7,7 @@ if (existsSync('../../.env')) {
 
 const dryRun = process.argv.includes('--dry-run');
 const rollback = process.argv.includes('--rollback');
+const validate = process.argv.includes('--validate');
 
 /**
  * Statements ordered so every FK target exists before its referent and so all CHECK
@@ -211,11 +212,22 @@ const statements: string[] = [
     "tap_id" uuid NOT NULL REFERENCES "phone_taps"("id") ON DELETE RESTRICT,
     "mirror_message_id" varchar(20),
     "delivered_at" timestamptz,
-    "error" varchar(500)
+    "error" varchar(500),
+    "created_at" timestamptz NOT NULL DEFAULT now()
   );`,
+  `ALTER TABLE "phone_message_tap_deliveries" ADD COLUMN IF NOT EXISTS "created_at" timestamptz NOT NULL DEFAULT now();`,
   // For prior deployments where `error` was `text`, narrow it. Postgres allows a varchar(N)
   // narrowing if no row exceeds N — emit a USING expression that truncates safely.
   `ALTER TABLE "phone_message_tap_deliveries" ALTER COLUMN "error" TYPE varchar(500) USING substr("error", 1, 500);`,
+  `CREATE INDEX IF NOT EXISTS "phone_message_tap_deliveries_tap_created_idx"
+    ON "phone_message_tap_deliveries" ("tap_id", "created_at" DESC);`,
+];
+
+const validateStatements: string[] = [
+  `ALTER TABLE "phone_numbers" VALIDATE CONSTRAINT "phone_numbers_normalized_shape";`,
+  `ALTER TABLE "phone_calls" VALIDATE CONSTRAINT "phone_calls_status_check";`,
+  `ALTER TABLE "phone_threads" VALIDATE CONSTRAINT "phone_threads_ordered_pair";`,
+  `ALTER TABLE "phone_tap_audit_log" VALIDATE CONSTRAINT "phone_tap_audit_log_action_check";`,
 ];
 
 const rollbackStatements: string[] = [
@@ -230,10 +242,10 @@ const rollbackStatements: string[] = [
 ];
 
 async function main() {
-  const toRun = rollback ? rollbackStatements : statements;
+  const toRun = validate ? validateStatements : rollback ? rollbackStatements : statements;
 
   if (dryRun) {
-    console.log(rollback ? '--- DRY RUN ROLLBACK ---' : '--- DRY RUN, would execute ---');
+    console.log(validate ? '--- DRY RUN VALIDATE ---' : rollback ? '--- DRY RUN ROLLBACK ---' : '--- DRY RUN, would execute ---');
     for (const stmt of toRun) {
       console.log(stmt);
     }
@@ -261,7 +273,9 @@ async function main() {
         await tx.unsafe(stmt);
       }
     });
-    console.log(rollback
+    console.log(validate
+      ? `Done. Validated ${toRun.length} phone constraints.`
+      : rollback
       ? `Done. Dropped ${toRun.length} phone tables.`
       : `Done. Applied ${toRun.length} statements. Phone registry tables present.`);
   } finally {

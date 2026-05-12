@@ -29,10 +29,10 @@ export const phoneNumbers = pgTable('phone_numbers', {
 }));
 
 // === PHONE CALLS ===
-// Session-based call between two numbers. Each call row also carries the participant pair as
-// generated `participant_low_id` / `participant_high_id` columns so a single partial unique index
-// can enforce "one open call per player, regardless of role" — without this, a recipient of a
-// ringing call could still place an outbound call.
+// Session-based call between two numbers. The partial unique indexes below catch same-role
+// duplicate opens; PhoneService also takes transaction-scoped advisory locks and checks both
+// participant roles before insert so a player cannot be caller in one open call and recipient
+// in another.
 export const phoneCalls = pgTable('phone_calls', {
   id: uuid('id').primaryKey().defaultRandom(),
 
@@ -57,19 +57,15 @@ export const phoneCalls = pgTable('phone_calls', {
   answeredAt: timestamp('answered_at', { withTimezone: true, mode: 'date' }),
   endedAt: timestamp('ended_at', { withTimezone: true, mode: 'date' }),
 }, (table) => ({
-  // One OPEN call per player, regardless of caller/recipient role. The two partial indexes below
-  // cover both columns; either index will reject the second insert with 23505.
+  // Same-role duplicate protection for open calls.
   oneOpenCaller: uniqueIndex('phone_calls_one_open_caller')
     .on(table.callerPlayerId)
     .where(sql`status IN ('ringing','active')`),
   oneOpenRecipient: uniqueIndex('phone_calls_one_open_recipient')
     .on(table.recipientPlayerId)
     .where(sql`status IN ('ringing','active')`),
-  // Cross-role protection: if a player is already the *recipient* of a ringing call, they can't
-  // be the *caller* on a new one. Postgres can't share a single partial unique index across two
-  // columns, so we add a CHECK that rejects rows that would conflict with an existing open call
-  // by participant — enforced via a service-side lookup. The composite partial indexes above
-  // catch same-role races; cross-role is handled in the service `initiateCall` pre-check.
+  // Cross-role protection is handled in PhoneService with transaction-scoped advisory locks
+  // and a participant-wide open-call lookup before insert.
   statusCheck: check('phone_calls_status_check', sql`status IN ('ringing','active','ended','declined','missed','cancelled')`),
   callerHistoryIdx: index('phone_calls_caller_history_idx').on(table.callerPlayerId, table.startedAt),
   recipientHistoryIdx: index('phone_calls_recipient_history_idx').on(table.recipientPlayerId, table.startedAt),
@@ -169,4 +165,7 @@ export const phoneMessageTapDeliveries = pgTable('phone_message_tap_deliveries',
   deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'date' }),
   // 500-char cap so a Discord stack trace can't bloat the audit table.
   error: varchar('error', { length: 500 }),
-});
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  tapCreatedIdx: index('phone_message_tap_deliveries_tap_created_idx').on(table.tapId, table.createdAt.desc()),
+}));

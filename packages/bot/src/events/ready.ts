@@ -30,32 +30,34 @@ export function registerReadyEvent(client: Client): void {
     console.log(`${botName} is online! Serving ${guildCount} guild(s)`);
 
     const commandData = [...commands.values()].map((c) => c.data.toJSON());
+    const globalCommandData = commandData.filter((command) => command.name === 'phone');
 
-    // Global registration is required for `setContexts(...BotDM)` to be honored — Discord
-    // ignores the contexts array on guild-scoped commands. Without this, `/phone hangup`
-    // and other DM-context features silently don't work from a DM.
-    //
-    // Tradeoff: global commands take up to ~1 hour to propagate vs near-instant for guild
-    // commands. For dev iteration, set `DEV_GUILD_ID` and the bot will *also* register
-    // every command to that guild for instant updates (duplicates are fine — Discord shows
-    // the guild copy with no propagation delay).
+    // Only /phone needs a global command because BotDM contexts are ignored for guild-scoped
+    // registrations. Keep every other command guild-scoped so guild-only permission metadata
+    // cannot be bypassed from DMs.
     try {
-      await readyClient.application?.commands.set(commandData);
-      console.log(`Registered ${commandData.length} global commands`);
+      await readyClient.application?.commands.set(globalCommandData);
+      console.log(`Registered ${globalCommandData.length} global command(s)`);
     } catch (err) {
       console.error('Failed to register global commands:', err);
+    }
+
+    // Preserve the old production behavior of sweeping guild command sets. This both keeps
+    // non-phone commands guild-scoped and deletes stale guild commands such as /time-history.
+    for (const guild of readyClient.guilds.cache.values()) {
+      try {
+        await guild.commands.set(commandData);
+        console.log(`Registered ${commandData.length} guild commands in ${guild.name}`);
+      } catch (err) {
+        console.error(`Failed to register guild commands in ${guild.name}:`, err);
+      }
     }
 
     const devGuildId = process.env.DEV_GUILD_ID?.trim();
     if (devGuildId) {
       const devGuild = readyClient.guilds.cache.get(devGuildId);
       if (devGuild) {
-        try {
-          await devGuild.commands.set(commandData);
-          console.log(`Registered ${commandData.length} dev-guild commands in ${devGuild.name}`);
-        } catch (err) {
-          console.error(`Failed to register dev-guild commands in ${devGuild.name}:`, err);
-        }
+        console.log(`DEV_GUILD_ID=${devGuildId} is included in the guild command sweep (${devGuild.name})`);
       } else {
         console.warn(`DEV_GUILD_ID=${devGuildId} not in cache — skipping dev-guild registration`);
       }

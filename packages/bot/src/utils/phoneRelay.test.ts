@@ -39,3 +39,23 @@ describe('phoneRelay.chunkText', () => {
     expect(chunks.join('').length).toBe(text.length);
   });
 });
+
+describe('phoneRelay tap mirror channel validation', () => {
+  const guild = { id: 'G1', roles: { everyone: { id: 'G1' } } };
+  const makeChannel = (everyoneCanView: boolean) => ({
+    id: 'C1',
+    type: 0,
+    guild,
+    permissionsFor: () => ({
+      has: (perm: string) => perm === 'ViewChannel' && everyoneCanView,
+    }),
+  });
+
+  it('refuses a public env fallback tap channel before delivery', () => {
+    expect(__internal.validateTapMirrorChannel(makeChannel(true) as never)).toMatch(/must be private/i);
+  });
+
+  it('allows a private env fallback tap channel', () => {
+    expect(__internal.validateTapMirrorChannel(makeChannel(false) as never)).toBeNull();
+  });
+});

@@ -15,7 +15,7 @@
     "migrate:phones": "tsx scripts/migrate-phones.ts",
     "push": "drizzle-kit push",
     "studio": "drizzle-kit studio",
-    "build": "tsc",
+    "build": "tsc && tsc -p tsconfig.scripts.json --noEmit",
     "test": "vitest",
     "test:run": "vitest run"
   },

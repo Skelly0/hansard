@@ -228,8 +228,24 @@ describe('PhoneService.initiateCall', () => {
         [{ id: 'n2', playerId: 'p2', isActive: true }],
         [{ id: 'p1', characterName: 'Alice', discordId: '1', isAlive: true }],
         [{ id: 'p2', characterName: 'Bob', discordId: '2', isAlive: true }],
+        [],
       ],
       insertErrors: [Object.assign(new Error('dup'), { code: '23505' })],
+    });
+    const svc = new PhoneService(db);
+    await expect(svc.initiateCall({ callerPlayerId: 'p1', callerNumberId: 'n1', recipientNumberId: 'n2' }))
+      .rejects.toMatchObject({ code: 'already_on_call' });
+  });
+
+  it('refuses cross-role collisions before inserting a new open call', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'n1', playerId: 'p1', isActive: true }],
+        [{ id: 'n2', playerId: 'p2', isActive: true }],
+        [{ id: 'p1', characterName: 'Alice', discordId: '1', isAlive: true }],
+        [{ id: 'p2', characterName: 'Bob', discordId: '2', isAlive: true }],
+        [{ id: 'existing-call', callerPlayerId: 'p3', recipientPlayerId: 'p1', status: 'active' }],
+      ],
     });
     const svc = new PhoneService(db);
     await expect(svc.initiateCall({ callerPlayerId: 'p1', callerNumberId: 'n1', recipientNumberId: 'n2' }))
@@ -397,6 +413,22 @@ describe('PhoneService.systemEndCall', () => {
 });
 
 describe('PhoneService.answerCall / declineCall isAlive guard', () => {
+  it('refuses an answer after ring expiry even if the timeout worker has not swept yet', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [{
+          id: 'call-1',
+          status: 'ringing',
+          callerPlayerId: 'c',
+          recipientPlayerId: 'r',
+          ringExpiresAt: new Date(Date.now() - 1_000),
+        }],
+      ],
+    });
+    const svc = new PhoneService(db);
+    await expect(svc.answerCall('call-1', 'r')).rejects.toMatchObject({ code: 'invalid_state' });
+  });
+
   it('rejects answering a call when the recipient has since died', async () => {
     const db = makeDb({
       selectQueues: [

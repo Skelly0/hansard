@@ -110,6 +110,10 @@ function partyJoinMessage(description = 'React with the emoji for the open party
       description,
     }],
     guild: null,
+    reactions: {
+      cache: new Map(),
+      removeAll: vi.fn().mockResolvedValue(undefined),
+    },
   };
 
   message.channel = {
@@ -122,6 +126,7 @@ function partyJoinMessage(description = 'React with the emoji for the open party
 }
 
 import {
+  assignPartyReactionOptions,
   buildPartyJoinMessagePayload,
   handlePartyJoinReaction,
   refreshPartyJoinMessage,
@@ -142,6 +147,53 @@ describe('party join reaction message', () => {
     mocks.tx.update.mockReturnValue(new UpdateQuery());
     mocks.tx.insert.mockReturnValue(new InsertQuery());
     mocks.db.transaction.mockImplementation(async (fn: (tx: typeof mocks.tx) => Promise<unknown>) => fn(mocks.tx));
+  });
+
+  it('uses hue for dark saturated party colours instead of collapsing them to black emojis', () => {
+    const options = assignPartyReactionOptions([
+      {
+        id: 'maroon',
+        name: 'Maroon League',
+        shortName: null,
+        ideology: null,
+        colour: '#2f0000',
+        discordRoleId: null,
+        isActive: true,
+        isInviteOnly: false,
+      },
+      {
+        id: 'midnight',
+        name: 'Midnight Bloc',
+        shortName: null,
+        ideology: null,
+        colour: '#001a46',
+        discordRoleId: null,
+        isActive: true,
+        isInviteOnly: false,
+      },
+      {
+        id: 'evergreen',
+        name: 'Evergreen Assembly',
+        shortName: null,
+        ideology: null,
+        colour: '#003016',
+        discordRoleId: null,
+        isActive: true,
+        isInviteOnly: false,
+      },
+      {
+        id: 'violet',
+        name: 'Violet Front',
+        shortName: null,
+        ideology: null,
+        colour: '#250040',
+        discordRoleId: null,
+        isActive: true,
+        isInviteOnly: false,
+      },
+    ]);
+
+    expect(options.map((option) => option.emoji)).toEqual(['🔴', '🔵', '🟢', '🟣']);
   });
 
   it('lists only open parties, includes ideology, and assigns nearest unique colour emoji', () => {
@@ -263,7 +315,54 @@ describe('party join reaction message', () => {
     expect(embed.description).toContain('🟦 **Aqua Bloc** (AQU) — Ideology: *Maritime municipalism*');
     expect(embed.description).toContain('🔵 **Blue Party** (BLU) — Ideology: *Liberal conservatism*');
     expect(embed.description).not.toContain('Closed Caucus');
+    expect(message.reactions.removeAll).toHaveBeenCalledOnce();
     expect(message.react).toHaveBeenCalledWith('🟦');
+    expect(message.react).toHaveBeenCalledWith('🔵');
+  });
+
+  it('repairs old black emoji assignments when the party colour has a chromatic hue', async () => {
+    mocks.db.select.mockImplementation(() => new Query([
+      {
+        id: 'midnight',
+        name: 'Midnight Bloc',
+        shortName: 'MID',
+        ideology: 'Civic liberalism',
+        colour: '#001a46',
+        discordRoleId: null,
+        isActive: true,
+        isInviteOnly: false,
+      },
+    ]));
+
+    const message = partyJoinMessage([
+      'React with the emoji for the open party you want to join.',
+      'Invite-only parties are not listed.',
+      '',
+      '⚫ **Midnight Bloc** (MID) — Ideology: *Civic liberalism*',
+    ].join('\n'));
+    message.edit = vi.fn().mockResolvedValue(message);
+    message.react = vi.fn().mockResolvedValue(undefined);
+
+    const channel = {
+      messages: {
+        fetch: vi.fn().mockResolvedValue(new Map([[message.id, message]])),
+      },
+    };
+    message.channel = channel;
+
+    const client = {
+      channels: {
+        fetch: vi.fn().mockResolvedValue(channel),
+      },
+    };
+
+    await refreshPartyJoinMessage(client as any);
+
+    const editPayload = message.edit.mock.calls[0]?.[0];
+    const embed = editPayload.embeds[0].toJSON();
+    expect(embed.description).toContain('🔵 **Midnight Bloc** (MID) — Ideology: *Civic liberalism*');
+    expect(embed.description).not.toContain('⚫ **Midnight Bloc**');
+    expect(message.reactions.removeAll).toHaveBeenCalledOnce();
     expect(message.react).toHaveBeenCalledWith('🔵');
   });
 

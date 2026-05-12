@@ -2,7 +2,6 @@ import {
   ChannelType,
   EmbedBuilder,
   InteractionContextType,
-  PermissionFlagsBits,
   SlashCommandBuilder,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
@@ -19,7 +18,13 @@ import {
 } from '@hansard/api/services/phoneService';
 import { buildIncomingCallActions } from '../../components/phoneButtons.js';
 import { hangUpAndNotify } from '../../utils/phoneRelay.js';
-import { parseNumberOrThrow } from '../../utils/phoneNumber.js';
+import { resolveStaffRoleIds } from '../../utils/staffRoles.js';
+import {
+  formatPhoneCallStatus,
+  formatPhoneEndedReason,
+  isValidPhoneNumber,
+  PHONE_NUMBER_INVALID,
+} from '@hansard/shared';
 import type { Command } from '../../client.js';
 
 const CALL_COLOUR = 0x9b7cb8;
@@ -59,12 +64,8 @@ async function handleRegister(interaction: ChatInputCommandInteraction): Promise
   const numberInput = interaction.options.getString('number', true);
   const label = interaction.options.getString('label')?.trim() || null;
 
-  try {
-    parseNumberOrThrow(numberInput);
-  } catch (err) {
-    await interaction.editReply({
-      embeds: [errorEmbed(err instanceof Error ? err.message : 'Invalid phone number.')],
-    });
+  if (!isValidPhoneNumber(numberInput)) {
+    await interaction.editReply({ embeds: [errorEmbed(PHONE_NUMBER_INVALID)] });
     return;
   }
 
@@ -74,7 +75,17 @@ async function handleRegister(interaction: ChatInputCommandInteraction): Promise
       embeds: [
         successEmbed(
           'Number registered',
-          `\u{1F4DE} **${row.numberRaw}**${row.label ? ` *(${row.label})*` : ''}\nAnyone can dial this number to reach you. Use \`/phone delete\` to retire it.`,
+          [
+            `\u{1F4DE} **${row.numberRaw}**${row.label ? ` *(${row.label})*` : ''}`,
+            '',
+            'Anyone can dial this number to reach you. Make sure your Discord DMs are open.',
+            '',
+            'Next steps:',
+            '• `/phone dial <number>` to start a call',
+            '• `/phone numbers` to list your lines',
+            '• `/phone history` to review your recent calls',
+            '• `/phone delete` to retire this number',
+          ].join('\n'),
         ),
       ],
     });
@@ -83,7 +94,7 @@ async function handleRegister(interaction: ChatInputCommandInteraction): Promise
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       return;
     }
-    console.error('[/phone register] failed:', err);
+    console.error('[phone:cmd] register failed:', err);
     await interaction.editReply({ embeds: [errorEmbed('Failed to register the number.')] });
   }
 }
@@ -130,7 +141,7 @@ async function handleDelete(interaction: ChatInputCommandInteraction): Promise<v
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       return;
     }
-    console.error('[/phone delete] failed:', err);
+    console.error('[phone:cmd] delete failed:', err);
     await interaction.editReply({ embeds: [errorEmbed('Failed to retire the number.')] });
   }
 }
@@ -182,12 +193,14 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       return;
     }
-    console.error('[/phone dial] failed:', err);
+    console.error('[phone:cmd] dial failed:', err);
     await interaction.editReply({ embeds: [errorEmbed('Failed to start the call.')] });
     return;
   }
 
-  // DM the recipient with Answer/Decline.
+  // Send the ring DM. Split the try/catch so DB hiccups on the followup `setRingMessageId`
+  // don't get misattributed as DM-closed (which would end an otherwise functional call).
+  let ringMessageId: string | null = null;
   try {
     const recipientUser = await interaction.client.users.fetch(participants.recipientPlayer.discordId);
     // Real phones don't tell the recipient which of their own numbers was dialed. Show just
@@ -201,9 +214,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
       .setFooter({ text: 'This ring expires in 60 seconds.' });
     const row = buildIncomingCallActions(participants.call.id);
     const ringMessage = await recipientUser.send({ embeds: [ringEmbed], components: [row] });
-    // Persist the ring message ID so terminal transitions (hangup, decline, expiry, force-end)
-    // can edit the DM to disable stale Answer/Decline buttons.
-    await svc().setRingMessageId(participants.call.id, ringMessage.id);
+    ringMessageId = ringMessage.id;
   } catch (err) {
     console.error('[phone:cmd] dial: recipient DM failed:', err);
     try {
@@ -215,6 +226,17 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
       embeds: [errorEmbed('Recipient has DMs closed and could not be reached.')],
     });
     return;
+  }
+
+  // Persist the ring message ID so terminal transitions (hangup, decline, expiry, force-end)
+  // can edit the DM to disable stale Answer/Decline buttons. A DB hiccup here is non-fatal —
+  // the call is still functional; we just lose the auto-disable. Don't mislabel as dm_closed.
+  if (ringMessageId) {
+    try {
+      await svc().setRingMessageId(participants.call.id, ringMessageId);
+    } catch (err) {
+      console.error('[phone:cmd] dial: failed to persist ring message id (non-fatal):', err);
+    }
   }
 
   // Caller "Ringing..." DM echoes which of their numbers was used — surprising-number issue.
@@ -276,23 +298,39 @@ async function handleHangup(interaction: ChatInputCommandInteraction): Promise<v
 async function handleHistory(interaction: ChatInputCommandInteraction): Promise<void> {
   const player = await requirePlayer(interaction);
   if (!player) return;
-  const { calls, total } = await svc().getCallHistory(player.id, { userId: player.id, isStaff: false }, { limit: 10 });
+
+  const pageSize = 10;
+  const page = Math.max(1, interaction.options.getInteger('page') ?? 1);
+  const offset = (page - 1) * pageSize;
+
+  const { calls, total } = await svc().getCallHistory(
+    player.id,
+    { userId: player.id, isStaff: false },
+    { limit: pageSize, offset },
+  );
   if (!total) {
     await interaction.editReply({
       embeds: [new EmbedBuilder().setTitle('Call history').setColor(CALL_COLOUR).setDescription('No calls yet.')],
     });
     return;
   }
-  const { formatPhoneCallStatus, formatPhoneEndedReason } = await import('@hansard/shared');
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (page > totalPages) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`No page ${page} — only ${totalPages} page${totalPages === 1 ? '' : 's'} of history.`)],
+    });
+    return;
+  }
   const lines = calls.map((c) => {
     const isOutbound = c.callerPlayerId === player.id;
-    const stamp = c.startedAt.toISOString().slice(0, 16).replace('T', ' ');
+    // Discord-relative timestamp auto-localizes per viewer.
+    const stamp = `<t:${Math.floor(c.startedAt.getTime() / 1000)}:f>`;
     const other = isOutbound ? c.recipient : c.caller;
     const name = other.characterName ?? other.numberRaw ?? 'Unknown';
     const arrow = isOutbound ? '\u{2192}' : '\u{2190}';
     const status = formatPhoneCallStatus(c.status);
     const ended = c.endedReason ? ` \u{2014} ${formatPhoneEndedReason(c.endedReason)}` : '';
-    return `\`${stamp}\` ${arrow} **${name}** (${other.numberRaw ?? '?'}) \u{2014} ${status}${ended}`;
+    return `${stamp} ${arrow} **${name}** (${other.numberRaw ?? '?'}) \u{2014} ${status}${ended}`;
   });
   await interaction.editReply({
     embeds: [
@@ -300,7 +338,12 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
         .setTitle('Call history')
         .setColor(CALL_COLOUR)
         .setDescription(lines.join('\n'))
-        .setFooter({ text: `${calls.length} of ${total}` }),
+        .setFooter({
+          text:
+            totalPages > 1
+              ? `Page ${page} of ${totalPages} \u{2022} ${total} calls \u{2022} /phone history page:${page + 1 > totalPages ? 1 : page + 1}`
+              : `${calls.length} of ${total}`,
+        }),
     ],
   });
 }
@@ -310,9 +353,11 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
 // -----------------------------------------------------------------------------
 
 async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<boolean> {
-  // In DM context `interaction.member` is null, so isStaff() would always refuse. Fall back
-  // to a direct DB lookup keyed on the Discord user ID — same trust source isStaff already
-  // consults, just without requiring a GuildMember object.
+  // In DM context `interaction.member` is null, so `isStaff(...)` would always refuse. Fall
+  // back to (a) the DB `players.isStaff` flag, and (b) checking whether the invoking user
+  // has any guild role configured via `STAFF_ROLE_IDS`/`STAFF_ROLE_ID`/role named "Staff".
+  // This matches the trust surface of `isStaff(GuildMember)` so a role-only staff member
+  // hitting admin commands from a DM gets the same access as in a guild channel.
   if (interaction.member) {
     if (await isStaff(interaction.member)) return true;
   } else {
@@ -322,6 +367,19 @@ async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<bo
       .where(eq(players.discordId, interaction.user.id))
       .limit(1);
     if (row?.isStaff) return true;
+    // Role-only-staff fallback: walk every guild the bot is in, find the invoker as a
+    // GuildMember, and check whether they hold any resolved staff role.
+    for (const guild of interaction.client.guilds.cache.values()) {
+      try {
+        const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+        if (!member) continue;
+        const staffRoleIds = await resolveStaffRoleIds(guild);
+        if (staffRoleIds.length === 0) continue;
+        if (member.roles.cache.some((r) => staffRoleIds.includes(r.id))) return true;
+      } catch (err) {
+        console.error('[phone:cmd] ensureStaff role fallback failed:', err);
+      }
+    }
   }
   await interaction.editReply({ embeds: [errorEmbed('Only staff can use phone admin tools.')] });
   return false;
@@ -393,34 +451,53 @@ async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): P
 
 /**
  * Return null if the channel is safe for wiretap mirroring, otherwise an error message.
- * Rejects: DMs, public announcement channels, and any guild channel where `@everyone` has
- * ViewChannel — i.e. anything that would leak wiretap traffic outside staff visibility.
+ *
+ * Allowed: `GuildText` and `PrivateThread`. The check on private threads walks up to the
+ * parent channel — a thread itself has no `@everyone` overwrites, so we must validate
+ * inheritance.
+ *
+ * Rejects: DMs, voice/stage/forum/category, announcement channels (visible to followers),
+ * public threads (even under a private parent — non-staff can be added), and any guild
+ * channel where `@everyone` has effective `ViewChannel`. Effective check uses
+ * `permissionsFor(@everyone)` so category-inherited deny is honored (avoids false-positive
+ * refusals of staff-category channels with no channel-level overwrite).
  */
-function validateTapMirrorChannel(channel: { id: string; type: ChannelType } | GuildChannel): string | null {
-  // Discord enum members for non-text channels (voice/stage/etc) — refuse anything that's
-  // not text-based.
-  const allowedTypes = new Set<ChannelType>([
-    ChannelType.GuildText,
-    ChannelType.PrivateThread,
-    ChannelType.PublicThread,
-    ChannelType.AnnouncementThread,
-    ChannelType.GuildAnnouncement,
-  ]);
-  if (!allowedTypes.has(channel.type as ChannelType)) {
-    return 'Wiretap mirror channel must be a text channel or thread.';
+export function validateTapMirrorChannel(
+  channel: { id: string; type: ChannelType } | GuildChannel,
+): string | null {
+  // Reject anything that isn't GuildText or PrivateThread. Public threads, announcement
+  // channels, announcement threads, voice/stage/forum/category all refused.
+  if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.PrivateThread) {
+    return 'Wiretap mirror channel must be a text channel or private thread (no public threads or announcement channels).';
   }
-  // Public announcement channels are visible to anyone with read access — refuse.
-  if (channel.type === ChannelType.GuildAnnouncement) {
-    return 'Wiretap mirror cannot be an announcement channel — it would broadcast to everyone with read access.';
-  }
-  // Verify @everyone cannot view. This is the security-critical check.
-  const guildChannel = channel as GuildChannel;
-  if ('permissionOverwrites' in guildChannel && guildChannel.permissionOverwrites?.cache) {
-    const everyoneOverwrite = guildChannel.permissionOverwrites.cache.get(guildChannel.guild.id);
-    const everyoneDeniesView = everyoneOverwrite?.deny?.has?.('ViewChannel');
-    if (!everyoneDeniesView) {
-      return 'Wiretap mirror channel must be private — @everyone must not have View Channel permission. Pick a staff channel or omit `mirror-channel` to use the default tap channel.';
+
+  const guildChannel = channel as GuildChannel & { parent?: GuildChannel | null };
+
+  // For private threads, walk to the parent and validate THAT — threads inherit visibility
+  // from their parent, so a private thread under a public parent is still readable by
+  // anyone who can see the parent listing.
+  let channelToCheck: GuildChannel = guildChannel;
+  if (channel.type === ChannelType.PrivateThread) {
+    const parent = guildChannel.parent;
+    if (!parent) {
+      return 'Private thread has no resolvable parent channel — refusing to use as wiretap mirror.';
     }
+    channelToCheck = parent;
+  }
+
+  // Effective `permissionsFor(@everyone)` honors category and role-default inheritance —
+  // a staff channel whose @everyone is denied at the category level (very common layout)
+  // passes here, where a raw `permissionOverwrites.cache` check would falsely refuse it.
+  if (!('permissionsFor' in channelToCheck) || typeof channelToCheck.permissionsFor !== 'function') {
+    return 'Cannot resolve permissions for the chosen channel.';
+  }
+  const everyone = channelToCheck.guild.roles.everyone;
+  const everyonePerms = channelToCheck.permissionsFor(everyone);
+  if (!everyonePerms) {
+    return 'Cannot resolve @everyone permissions for the chosen channel.';
+  }
+  if (everyonePerms.has('ViewChannel')) {
+    return 'Wiretap mirror channel must be private — @everyone must not have View Channel permission. Pick a staff channel or omit `mirror-channel` to use the default tap channel.';
   }
   return null;
 }
@@ -442,7 +519,7 @@ async function handleAdminTapRevoke(interaction: ChatInputCommandInteraction): P
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       return;
     }
-    console.error('[/phone admin tap-revoke] failed:', err);
+    console.error('[phone:cmd] admin tap-revoke failed:', err);
     await interaction.editReply({ embeds: [errorEmbed('Failed to revoke wiretap.')] });
   }
 }
@@ -518,7 +595,7 @@ async function handleAdminForceEnd(interaction: ChatInputCommandInteraction): Pr
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       return;
     }
-    console.error('[/phone admin force-end] failed:', err);
+    console.error('[phone:cmd] admin force-end failed:', err);
     await interaction.editReply({ embeds: [errorEmbed('Failed to force-end call.')] });
   }
 }
@@ -575,7 +652,19 @@ const command: Command = {
         ),
     )
     .addSubcommand((sub) => sub.setName('hangup').setDescription('End your current call'))
-    .addSubcommand((sub) => sub.setName('history').setDescription('Show your recent calls'))
+    .addSubcommand((sub) =>
+      sub
+        .setName('history')
+        .setDescription('Show your recent calls')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('page')
+            .setDescription('Page number (10 calls per page; defaults to 1)')
+            .setMinValue(1)
+            .setMaxValue(999)
+            .setRequired(false),
+        ),
+    )
     .addSubcommandGroup((group) =>
       group
         .setName('admin')
@@ -594,7 +683,14 @@ const command: Command = {
               opt.setName('mirror-user').setDescription('Optional Discord user to DM tap copies to').setRequired(false),
             )
             .addChannelOption((opt) =>
-              opt.setName('mirror-channel').setDescription('Override the default tap mirror channel').setRequired(false),
+              opt
+                .setName('mirror-channel')
+                .setDescription('Override the default tap mirror channel (private channels / private threads only)')
+                .setRequired(false)
+                // Defense-in-depth: constrain at the slash UI so voice/stage/forum/category
+                // never reach the runtime validator. Runtime check (validateTapMirrorChannel)
+                // is the security boundary; this is a UX improvement.
+                .addChannelTypes(ChannelType.GuildText, ChannelType.PrivateThread),
             ),
         )
         .addSubcommand((sub) =>
@@ -725,14 +821,10 @@ const command: Command = {
           await interaction.editReply({ embeds: [errorEmbed(`Unknown subcommand: ${sub}`)] });
       }
     } catch (err) {
-      console.error(`[/phone ${group ?? ''} ${sub}] uncaught:`, err);
+      console.error(`[phone:cmd] ${group ?? ''} ${sub} uncaught:`, err);
       await interaction.editReply({ embeds: [errorEmbed('Something went wrong handling that command.')] });
     }
   },
 };
-
-// PermissionFlagsBits stays imported for any future tightening of admin gating at the Discord
-// metadata layer; runtime staff checks remain the authoritative source.
-void PermissionFlagsBits;
 
 export default command;

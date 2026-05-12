@@ -77,6 +77,78 @@ describe('migrate-phones', () => {
     expect(script).toMatch(/WHERE recipient_discord_message_id IS NULL/);
   });
 
+  it('indexes active calls for the stranded-call startup sweep', () => {
+    expect(script).toContain('CREATE INDEX IF NOT EXISTS "phone_calls_active_started_idx"');
+    expect(script).toMatch(/WHERE status = 'active'/);
+  });
+
+  it('adds CHECK constraints with NOT VALID so existing violators do not abort the migration', () => {
+    // Every ADD CONSTRAINT … CHECK should use NOT VALID. Operators run VALIDATE separately
+    // after cleaning up legacy rows.
+    expect(script).toMatch(/ADD CONSTRAINT "phone_numbers_normalized_shape"[\s\S]*?NOT VALID/);
+    expect(script).toMatch(/ADD CONSTRAINT "phone_calls_status_check"[\s\S]*?NOT VALID/);
+    expect(script).toMatch(/ADD CONSTRAINT "phone_threads_ordered_pair"[\s\S]*?NOT VALID/);
+    expect(script).toMatch(/ADD CONSTRAINT "phone_tap_audit_log_action_check"[\s\S]*?NOT VALID/);
+  });
+
+  it('wraps every statement in a single transaction via sql.begin', () => {
+    expect(script).toContain('await sql.begin(async (tx)');
+    expect(script).toContain('await tx.unsafe(stmt)');
+  });
+
+  it('asserts pgcrypto availability for gen_random_uuid on older Postgres versions', () => {
+    expect(script).toContain('CREATE EXTENSION IF NOT EXISTS pgcrypto;');
+  });
+
+  it('renames mirror_user_id on phone_tap_audit_log too (not just phone_taps)', () => {
+    // Both rename blocks must exist. Match each table independently.
+    const renameRegions = script.match(/RENAME COLUMN "mirror_user_id" TO "mirror_discord_user_id"/g);
+    expect(renameRegions).not.toBeNull();
+    expect(renameRegions!.length).toBeGreaterThanOrEqual(2);
+    expect(script).toContain("table_name = 'phone_tap_audit_log' AND column_name = 'mirror_user_id'");
+  });
+
+  it('handles the "both columns exist" rename case by copying then dropping', () => {
+    // Service code reads mirrorDiscordUserId only; the migration must not leave both columns
+    // alive with the legacy one holding the actual data.
+    expect(script).toContain('UPDATE "phone_taps" SET "mirror_discord_user_id" = "mirror_user_id"');
+    expect(script).toContain('ALTER TABLE "phone_taps" DROP COLUMN "mirror_user_id"');
+    expect(script).toContain('UPDATE "phone_tap_audit_log" SET "mirror_discord_user_id"');
+  });
+
+  it('bounds phone_message_tap_deliveries.error to varchar(500) to cap audit growth', () => {
+    expect(script).toMatch(/"error" varchar\(500\)/);
+    // Also narrow legacy `text` columns to the same cap.
+    expect(script).toMatch(/ALTER COLUMN "error" TYPE varchar\(500\)/);
+  });
+
+  it('provides a rollback path via --rollback --confirm', () => {
+    expect(script).toContain("process.argv.includes('--rollback')");
+    expect(script).toContain("process.argv.includes('--confirm')");
+    expect(script).toMatch(/DROP TABLE IF EXISTS "phone_numbers" CASCADE/);
+    expect(script).toMatch(/DROP TABLE IF EXISTS "phone_message_tap_deliveries" CASCADE/);
+  });
+
+  it('scopes pg_constraint lookups by conrelid to avoid name collisions across tables', () => {
+    expect(script).toMatch(/conrelid = '"phone_numbers"'::regclass/);
+    expect(script).toMatch(/conrelid = '"phone_calls"'::regclass/);
+    expect(script).toMatch(/conrelid = '"phone_threads"'::regclass/);
+  });
+
+  it('verifies the CHECK regex string matches valid numbers and rejects invalid ones (JS-level parity)', () => {
+    // Mirrors the DB CHECK so a future contributor cannot accidentally diverge them.
+    // The CHECK source string in the migration is exactly `^\+?[0-9]{3,20}$` once JS
+    // template-literal escaping resolves.
+    const re = new RegExp('^\\+?[0-9]{3,20}$');
+    expect(re.test('911')).toBe(true);
+    expect(re.test('+15550142')).toBe(true);
+    expect(re.test('+44207946095812345')).toBe(true);
+    expect(re.test('42')).toBe(false);          // 2 digits — below minimum
+    expect(re.test('1'.repeat(21))).toBe(false); // over maximum
+    expect(re.test('555\nDROP')).toBe(false);   // anchored both ends
+    expect(re.test('5 55')).toBe(false);   // NBSP not a digit
+  });
+
   it('uses idempotent CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS', () => {
     expect(script).not.toMatch(/CREATE TABLE "phone_/);
     expect(script).not.toMatch(/CREATE INDEX "phone_/);

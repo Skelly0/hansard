@@ -13,9 +13,12 @@ import {
   postCallOpenedToStaffThread,
   RecipientDmClosedError,
 } from '../utils/phoneRelay.js';
+import { PHONE_HINT_COOLDOWN_MS } from '@hansard/shared';
 
-const HINT_COOLDOWN_MS = 60 * 1000;
 const HINT_MAP_MAX = 500;
+// 1900 is the per-DM chunk budget defined in phoneRelay.ts; mirror it here so the long-
+// message acknowledgement reflects whether the recipient actually saw the message split.
+const LONG_MESSAGE_THRESHOLD = 1900;
 
 /**
  * Bounded LRU-ish cooldown map for "you're not in a call" hints. Prevents an unbounded
@@ -27,17 +30,15 @@ const recentHinted = new Map<string, number>();
 
 function shouldShowHint(discordId: string): boolean {
   const last = recentHinted.get(discordId) ?? 0;
-  if (Date.now() - last < HINT_COOLDOWN_MS) return false;
+  if (Date.now() - last < PHONE_HINT_COOLDOWN_MS) return false;
+  // Re-insert to refresh insertion order (cheap LRU semantics on Map).
+  recentHinted.delete(discordId);
   recentHinted.set(discordId, Date.now());
   if (recentHinted.size > HINT_MAP_MAX) {
-    // Drop the earliest-inserted half. Insertion order is preserved by Map iteration.
-    const drop = Math.floor(HINT_MAP_MAX / 2);
-    let i = 0;
-    for (const key of recentHinted.keys()) {
-      if (i >= drop) break;
-      recentHinted.delete(key);
-      i++;
-    }
+    // Evict the single oldest entry per overflow — bounded O(1) per call instead of the
+    // previous O(N/2) bulk eviction every N inserts.
+    const oldest = recentHinted.keys().next().value;
+    if (oldest !== undefined) recentHinted.delete(oldest);
   }
   return true;
 }
@@ -119,6 +120,23 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
     });
   } catch (err) {
     if (err instanceof PhoneServiceError) {
+      // Mid-call death of the sender: refuse the message AND end the call so the
+      // counterparty isn't left typing into a one-way pipe. Mirrors the answer/decline
+      // alive-check, applied to in-call writes.
+      if (err.code === 'dead') {
+        try {
+          await message.reply(err.message + ' The call has been ended.');
+        } catch {
+          /* ignore */
+        }
+        try {
+          await svc.systemEndCall(openCall.id, 'session_reset');
+          await hangUpAndNotify(client, openCall.id, 'session_reset');
+        } catch (innerErr) {
+          console.error('[phone:event] failed to end call after sender death:', innerErr);
+        }
+        return;
+      }
       try {
         await message.reply(err.message);
       } catch {
@@ -128,6 +146,17 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
     }
     console.error('[phone:event] failed to record message:', err);
     return;
+  }
+
+  // Long-message acknowledgement: when the sender's content exceeded the per-DM budget,
+  // their chunked output may look fragmented to the recipient. React on the source DM so
+  // the sender can tell their message was split.
+  if (message.content.length > LONG_MESSAGE_THRESHOLD) {
+    try {
+      await message.react('\u{1F4E8}'); // 📨
+    } catch {
+      /* reaction is purely informational; ignore failure */
+    }
   }
 
   try {

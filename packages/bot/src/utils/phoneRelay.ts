@@ -16,6 +16,11 @@ import {
   type PhoneTap,
 } from '@hansard/api/services/phoneService';
 import { resolveStaffRoleIds } from './staffRoles.js';
+import {
+  PHONE_FORCE_END_REASON_PREFIX,
+  PHONE_TAP_FAILURE_THRESHOLD,
+  formatPhoneEndedReason,
+} from '@hansard/shared';
 
 const PHONE_LOG_CHANNEL_ENV = 'PHONE_LOG_CHANNEL_ID';
 const PHONE_TAP_CHANNEL_ENV = 'PHONE_TAP_CHANNEL_ID';
@@ -199,6 +204,32 @@ async function sendStaffJoinPing(
       allowedMentions: { roles: staffRoleIds },
       content: `${mentions} new phone log requires oversight.`,
     });
+    // Best-effort: actually add the staff role's current members to the thread. A role ping
+    // notifies but does NOT auto-add to private threads. Without this, staff need to manually
+    // click into the thread before they receive updates.
+    try {
+      // Ensure the guild's member cache is reasonably warm. `Guild.members.fetch()` without
+      // args fetches all members (limited by `GuildMembers` intent — which we have).
+      // Skip if a fetch fails; we'll just miss best-effort auto-add.
+      await guild.members.fetch().catch(() => undefined);
+      const addPromises: Promise<unknown>[] = [];
+      for (const member of guild.members.cache.values()) {
+        if (member.user.bot) continue;
+        const hasStaffRole = member.roles.cache.some((r) => staffRoleIds.includes(r.id));
+        if (!hasStaffRole) continue;
+        // Sequence in a controlled-concurrency batch to avoid burning the thread-add bucket.
+        addPromises.push(thread.members.add(member.id).catch((err: unknown) => {
+          console.error(`[phone:relay] failed to add staff member ${member.id} to thread:`, err);
+        }));
+      }
+      // Cap concurrency at 5 to avoid a thundering herd of thread-member-add requests.
+      const batchSize = 5;
+      for (let i = 0; i < addPromises.length; i += batchSize) {
+        await Promise.all(addPromises.slice(i, i + batchSize));
+      }
+    } catch (err) {
+      console.error('[phone:relay] failed to auto-add staff to phone thread:', err);
+    }
   } catch (err) {
     console.error('[phone:relay] failed to ping staff roles:', err);
   }
@@ -249,9 +280,23 @@ export async function relayMessage(
   const taps = await svc.getActiveTapsForNumbers([context.callerNumber.id, context.recipientNumber.id]);
   if (taps.length === 0) return;
 
-  await Promise.all(
-    taps.map((tap) => deliverTapCopy(client, svc, tap, context, sender, senderNumber, message)),
-  );
+  // Sequence tap fanout instead of Promise.all to avoid a Discord global-50-msgs/s spike
+  // when a single message routes to many taps. Each tap is independent — at most one tap
+  // mirror channel + one tap user DM per tap.
+  for (const tap of taps) {
+    await deliverTapCopy(client, svc, tap, context, sender, senderNumber, message);
+    // Circuit breaker: if the last N attempts for this tap all errored, auto-revoke it so
+    // we stop spamming Discord with re-attempts and surface the failure in the audit log.
+    try {
+      const fails = await svc.countTrailingTapFailures(tap.id, PHONE_TAP_FAILURE_THRESHOLD);
+      if (fails >= PHONE_TAP_FAILURE_THRESHOLD) {
+        await svc.autoRevokeBrokenTap(tap.id, `Auto-revoked after ${fails} consecutive delivery failures.`);
+        console.warn(`[phone:relay] auto-revoked tap ${tap.id} after ${fails} consecutive failures`);
+      }
+    } catch (err) {
+      console.error('[phone:relay] tap circuit-breaker check failed:', err);
+    }
+  }
 }
 
 async function sendToRecipient(
@@ -426,10 +471,23 @@ export async function hangUpAndNotify(
     number_deactivated: 'One of the lines on this call was retired.',
   };
 
+  // If the persisted DB reason carries a staff-end note (e.g. `force_ended_by_staff:<note>`),
+  // surface the note in the participant DM so they see the staff explanation.
+  let description = reasonText[endedReason];
+  if (
+    endedReason === 'force_ended_by_staff'
+    && context.call.endedReason?.startsWith(PHONE_FORCE_END_REASON_PREFIX)
+  ) {
+    const note = context.call.endedReason.slice(PHONE_FORCE_END_REASON_PREFIX.length).trim();
+    if (note) description = `A staff member ended this call: ${note}`;
+  }
+  // Use the shared formatter where possible so the text matches /phone history.
+  if (!description) description = formatPhoneEndedReason(endedReason);
+
   const embed = new EmbedBuilder()
     .setTitle('\u{260E} Call ended')
     .setColor(ENDED_PALETTE)
-    .setDescription(reasonText[endedReason]);
+    .setDescription(description);
 
   for (const player of [context.callerPlayer, context.recipientPlayer]) {
     try {

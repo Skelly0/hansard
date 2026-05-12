@@ -12,6 +12,7 @@ import {
 } from '@hansard/db';
 import {
   PHONE_RING_TIMEOUT_MS,
+  PHONE_STRANDED_CALL_MAX_AGE_MS,
   PHONE_NUMBERS_PER_PLAYER_LIMIT,
   PHONE_INELIGIBLE_DEAD,
   PHONE_INELIGIBLE_NO_CHARACTER,
@@ -19,6 +20,8 @@ import {
   PHONE_NUMBER_TAKEN,
   PHONE_NUMBER_INVALID,
   PHONE_NUMBER_NOT_FOUND,
+  PHONE_FORCE_END_REASON_PREFIX,
+  PHONE_TAP_FAILURE_THRESHOLD,
   isValidPhoneNumber,
   normalizePhoneNumber,
 } from '@hansard/shared';
@@ -455,7 +458,7 @@ export class PhoneService {
       .set({
         status: 'ended',
         endedAt: new Date(),
-        endedReason: reason ? `force_ended_by_staff:${reason.slice(0, 48)}` : 'force_ended_by_staff',
+        endedReason: reason ? `${PHONE_FORCE_END_REASON_PREFIX}${reason.slice(0, 48)}` : 'force_ended_by_staff',
       })
       .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, ['ringing', 'active'])))
       .returning();
@@ -480,54 +483,69 @@ export class PhoneService {
       .where(and(eq(phoneCalls.id, callId), sql`staff_thread_id IS NULL`));
   }
 
-  /** Find the player's currently open call (ringing or active) for routing inbound DMs. */
+  /**
+   * Find the player's currently open call (ringing or active) for routing inbound DMs.
+   *
+   * Implemented as two sequential single-column lookups instead of a `WHERE … OR …` on
+   * (caller, recipient). Each lookup hits its partial unique index
+   * (`phone_calls_one_open_{caller,recipient}` WHERE status IN ('ringing','active')) with
+   * zero scan; the planner-fragile `BitmapOr` of two partial unique indexes is sidestepped.
+   * The partial unique indexes guarantee at most one row per role per player, so this is
+   * O(2 × index_lookup), not O(N).
+   */
   async findOpenCallForPlayer(playerId: string): Promise<PhoneCall | null> {
-    const [row] = await this.db
+    const [callerSide] = await this.db
       .select()
       .from(phoneCalls)
       .where(
         and(
+          eq(phoneCalls.callerPlayerId, playerId),
           inArray(phoneCalls.status, ['ringing', 'active']),
-          or(eq(phoneCalls.callerPlayerId, playerId), eq(phoneCalls.recipientPlayerId, playerId)),
         ),
       )
-      .orderBy(desc(phoneCalls.startedAt))
       .limit(1);
-    return row ?? null;
+    if (callerSide) return callerSide;
+
+    const [recipientSide] = await this.db
+      .select()
+      .from(phoneCalls)
+      .where(
+        and(
+          eq(phoneCalls.recipientPlayerId, playerId),
+          inArray(phoneCalls.status, ['ringing', 'active']),
+        ),
+      )
+      .limit(1);
+    return recipientSide ?? null;
   }
 
   async getCallParticipants(callId: string): Promise<CallParticipants> {
     const call = await this.requireCall(callId);
-    const [callerNumber] = await this.db
-      .select()
-      .from(phoneNumbers)
-      .where(eq(phoneNumbers.id, call.callerNumberId))
-      .limit(1);
-    const [recipientNumber] = await this.db
-      .select()
-      .from(phoneNumbers)
-      .where(eq(phoneNumbers.id, call.recipientNumberId))
-      .limit(1);
-    const [callerPlayer] = await this.db
-      .select({
-        id: players.id,
-        characterName: players.characterName,
-        discordId: players.discordId,
-        isAlive: players.isAlive,
-      })
-      .from(players)
-      .where(eq(players.id, call.callerPlayerId))
-      .limit(1);
-    const [recipientPlayer] = await this.db
-      .select({
-        id: players.id,
-        characterName: players.characterName,
-        discordId: players.discordId,
-        isAlive: players.isAlive,
-      })
-      .from(players)
-      .where(eq(players.id, call.recipientPlayerId))
-      .limit(1);
+    // Hot path on every relayed message — run the 4 lookups in parallel.
+    const [[callerNumber], [recipientNumber], [callerPlayer], [recipientPlayer]] = await Promise.all([
+      this.db.select().from(phoneNumbers).where(eq(phoneNumbers.id, call.callerNumberId)).limit(1),
+      this.db.select().from(phoneNumbers).where(eq(phoneNumbers.id, call.recipientNumberId)).limit(1),
+      this.db
+        .select({
+          id: players.id,
+          characterName: players.characterName,
+          discordId: players.discordId,
+          isAlive: players.isAlive,
+        })
+        .from(players)
+        .where(eq(players.id, call.callerPlayerId))
+        .limit(1),
+      this.db
+        .select({
+          id: players.id,
+          characterName: players.characterName,
+          discordId: players.discordId,
+          isAlive: players.isAlive,
+        })
+        .from(players)
+        .where(eq(players.id, call.recipientPlayerId))
+        .limit(1),
+    ]);
 
     if (!callerNumber || !recipientNumber || !callerPlayer || !recipientPlayer) {
       throw new PhoneServiceError('not_found', 'Call participants no longer exist.');
@@ -613,11 +631,10 @@ export class PhoneService {
           .from(phoneThreads)
           .where(and(eq(phoneThreads.playerAId, pair[0]), eq(phoneThreads.playerBId, pair[1])))
           .limit(1);
-          if (existing) return existing;
+        if (existing) return existing;
       }
       throw err;
     }
-    throw new PhoneServiceError('invalid_state', 'Failed to persist phone thread.');
   }
 
   // ----------------------------------------------------------
@@ -741,7 +758,62 @@ export class PhoneService {
       tapId,
       mirrorMessageId: result.mirrorMessageId ?? null,
       deliveredAt: result.error ? null : new Date(),
-      error: result.error ?? null,
+      error: result.error ? result.error.slice(0, 500) : null,
+    });
+  }
+
+  /**
+   * Count consecutive failed deliveries on the most recent N attempts for a tap. Used by
+   * the relay circuit breaker — if every recent attempt has errored, the tap is broken and
+   * should be auto-revoked rather than spam Discord with re-attempts.
+   *
+   * "Consecutive failures from the tail" means: walk the most recent N delivery rows in
+   * reverse-chronological order; count how many leading ones had a non-null `error`.
+   */
+  async countTrailingTapFailures(tapId: string, limit = PHONE_TAP_FAILURE_THRESHOLD): Promise<number> {
+    const rows = await this.db
+      .select({ error: phoneMessageTapDeliveries.error })
+      .from(phoneMessageTapDeliveries)
+      .where(eq(phoneMessageTapDeliveries.tapId, tapId))
+      .orderBy(desc(phoneMessageTapDeliveries.id))
+      .limit(limit);
+    let consecutive = 0;
+    for (const row of rows) {
+      if (row.error) consecutive++;
+      else break;
+    }
+    return consecutive;
+  }
+
+  /**
+   * Auto-revoke a tap that the circuit breaker has determined is broken. Writes an audit
+   * row with action `orphaned_target_deactivated` so staff can see why it disappeared.
+   * The `actorId` is the tap's creator (we have no other system actor to attribute to).
+   */
+  async autoRevokeBrokenTap(tapId: string, notes: string): Promise<void> {
+    const [tap] = await this.db.select().from(phoneTaps).where(eq(phoneTaps.id, tapId)).limit(1);
+    if (!tap || !tap.isActive) return;
+    const [target] = await this.db
+      .select({ numberNormalized: phoneNumbers.numberNormalized })
+      .from(phoneNumbers)
+      .where(eq(phoneNumbers.id, tap.targetNumberId))
+      .limit(1);
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(phoneTaps)
+        .set({ isActive: false, revokedAt: new Date(), revokedById: tap.createdById })
+        .where(eq(phoneTaps.id, tapId));
+      await tx.insert(phoneTapAuditLog).values({
+        tapId,
+        actorId: tap.createdById,
+        action: 'orphaned_target_deactivated',
+        targetNumberId: tap.targetNumberId,
+        targetNumberNormalized: target?.numberNormalized ?? null,
+        mirrorChannelId: tap.mirrorChannelId,
+        mirrorDiscordUserId: tap.mirrorDiscordUserId,
+        notes: notes.slice(0, 500),
+      });
     });
   }
 
@@ -761,17 +833,20 @@ export class PhoneService {
       eq(phoneCalls.callerPlayerId, targetPlayerId),
       eq(phoneCalls.recipientPlayerId, targetPlayerId),
     );
-    const rows = await this.db
-      .select()
-      .from(phoneCalls)
-      .where(where)
-      .orderBy(desc(phoneCalls.startedAt))
-      .limit(opts.limit ?? 25)
-      .offset(opts.offset ?? 0);
-    const [{ value: total }] = await this.db
-      .select({ value: count() })
-      .from(phoneCalls)
-      .where(where);
+    // Rows + count are independent; run them in parallel to halve wall-clock latency.
+    const [rows, [{ value: total }]] = await Promise.all([
+      this.db
+        .select()
+        .from(phoneCalls)
+        .where(where)
+        .orderBy(desc(phoneCalls.startedAt))
+        .limit(opts.limit ?? 25)
+        .offset(opts.offset ?? 0),
+      this.db
+        .select({ value: count() })
+        .from(phoneCalls)
+        .where(where),
+    ]);
 
     // Enrich each row with caller/recipient summaries so list consumers (web, MCP, /phone
     // history) can render character names without a second round-trip.
@@ -858,12 +933,15 @@ export class PhoneService {
    */
   async sweepStrandedActiveCalls(opts: { now?: Date; maxAgeMs?: number } = {}): Promise<PhoneCall[]> {
     const now = opts.now ?? new Date();
-    const maxAgeMs = opts.maxAgeMs ?? 6 * 60 * 60 * 1000;
+    const maxAgeMs = opts.maxAgeMs ?? PHONE_STRANDED_CALL_MAX_AGE_MS;
     const cutoff = new Date(now.getTime() - maxAgeMs);
+    // Single-column predicate hits `phone_calls_active_started_idx` (partial, WHERE status='active').
+    // The 6h cutoff vastly exceeds any reasonable conversation; `answered_at` would only differ
+    // from `started_at` by ring-timeout-bounded minutes, so the started_at check is sufficient.
     const rows = await this.db
       .update(phoneCalls)
       .set({ status: 'ended', endedAt: now, endedReason: 'session_reset' })
-      .where(and(eq(phoneCalls.status, 'active'), sql`answered_at < ${cutoff} OR started_at < ${cutoff}`))
+      .where(and(eq(phoneCalls.status, 'active'), sql`started_at < ${cutoff}`))
       .returning();
     return rows;
   }

@@ -73,6 +73,9 @@ export const phoneCalls = pgTable('phone_calls', {
   statusCheck: check('phone_calls_status_check', sql`status IN ('ringing','active','ended','declined','missed','cancelled')`),
   callerHistoryIdx: index('phone_calls_caller_history_idx').on(table.callerPlayerId, table.startedAt),
   recipientHistoryIdx: index('phone_calls_recipient_history_idx').on(table.recipientPlayerId, table.startedAt),
+  // Supports the startup `sweepStrandedActiveCalls` query, which must filter by
+  // `status='active' AND started_at < cutoff` without a full table scan.
+  activeStartedIdx: index('phone_calls_active_started_idx').on(table.startedAt).where(sql`status = 'active'`),
 }));
 
 // === PHONE MESSAGES ===
@@ -164,5 +167,6 @@ export const phoneMessageTapDeliveries = pgTable('phone_message_tap_deliveries',
   tapId: uuid('tap_id').references(() => phoneTaps.id, { onDelete: 'restrict' }).notNull(),
   mirrorMessageId: varchar('mirror_message_id', { length: 20 }),
   deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'date' }),
-  error: text('error'),
+  // 500-char cap so a Discord stack trace can't bloat the audit table.
+  error: varchar('error', { length: 500 }),
 });

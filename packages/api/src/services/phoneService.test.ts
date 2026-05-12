@@ -561,6 +561,136 @@ describe('PhoneService.getCallHistory enrichment', () => {
   });
 });
 
+describe('PhoneService.countTrailingTapFailures', () => {
+  it('counts only the contiguous leading-failure run from the most recent deliveries', async () => {
+    const db = makeDb({
+      selectQueues: [
+        // Most recent first; consecutive trailing failures = 2.
+        [
+          { error: 'fail1' },
+          { error: 'fail2' },
+          { error: null },     // breaks the streak
+          { error: 'fail3' },
+        ],
+      ],
+    });
+    const svc = new PhoneService(db);
+    const count = await svc.countTrailingTapFailures('tap-1', 10);
+    expect(count).toBe(2);
+  });
+
+  it('returns 0 when the most recent delivery succeeded', async () => {
+    const db = makeDb({
+      selectQueues: [[{ error: null }, { error: 'old' }]],
+    });
+    const svc = new PhoneService(db);
+    expect(await svc.countTrailingTapFailures('tap-1', 10)).toBe(0);
+  });
+
+  it('returns the full window count when every delivery in scope failed', async () => {
+    const db = makeDb({
+      selectQueues: [[{ error: 'e' }, { error: 'e' }, { error: 'e' }]],
+    });
+    const svc = new PhoneService(db);
+    expect(await svc.countTrailingTapFailures('tap-1', 10)).toBe(3);
+  });
+});
+
+describe('PhoneService.autoRevokeBrokenTap', () => {
+  it('is idempotent — does nothing for already-inactive taps', async () => {
+    const txCounter = { count: 0 };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'tap-1', isActive: false, targetNumberId: 'n1', createdById: 'staff' }],
+      ],
+      transactionCalls: txCounter,
+    });
+    const svc = new PhoneService(db);
+    await svc.autoRevokeBrokenTap('tap-1', 'circuit-breaker fired');
+    expect(txCounter.count).toBe(0); // never entered the transaction
+  });
+
+  it('runs the revoke + audit write in a single transaction with orphaned action', async () => {
+    const txCounter = { count: 0 };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'tap-1', isActive: true, targetNumberId: 'n1', createdById: 'staff', mirrorChannelId: 'C', mirrorDiscordUserId: null }],
+        [{ numberNormalized: '+15550142' }],
+      ],
+      transactionCalls: txCounter,
+    });
+    const svc = new PhoneService(db);
+    await svc.autoRevokeBrokenTap('tap-1', 'too many failures');
+    expect(txCounter.count).toBe(1);
+  });
+});
+
+describe('PhoneService.findOpenCallForPlayer two-query path', () => {
+  it('returns the caller-side row when player is the caller', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'call-1', callerPlayerId: 'p1', status: 'active' }],
+      ],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.findOpenCallForPlayer('p1');
+    expect(result?.id).toBe('call-1');
+  });
+
+  it('falls through to the recipient-side lookup when caller-side has no match', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [], // caller-side: no row
+        [{ id: 'call-2', recipientPlayerId: 'p1', status: 'ringing' }],
+      ],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.findOpenCallForPlayer('p1');
+    expect(result?.id).toBe('call-2');
+  });
+
+  it('returns null when neither side matches', async () => {
+    const db = makeDb({
+      selectQueues: [[], []],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.findOpenCallForPlayer('p1');
+    expect(result).toBeNull();
+  });
+});
+
+describe('PhoneService.setTap requires a destination', () => {
+  it('refuses when channel + user + env are all empty', async () => {
+    delete process.env.PHONE_TAP_CHANNEL_ID;
+    const svc = new PhoneService(makeDb({}));
+    await expect(
+      svc.setTap(
+        { targetNumberId: 'n1', createdById: 'staff' },
+        { userId: 'staff', isStaff: true },
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_state' });
+  });
+
+  it('accepts when only the env fallback is configured', async () => {
+    process.env.PHONE_TAP_CHANNEL_ID = '999';
+    const txCounter = { count: 0 };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'n1', numberNormalized: '+15550142' }],
+      ],
+      insertReturning: [[{ id: 'tap-env', targetNumberId: 'n1' }]],
+      transactionCalls: txCounter,
+    });
+    const svc = new PhoneService(db);
+    const tap = await svc.setTap(
+      { targetNumberId: 'n1', createdById: 'staff' },
+      { userId: 'staff', isStaff: true },
+    );
+    expect(tap.id).toBe('tap-env');
+    delete process.env.PHONE_TAP_CHANNEL_ID;
+  });
+});
+
 describe('PhoneService.sweepStrandedActiveCalls', () => {
   it('updates active calls older than the configured cutoff', async () => {
     const db = makeDb({

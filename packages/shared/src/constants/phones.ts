@@ -5,6 +5,21 @@
 /** How long a ring can sit unanswered before the worker marks the call missed. */
 export const PHONE_RING_TIMEOUT_MS = 60 * 1000;
 
+/** How old an `active` call must be before the startup sweep treats it as crash-stranded. */
+export const PHONE_STRANDED_CALL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** How long to wait between "not in a call" hints to the same DM-er. */
+export const PHONE_HINT_COOLDOWN_MS = 60 * 1000;
+
+/**
+ * Force-end persisted reason prefix. Service emits `${prefix}${note.slice(0,48)}` so the
+ * note is visible in `phone_calls.ended_reason` and `/phone history`.
+ */
+export const PHONE_FORCE_END_REASON_PREFIX = 'force_ended_by_staff:';
+
+/** How many consecutive failed deliveries before the relay auto-disables a tap. */
+export const PHONE_TAP_FAILURE_THRESHOLD = 5;
+
 /**
  * Number normalization regex. After stripping all non-digit characters (preserving an
  * optional leading `+`), the result must match this pattern.

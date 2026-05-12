@@ -50,7 +50,9 @@ async function shutdown(signal: string): Promise<void> {
   // Give any pending writes (worker ticks, in-flight relays) a short window to settle.
   await new Promise((resolve) => setTimeout(resolve, 250));
   try {
-    client.destroy();
+    // discord.js v14 destroy() returns Promise<void>; await it so the gateway close handshake
+    // completes before we exit.
+    await client.destroy();
   } catch (err) {
     console.error('Error destroying client:', err);
   }

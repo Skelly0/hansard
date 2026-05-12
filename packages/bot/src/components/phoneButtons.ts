@@ -12,7 +12,7 @@ import {
   PhoneService,
   PhoneServiceError,
 } from '@hansard/api/services/phoneService';
-import { hangUpAndNotify } from '../utils/phoneRelay.js';
+import { hangUpAndNotify, postCallOpenedToStaffThread } from '../utils/phoneRelay.js';
 import { errorEmbed } from '../utils/embeds.js';
 
 export const PHONE_ANSWER_PREFIX = 'phone_answer:';
@@ -82,7 +82,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
       if (err instanceof PhoneServiceError) {
         await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       } else {
-        console.error('phone answer failed:', err);
+        console.error('[phone:button] answer failed:', err);
         await interaction.editReply({ embeds: [errorEmbed('Failed to answer the call.')] });
       }
       return true;
@@ -106,13 +106,17 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
         );
       await message.edit({ embeds: [connectedEmbed], components: [disabledRow] });
     } catch (err) {
-      console.error('phone answer: failed to update ring DM:', err);
+      console.error('[phone:button] answer: failed to update ring DM:', err);
     }
 
-    // Notify the caller via DM that the call connected.
+    // Notify the caller via DM + open the staff thread immediately. Without the staff-thread
+    // creation here, a call that connects and then hangs up without anyone typing leaves no
+    // staff audit thread, violating the "fully-mirrored ledger" promise.
     try {
-      const { callerPlayer } = await svc.getCallParticipants(callId);
-      const callerUser = await interaction.client.users.fetch(callerPlayer.discordId);
+      const participants = await svc.getCallParticipants(callId);
+      // Best-effort: open the staff thread now so zero-message calls still get oversight.
+      await postCallOpenedToStaffThread(interaction.client, participants);
+      const callerUser = await interaction.client.users.fetch(participants.callerPlayer.discordId);
       await callerUser.send({
         embeds: [
           new EmbedBuilder()
@@ -122,7 +126,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
         ],
       });
     } catch (err) {
-      console.error('phone answer: failed to notify caller:', err);
+      console.error('[phone:button] answer: failed to notify caller / open staff thread:', err);
     }
 
     await interaction.editReply({
@@ -143,7 +147,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
     if (err instanceof PhoneServiceError) {
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
     } else {
-      console.error('phone decline failed:', err);
+      console.error('[phone:button] decline failed:', err);
       await interaction.editReply({ embeds: [errorEmbed('Failed to decline the call.')] });
     }
     return true;
@@ -164,7 +168,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
       .setDescription('You declined this call.');
     await message.edit({ embeds: [declinedEmbed], components: [disabledRow] });
   } catch (err) {
-    console.error('phone decline: failed to update ring DM:', err);
+    console.error('[phone:button] decline: failed to update ring DM:', err);
   }
 
   // Notify caller their call was declined.
@@ -180,7 +184,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
       ],
     });
   } catch (err) {
-    console.error('phone decline: failed to notify caller:', err);
+    console.error('[phone:button] decline: failed to notify caller:', err);
   }
 
   await interaction.editReply({

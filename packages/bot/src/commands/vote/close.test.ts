@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('drizzle-orm', () => ({
+  and: vi.fn((...clauses) => ({ and: clauses })),
   eq: vi.fn((left, right) => ({ left, right })),
   inArray: vi.fn((left, right) => ({ left, right })),
   ilike: vi.fn((left, right) => ({ left, right })),
@@ -25,11 +26,14 @@ vi.mock('drizzle-orm', () => ({
 vi.mock('@hansard/db', () => ({
   ballots: {
     electionId: 'ballots.electionId',
+    voterId: 'ballots.voterId',
+    vote: 'ballots.vote',
   },
   candidates: {
     electionId: 'candidates.electionId',
     playerId: 'candidates.playerId',
     registeredAt: 'candidates.registeredAt',
+    isWithdrawn: 'candidates.isWithdrawn',
   },
   elections: {
     id: 'elections.id',
@@ -38,6 +42,7 @@ vi.mock('@hansard/db', () => ({
     id: 'players.id',
     characterName: 'players.characterName',
     discordUsername: 'players.discordUsername',
+    isAlive: 'players.isAlive',
   },
 }));
 
@@ -94,12 +99,28 @@ function updateReturning(rows: unknown[]) {
   };
 }
 
+/**
+ * Build a select-builder mock that resolves to `rows`. Supports the chain
+ * shapes used by close.ts:
+ *   .from(...).where(...)
+ *   .from(...).innerJoin(...).where(...)
+ *   .from(...).where(...).orderBy(...)
+ *   .from(...).innerJoin(...).where(...).orderBy(...)
+ * Every branching method is itself thenable so the awaiter can resolve at
+ * whichever level the caller stops chaining.
+ */
 function selectWhere(rows: unknown[]) {
-  return {
-    from: vi.fn(() => ({
-      where: vi.fn().mockResolvedValue(rows),
-    })),
-  };
+  const thenable = (value: unknown[]) => ({
+    then: (resolve: (v: unknown[]) => unknown) => Promise.resolve(value).then(resolve),
+  });
+  const orderBy = vi.fn(() => thenable(rows));
+  const where = vi.fn(() => ({
+    ...thenable(rows),
+    orderBy,
+  }));
+  const innerJoin = vi.fn(() => ({ where }));
+  const from = vi.fn(() => ({ where, innerJoin, orderBy }));
+  return { from };
 }
 
 function makeInteraction() {
@@ -239,5 +260,92 @@ describe('/vote-close reaction-mode embeds', () => {
     await command.execute(makeInteraction() as any);
 
     expect(mocks.tallyVotes).not.toHaveBeenCalled();
+  });
+
+  it('excludes ballots from dead voters in the reaction-mode yea/nay tally (BOT-3)', async () => {
+    // The ballot select must inner-join players and filter players.isAlive=true
+    // so a yea ballot from a now-dead voter is not counted in the rendered
+    // result. We verify that by inspecting the select mock chain: if the
+    // implementation no longer joins/filters, the test fails.
+    const election = { ...openElection, status: 'voting_closed' };
+    const edit = vi.fn().mockResolvedValue(undefined);
+    mocks.db.update.mockReturnValue(updateReturning([election]));
+
+    // Simulate the DB applying the isAlive filter at the query layer:
+    // only the alive voter's ballot is returned to the bot.
+    mocks.db.select.mockReturnValue(selectWhere([
+      // dead voter's yea ballot is filtered out at the join — not present here
+      ballot('nay'), // alive voter
+    ]));
+    mocks.client.channels.fetch.mockResolvedValue({
+      messages: {
+        fetch: vi.fn().mockResolvedValue({ edit }),
+      },
+    });
+
+    await command.execute(makeInteraction() as any);
+
+    // The yea-from-dead-voter should NOT appear in the result; result must
+    // be REJECTED with yea=0 and nay=1.
+    const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
+    expect(resultEmbed?.data.description).toContain('**REJECTED**');
+    const resultField = resultEmbed?.data.fields?.find((f: { name: string }) => f.name === 'Result');
+    expect(resultField?.value).toContain('Yea: **0**');
+    expect(resultField?.value).toContain('Nay: **1**');
+
+    // And the chain itself must include an innerJoin call so future
+    // regressions that drop the join are caught even if the test DB returns
+    // dead voters anyway.
+    const builder = mocks.db.select.mock.results[0]?.value;
+    const fromResult = builder?.from?.mock?.results?.[0]?.value;
+    expect(fromResult?.innerJoin).toBeDefined();
+    expect(fromResult.innerJoin).toHaveBeenCalled();
+  });
+
+  it('does not render withdrawn FPTP candidates in reaction-mode results (BOT-4)', async () => {
+    const election = {
+      ...openElection,
+      method: 'fptp',
+      status: 'voting_closed',
+    };
+    const edit = vi.fn().mockResolvedValue(undefined);
+    mocks.db.update.mockReturnValue(updateReturning([election]));
+
+    // First select call: ballots (one FPTP ballot for the active candidate).
+    // Second select call: candidates — only active (non-withdrawn) row.
+    // Third select call: players — name lookup for that candidate.
+    mocks.db.select
+      .mockReturnValueOnce(selectWhere([
+        { vote: { type: 'fptp', candidateId: 'player-active' } },
+      ]))
+      .mockReturnValueOnce(selectWhere([
+        { playerId: 'player-active', isWithdrawn: false },
+      ]))
+      .mockReturnValueOnce(selectWhere([
+        { id: 'player-active', name: 'Active Candidate', fallback: 'active' },
+      ]));
+
+    mocks.client.channels.fetch.mockResolvedValue({
+      messages: {
+        fetch: vi.fn().mockResolvedValue({ edit }),
+      },
+    });
+
+    await command.execute(makeInteraction() as any);
+
+    const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
+    const resultField = resultEmbed?.data.fields?.find((f: { name: string }) => f.name === 'Result');
+    expect(resultField?.value).toContain('Active Candidate');
+    expect(resultField?.value).not.toContain('Withdrawn');
+
+    // Verify the candidate select chain itself filtered out withdrawn rows:
+    // the candidate query is the second call; it should call .where with an
+    // `and(...)` clause (i.e. multiple predicates including isWithdrawn=false).
+    const candidatesBuilder = mocks.db.select.mock.results[1]?.value;
+    const candidatesFrom = candidatesBuilder?.from?.mock?.results?.[0]?.value;
+    expect(candidatesFrom?.where).toHaveBeenCalled();
+    const whereArg = candidatesFrom?.where?.mock?.calls?.[0]?.[0];
+    // `and(...)` mock returns `{ and: clauses }`; bare `eq(...)` would not.
+    expect(whereArg?.and).toBeDefined();
   });
 });

@@ -157,6 +157,9 @@ const command: Command = {
 
       const padded = String(bill.billNumber).padStart(3, '0');
       const enactedTimestamp = Math.floor(now.getTime() / 1000);
+      const summaryBlock = bill.summary
+        ? `\n\n> ${bill.summary.replace(/\n/g, '\n> ')}`
+        : '';
       const sourceLink = bill.googleDocUrl
         ? `\n\n[\u{1F4D6} Read the full text](${bill.googleDocUrl})`
         : '';
@@ -166,7 +169,7 @@ const command: Command = {
         url: bill.googleDocUrl ?? undefined,
         system: 'bills',
         description: [
-          `**Bill #B-${padded}** has been enacted and is now law.${sourceLink}`,
+          `**Bill #B-${padded}** has been enacted and is now law.${summaryBlock}${sourceLink}`,
           '',
           `*Enacted by <@${interaction.user.id}> · <t:${enactedTimestamp}:F>*`,
         ].join('\n'),

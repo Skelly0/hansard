@@ -17,6 +17,13 @@ import type {
 } from '@hansard/shared';
 import { postToTicketThread } from './ticketThreadNotifier.js';
 
+export class TicketAssigneeNotStaffError extends Error {
+  constructor(message = 'Ticket assignee must be a staff player') {
+    super(message);
+    this.name = 'TicketAssigneeNotStaffError';
+  }
+}
+
 // ============================================================
 // Types
 // ============================================================
@@ -318,6 +325,21 @@ export class TicketService {
       .limit(1);
 
     if (!current) return null;
+
+    if (
+      updates.assignedToId !== undefined
+      && updates.assignedToId !== null
+      && updates.assignedToId !== current.assignedToId
+    ) {
+      const [target] = await this.db
+        .select()
+        .from(players)
+        .where(eq(players.id, updates.assignedToId))
+        .limit(1);
+      if (!target || !(target as { isStaff?: boolean }).isStaff) {
+        throw new TicketAssigneeNotStaffError();
+      }
+    }
 
     const setValues: Record<string, unknown> = { updatedAt: new Date() };
     const auditEntries: { action: string; oldValue: unknown; newValue: unknown }[] = [];

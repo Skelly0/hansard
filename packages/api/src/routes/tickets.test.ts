@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ticketRoutes from './tickets';
+import { TicketAssigneeNotStaffError } from '../services/ticketService.js';
 
 const auth = vi.hoisted(() => ({
   userId: 'creator-player',
@@ -10,6 +11,7 @@ const auth = vi.hoisted(() => ({
 const serviceMocks = vi.hoisted(() => ({
   getTicket: vi.fn(),
   updateTicket: vi.fn(),
+  assignTicket: vi.fn(),
 }));
 
 vi.mock('../middleware/requireAuth.js', () => ({
@@ -23,12 +25,22 @@ vi.mock('../middleware/requireStaff.js', () => ({
   requireStaff: async () => {},
 }));
 
-vi.mock('../services/ticketService.js', () => ({
-  TicketService: class {
-    getTicket = serviceMocks.getTicket;
-    updateTicket = serviceMocks.updateTicket;
-  },
-}));
+vi.mock('../services/ticketService.js', () => {
+  class TicketAssigneeNotStaffError extends Error {
+    constructor(message = 'Cannot assign ticket to a non-staff player') {
+      super(message);
+      this.name = 'TicketAssigneeNotStaffError';
+    }
+  }
+  return {
+    TicketAssigneeNotStaffError,
+    TicketService: class {
+      getTicket = serviceMocks.getTicket;
+      updateTicket = serviceMocks.updateTicket;
+      assignTicket = serviceMocks.assignTicket;
+    },
+  };
+});
 
 async function appWithDb() {
   const app = Fastify({ logger: false });
@@ -66,5 +78,32 @@ describe('ticket routes', () => {
 
     expect(res.statusCode).toBe(403);
     expect(serviceMocks.updateTicket).not.toHaveBeenCalled();
+  });
+
+  it('rejects PATCH with assignedToId targeting a non-staff player as 400 from staff caller', async () => {
+    auth.userId = 'staff-player';
+    auth.isStaff = true;
+    serviceMocks.getTicket.mockResolvedValue({
+      id: 'ticket-1',
+      createdById: 'creator-player',
+      assignedToId: null,
+    });
+    serviceMocks.updateTicket.mockRejectedValue(
+      new TicketAssigneeNotStaffError('Cannot assign ticket to a non-staff player'),
+    );
+
+    const app = await appWithDb();
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/tickets/ticket-1',
+      payload: {
+        assignedToId: 'non-staff-uuid',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toContain('non-staff');
   });
 });

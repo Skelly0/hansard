@@ -54,12 +54,19 @@ function makeTallyDb(election: any, allBallotRows: any[], aliveBallotRows = allB
   const set = vi.fn().mockReturnValue({ where: updateWhere });
   const update = vi.fn().mockReturnValue({ set });
 
+  const insertValues = vi.fn().mockResolvedValue(undefined);
+  const insert = vi.fn().mockReturnValue({ values: insertValues });
+
+  // Transactions relay through to the same update/insert spies.
+  const tx = { update, insert };
+  const transaction = vi.fn(async (fn: (tx: any) => any) => fn(tx));
+
   const select = vi.fn()
     .mockReturnValueOnce({ from: electionFrom })
     .mockReturnValueOnce({ from: ballotFrom });
 
   return {
-    db: { select, update },
+    db: { select, update, insert, transaction },
     legacyBallotWhere,
     aliveBallotWhere,
     innerJoin,
@@ -102,13 +109,20 @@ function makeLegislativeTallyDb({
   });
   const insert = vi.fn().mockReturnValue({ values });
 
+  // The tally now runs writes (and the NPC house clock read) inside a
+  // transaction. We relay through to shared spies so existing assertions
+  // on update/insert payloads keep working, and we serve the clock read
+  // from the tx-scoped select.
+  const txSelect = vi.fn().mockReturnValue({ from: clockFrom });
+  const tx = { select: txSelect, update, insert };
+  const transaction = vi.fn(async (fn: (tx: any) => any) => fn(tx));
+
   const select = vi.fn()
     .mockReturnValueOnce({ from: electionFrom })
-    .mockReturnValueOnce({ from: ballotFrom })
-    .mockReturnValueOnce({ from: clockFrom });
+    .mockReturnValueOnce({ from: ballotFrom });
 
   return {
-    db: { select, update, insert },
+    db: { select, update, insert, transaction },
     updateValues,
     statusLogValues,
   };
@@ -400,6 +414,105 @@ describe('VoteService dead voter tally handling', () => {
     });
     expect(legacyBallotWhere).not.toHaveBeenCalled();
     expect(aliveBallotWhere).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('VoteService.tallyVotes status guard', () => {
+  it('rejects tallying an election that is still voting_open', async () => {
+    const electionLimit = vi.fn().mockResolvedValue([{
+      id: 'election-1',
+      method: 'yea_nay_abstain',
+      status: 'voting_open',
+      config: {},
+    }]);
+    const electionWhere = vi.fn().mockReturnValue({ limit: electionLimit });
+    const electionFrom = vi.fn().mockReturnValue({ where: electionWhere });
+    const select = vi.fn().mockReturnValue({ from: electionFrom });
+    const update = vi.fn();
+    const insert = vi.fn();
+    const transaction = vi.fn();
+
+    await expect(new VoteService({
+      select,
+      update,
+      insert,
+      transaction,
+    } as any).tallyVotes('election-1'))
+      .rejects.toThrow(/voting_closed/);
+
+    expect(update).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('VoteService.tallyVotes transactional safety', () => {
+  it('rolls back the election status update if the bill_status_log insert fails', async () => {
+    const castAt = new Date('2026-05-01T12:00:00.000Z');
+    const yeaBallot = {
+      id: 'ballot-yea',
+      electionId: 'election-1',
+      voterId: 'player-1',
+      vote: { type: 'yea_nay_abstain', choice: 'yea' },
+      castAt,
+    };
+
+    const electionLimit = vi.fn().mockResolvedValue([{
+      id: 'election-1',
+      type: 'legislative_vote',
+      relatedBillId: 'bill-1',
+      createdById: 'creator-player',
+      method: 'yea_nay_abstain',
+      status: 'voting_closed',
+      config: {},
+    }]);
+    const electionWhere = vi.fn().mockReturnValue({ limit: electionLimit });
+    const electionFrom = vi.fn().mockReturnValue({ where: electionWhere });
+
+    const aliveBallotWhere = vi.fn().mockResolvedValue([yeaBallot, yeaBallot]);
+    const innerJoin = vi.fn().mockReturnValue({ where: aliveBallotWhere });
+    const ballotFrom = vi.fn().mockReturnValue({ innerJoin });
+
+    const clockLimit = vi.fn().mockResolvedValue([{ npcHouseActive: false }]);
+    const clockFrom = vi.fn().mockReturnValue({ limit: clockLimit });
+
+    // tx mock: update is fine, insert (status log) throws
+    const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
+    const txSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
+    const txUpdate = vi.fn().mockReturnValue({ set: txSet });
+
+    const txInsertValues = vi.fn().mockRejectedValue(new Error('status log insert failed'));
+    const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
+
+    const txSelect = vi.fn().mockReturnValue({ from: clockFrom });
+
+    const tx = {
+      select: txSelect,
+      update: txUpdate,
+      insert: txInsert,
+    };
+
+    const transaction = vi.fn(async (fn: (tx: any) => any) => fn(tx));
+
+    const select = vi.fn()
+      .mockReturnValueOnce({ from: electionFrom })
+      .mockReturnValueOnce({ from: ballotFrom });
+
+    const topLevelUpdate = vi.fn();
+    const topLevelInsert = vi.fn();
+
+    await expect(new VoteService({
+      select,
+      update: topLevelUpdate,
+      insert: topLevelInsert,
+      transaction,
+    } as any).tallyVotes('election-1'))
+      .rejects.toThrow('status log insert failed');
+
+    // All writes should have gone through the transaction, not the bare db.
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(topLevelUpdate).not.toHaveBeenCalled();
+    expect(topLevelInsert).not.toHaveBeenCalled();
   });
 });
 

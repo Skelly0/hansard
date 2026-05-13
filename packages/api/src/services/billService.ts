@@ -599,50 +599,55 @@ export async function createVoteOnBill(
   const now = new Date();
   const votingCloses = new Date(now.getTime() + DEFAULT_VOTE_DURATION_MS);
 
-  const [election] = await db
-    .insert(elections)
-    .values({
-      title: `Vote on: ${bill.title}`,
-      description: bill.summary ?? `Legislative vote on Bill #${bill.billNumber}: ${bill.title}`,
-      type: 'legislative_vote',
-      method: 'yea_nay_abstain',
-      requiredPermission: 'legislative_leader',
-      config: {
-        majorityType: 'simple',
-        passThreshold: 0.5,
-        anonymousBallots: false,
-        sealedResults: false,
-      },
-      relatedBillId: bill.id,
-      createdById,
-      status: 'voting_open',
-      votingOpensAt: now,
-      votingClosesAt: votingCloses,
-    })
-    .returning();
+  // Election insert, bill status flip, and status log must succeed together —
+  // otherwise the bill can be left pointing at an orphaned election or stranded
+  // in `voting` without an audit row.
+  const { updated, electionId } = await db.transaction(async (tx) => {
+    const [election] = await tx
+      .insert(elections)
+      .values({
+        title: `Vote on: ${bill.title}`,
+        description: bill.summary ?? `Legislative vote on Bill #${bill.billNumber}: ${bill.title}`,
+        type: 'legislative_vote',
+        method: 'yea_nay_abstain',
+        requiredPermission: 'legislative_leader',
+        config: {
+          majorityType: 'simple',
+          passThreshold: 0.5,
+          anonymousBallots: false,
+          sealedResults: false,
+        },
+        relatedBillId: bill.id,
+        createdById,
+        status: 'voting_open',
+        votingOpensAt: now,
+        votingClosesAt: votingCloses,
+      })
+      .returning();
 
-  // Update bill status
-  const oldStatus = bill.status;
-  const [updated] = await db
-    .update(bills)
-    .set({
-      status: BillStatus.VOTING,
-      playerVoteId: election.id,
-      updatedAt: now,
-    })
-    .where(eq(bills.id, bill.id))
-    .returning();
+    const oldStatus = bill.status;
+    const [updatedBill] = await tx
+      .update(bills)
+      .set({
+        status: BillStatus.VOTING,
+        playerVoteId: election.id,
+        updatedAt: now,
+      })
+      .where(eq(bills.id, bill.id))
+      .returning();
 
-  // Log status change
-  await db.insert(billStatusLog).values({
-    billId: bill.id,
-    fromStatus: oldStatus,
-    toStatus: BillStatus.VOTING,
-    changedById: createdById,
-    notes: `Legislature vote created (election ${election.id})`,
+    await tx.insert(billStatusLog).values({
+      billId: bill.id,
+      fromStatus: oldStatus,
+      toStatus: BillStatus.VOTING,
+      changedById: createdById,
+      notes: `Legislature vote created (election ${election.id})`,
+    });
+
+    return { updated: updatedBill, electionId: election.id };
   });
 
-  return { bill: await toBillEnriched(db, updated), electionId: election.id };
+  return { bill: await toBillEnriched(db, updated), electionId };
 }
 
 /**
@@ -679,22 +684,28 @@ export async function enterNpcVote(
   const oldStatus = bill.status;
   const newStatus = passed ? BillStatus.NPC_PASSED : BillStatus.NPC_REJECTED;
 
-  const [updated] = await db
-    .update(bills)
-    .set({
-      npcVote,
-      status: newStatus,
-      updatedAt: new Date(),
-    })
-    .where(eq(bills.id, bill.id))
-    .returning();
+  // Bill status update and status log entry must commit together so we never
+  // leave the bill in the new NPC status without an audit row, or vice versa.
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(bills)
+      .set({
+        npcVote,
+        status: newStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(bills.id, bill.id))
+      .returning();
 
-  await db.insert(billStatusLog).values({
-    billId: bill.id,
-    fromStatus: oldStatus,
-    toStatus: newStatus,
-    changedById: enteredById,
-    notes: `NPC house vote: ${tally.yea} yea / ${tally.nay} nay / ${tally.abstain} abstain${notes ? ` — ${notes}` : ''}`,
+    await tx.insert(billStatusLog).values({
+      billId: bill.id,
+      fromStatus: oldStatus,
+      toStatus: newStatus,
+      changedById: enteredById,
+      notes: `NPC house vote: ${tally.yea} yea / ${tally.nay} nay / ${tally.abstain} abstain${notes ? ` — ${notes}` : ''}`,
+    });
+
+    return row;
   });
 
   return toBillEnriched(db, updated);
@@ -808,23 +819,30 @@ export async function enactBill(
   const oldStatus = bill.status;
   const now = new Date();
 
-  const [updated] = await db
-    .update(bills)
-    .set({
-      status: BillStatus.ENACTED,
-      enactedAt: now,
-      effectiveAt: now,
-      updatedAt: now,
-    })
-    .where(eq(bills.id, bill.id))
-    .returning();
+  // Status flip + audit row must land together; amendment application happens
+  // after the transaction commits because it touches a separate document
+  // versioning path that has its own error semantics.
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(bills)
+      .set({
+        status: BillStatus.ENACTED,
+        enactedAt: now,
+        effectiveAt: now,
+        updatedAt: now,
+      })
+      .where(eq(bills.id, bill.id))
+      .returning();
 
-  await db.insert(billStatusLog).values({
-    billId: bill.id,
-    fromStatus: oldStatus,
-    toStatus: BillStatus.ENACTED,
-    changedById: enactedById,
-    notes: 'Bill enacted',
+    await tx.insert(billStatusLog).values({
+      billId: bill.id,
+      fromStatus: oldStatus,
+      toStatus: BillStatus.ENACTED,
+      changedById: enactedById,
+      notes: 'Bill enacted',
+    });
+
+    return row;
   });
 
   // Auto-apply amendment to target document
@@ -858,23 +876,28 @@ export async function repealBill(
   const oldStatus = bill.status;
   const now = new Date();
 
-  const [updated] = await db
-    .update(bills)
-    .set({
-      status: BillStatus.REPEALED,
-      repealedAt: now,
-      repealedByBillId: repealingBillId,
-      updatedAt: now,
-    })
-    .where(eq(bills.id, bill.id))
-    .returning();
+  // Status flip + status log row must commit together.
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(bills)
+      .set({
+        status: BillStatus.REPEALED,
+        repealedAt: now,
+        repealedByBillId: repealingBillId,
+        updatedAt: now,
+      })
+      .where(eq(bills.id, bill.id))
+      .returning();
 
-  await db.insert(billStatusLog).values({
-    billId: bill.id,
-    fromStatus: oldStatus,
-    toStatus: BillStatus.REPEALED,
-    changedById: repealedById,
-    notes: `Repealed by bill ${repealingBillId}`,
+    await tx.insert(billStatusLog).values({
+      billId: bill.id,
+      fromStatus: oldStatus,
+      toStatus: BillStatus.REPEALED,
+      changedById: repealedById,
+      notes: `Repealed by bill ${repealingBillId}`,
+    });
+
+    return row;
   });
 
   return toBillEnriched(db, updated);

@@ -164,6 +164,14 @@ const command: Command = {
         ? `\n\n[\u{1F4D6} Read the full text](${bill.googleDocUrl})`
         : '';
 
+      const fields: { name: string; value: string; inline?: boolean }[] = [];
+      if (bill.tags?.length) {
+        fields.push({ name: 'Tags', value: bill.tags.join(' · '), inline: true });
+      }
+      if (bill.policyAreas?.length) {
+        fields.push({ name: 'Policy Areas', value: bill.policyAreas.join(' · '), inline: true });
+      }
+
       const embed = createEmbed({
         title: bill.title,
         url: bill.googleDocUrl ?? undefined,
@@ -173,6 +181,7 @@ const command: Command = {
           '',
           `*Enacted by <@${interaction.user.id}> · <t:${enactedTimestamp}:F>*`,
         ].join('\n'),
+        fields: fields.length ? fields : undefined,
       });
 
       await postLegislationEmbed({ client: interaction.client, embed });

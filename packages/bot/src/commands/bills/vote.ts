@@ -4,11 +4,11 @@ import {
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { bills, billStatusLog, elections, players } from '@hansard/db';
-import { DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
+import { bills, players } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
+import { createLegislativeVoteForBill } from './createVoteFlow.js';
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -82,49 +82,16 @@ const command: Command = {
     }
 
     try {
-      // Create a yea/nay/abstain election linked to this bill
       const now = new Date();
-      const votingCloses = new Date(now.getTime() + DEFAULT_VOTE_DURATION_MS);
 
-      const [election] = await db
-        .insert(elections)
-        .values({
-          title: `Vote on: ${bill.title}`,
-          description: bill.summary ?? `Legislative vote on Bill #${bill.billNumber}: ${bill.title}`,
-          type: 'legislative_vote',
-          method: 'yea_nay_abstain',
-          requiredPermission: 'legislative_leader',
-          config: {
-            majorityType: 'simple',
-            passThreshold: 0.5,
-            anonymousBallots: false,
-            sealedResults: false,
-          },
-          relatedBillId: bill.id,
-          createdById: player.id,
-          status: 'voting_open',
-          votingOpensAt: now,
-          votingClosesAt: votingCloses,
-        })
-        .returning();
-
-      // Update bill status
-      await db
-        .update(bills)
-        .set({
-          status: 'voting',
-          playerVoteId: election.id,
-          updatedAt: now,
-        })
-        .where(eq(bills.id, bill.id));
-
-      // Log status change
-      await db.insert(billStatusLog).values({
+      const { election } = await createLegislativeVoteForBill(db, {
         billId: bill.id,
-        fromStatus: 'submitted',
-        toStatus: 'voting',
-        changedById: player.id,
-        notes: `Legislature vote created (election ${election.id})`,
+        billTitle: bill.title,
+        billNumber: bill.billNumber,
+        billSummary: bill.summary,
+        expectedStatus: bill.status,
+        createdById: player.id,
+        now,
       });
 
       const embed = successEmbed(
@@ -134,7 +101,7 @@ const command: Command = {
           '',
           `A legislative vote has been opened.`,
           `**Method:** Yea / Nay / Abstain (simple majority)`,
-          `**Closes:** <t:${Math.floor(votingCloses.getTime() / 1000)}:F>`,
+          `**Closes:** <t:${Math.floor(election.votingClosesAt.getTime() / 1000)}:F>`,
           '',
           `Use the voting commands to cast ballots.`,
         ].join('\n'),

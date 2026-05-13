@@ -156,18 +156,19 @@ const command: Command = {
       });
 
       const padded = String(bill.billNumber).padStart(3, '0');
+      const enactedTimestamp = Math.floor(now.getTime() / 1000);
+      const sourceLink = bill.googleDocUrl
+        ? `\n\n[\u{1F4D6} Read the full text](${bill.googleDocUrl})`
+        : '';
 
       const embed = createEmbed({
-        title: 'Bill Enacted',
+        title: bill.title,
+        url: bill.googleDocUrl ?? undefined,
         system: 'bills',
         description: [
-          `**${bill.title}** (Bill #\`B-${padded}\`)`,
+          `**Bill #B-${padded}** has been enacted and is now law.${sourceLink}`,
           '',
-          `\u{1F4DC} This bill has been **enacted** and is now law.`,
-          '',
-          `**Previous status:** ${oldStatus}`,
-          `**Enacted by:** <@${interaction.user.id}>`,
-          `**Effective:** <t:${Math.floor(now.getTime() / 1000)}:F>`,
+          `*Enacted by <@${interaction.user.id}> · <t:${enactedTimestamp}:F>*`,
         ].join('\n'),
       });
 

@@ -65,6 +65,19 @@ const command: Command = {
       return;
     }
 
+    // Mirror VoteService.certifyElection status guard. Skipping tally
+    // leaves results null and bills stuck in `voting`.
+    if (!['tallied', 'npc_pending'].includes(election.status)) {
+      await interaction.editReply({
+        embeds: [
+          errorEmbed(
+            `Election must be tallied first (currently \`${election.status}\`). Run \`/vote-tally\` before certifying.`,
+          ),
+        ],
+      });
+      return;
+    }
+
     // Mirror VoteService.certifyElection guards
     const config = election.config ?? {};
     if (config.requiresNpcConfirmation) {

@@ -33,9 +33,13 @@ export function useAuth() {
 
   const logoutMutation = useMutation({
     mutationFn: () => api.post('/auth/logout', {}),
-    onSuccess: () => {
-      qc.setQueryData(AUTH_QUERY_KEY, null);
+    // onSettled (not onSuccess) so a failing logout request — network blip,
+    // 5xx, or a 401 from an already-dead session — still tears down the
+    // client-side cache. The server endpoint is best-effort cookie cleanup;
+    // if it fails the user must still be treated as signed-out locally.
+    onSettled: () => {
       qc.clear();
+      qc.setQueryData(AUTH_QUERY_KEY, null);
     },
   });
 

@@ -1072,6 +1072,15 @@ export class VoteService {
       throw new Error('Election not found');
     }
 
+    // Certification must come after tally — otherwise `results` is null and
+    // any downstream effects (bill transition via updateRelatedBillAfterTally,
+    // office appointment) silently skip.
+    if (!['tallied', 'npc_pending'].includes(election.status)) {
+      throw new Error(
+        `Election must be tallied before certification (currently ${election.status}). Run tally first.`,
+      );
+    }
+
     const config = election.config as ElectionConfig;
 
     // If NPC confirmation is required, check it's been done

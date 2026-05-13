@@ -226,6 +226,7 @@ describe('/ticket command definition', () => {
     );
     expect(mocks.threadSend).toHaveBeenCalledWith({
       content: '**Ticket Raiser** opened this ticket:\n\nThe ticket thread is empty after creation.',
+      allowedMentions: { parse: [] },
     });
     expect(mocks.updateSetValues).toEqual(
       expect.arrayContaining([
@@ -235,5 +236,54 @@ describe('/ticket command definition', () => {
         }),
       ]),
     );
+  });
+
+  it('suppresses mentions when posting user-controlled ticket bodies to the thread', async () => {
+    const threadMembersAdd = vi.fn();
+    const textThreadsCreate = vi.fn().mockResolvedValue({
+      id: 'text-thread-id',
+      send: mocks.threadSend,
+      members: {
+        add: threadMembersAdd,
+      },
+    });
+    const textChannel = {
+      id: 'ticket-channel-id',
+      threads: {
+        create: textThreadsCreate,
+      },
+    };
+    Object.setPrototypeOf(textChannel, TextChannel.prototype);
+    mocks.guildChannelsFetch.mockResolvedValue(textChannel);
+    mocks.threadSend
+      .mockResolvedValueOnce({ id: 'summary-message-id', pin: mocks.threadPin })
+      .mockResolvedValueOnce({ id: 'opening-message-id' });
+    mocks.threadPin.mockResolvedValue(undefined);
+
+    const interaction = makeInteraction();
+
+    await command.execute(interaction as any);
+
+    // Every user-controlled body posted to the thread (summary embeds carry the
+    // creator's description; opener echoes it verbatim) must suppress mentions
+    // so a creator cannot @everyone or @<staff role> through the bot token.
+    const summaryCall = mocks.threadSend.mock.calls.find(
+      ([arg]: [unknown]) =>
+        typeof arg === 'object' && arg !== null && 'embeds' in (arg as Record<string, unknown>),
+    );
+    expect(summaryCall?.[0]).toMatchObject({
+      allowedMentions: { parse: [] },
+    });
+
+    const openerCall = mocks.threadSend.mock.calls.find(
+      ([arg]: [unknown]) =>
+        typeof arg === 'object' &&
+        arg !== null &&
+        'content' in (arg as Record<string, unknown>) &&
+        !('embeds' in (arg as Record<string, unknown>)),
+    );
+    expect(openerCall?.[0]).toMatchObject({
+      allowedMentions: { parse: [] },
+    });
   });
 });

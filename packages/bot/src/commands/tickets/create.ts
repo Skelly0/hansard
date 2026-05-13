@@ -478,9 +478,13 @@ async function sendTicketSummaryMessage(
   let summaryMessage: Message | null = null;
 
   try {
+    // Summary embeds embed the creator's title/description verbatim. Suppress
+    // all mention parsing so a ticket body can't @everyone or ping staff roles
+    // via the bot token.
     summaryMessage = await thread.send({
       embeds: summaryEmbeds.slice(0, 10),
       components: [actionRow],
+      allowedMentions: { parse: [] },
     } satisfies MessageCreateOptions);
   } catch (err) {
     console.error(`Failed to post summary for ticket #${ticketNumber}:`, err);
@@ -502,7 +506,9 @@ async function sendOpeningTicketMessage(
 ): Promise<void> {
   try {
     for (const content of buildTicketOpeningMessages(creatorDisplayName, description)) {
-      await thread.send({ content });
+      // The opener echoes the user-controlled description into thread content;
+      // suppress mention parsing so it can't ping @everyone or staff roles.
+      await thread.send({ content, allowedMentions: { parse: [] } });
     }
   } catch (err) {
     console.error(`Failed to post opener for ticket #${ticketNumber}:`, err);

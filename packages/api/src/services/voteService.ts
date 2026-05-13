@@ -31,6 +31,7 @@ import { BillStatus, DEFAULT_VOTE_DURATION_MS, hasVotingCloseTimePassed } from '
 import { getStrategy } from './tallying/index.js';
 import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
 import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
+import { appointToOffice } from './officeService.js';
 
 // ============================================================
 // Types for service inputs
@@ -1094,16 +1095,39 @@ export class VoteService {
       }
     }
 
-    const [updated] = await this.db
-      .update(elections)
-      .set({ status: 'certified', updatedAt: new Date() })
-      .where(eq(elections.id, electionId))
-      .returning();
+    // Position elections require a winner before certification — otherwise
+    // we'd flip status to `certified` and silently skip the appointment,
+    // leaving the office vacant with no way to recover via the normal flow.
+    const isAppointingPositionElection =
+      election.type === 'position_election' && !!election.forOfficeId;
+    const results = election.results as ElectionResults | null;
+    if (isAppointingPositionElection) {
+      const winners = results?.winners ?? [];
+      if (winners.length === 0) {
+        throw new Error(
+          'Cannot certify a position election with no winner — re-run the tally or cancel the election.',
+        );
+      }
+    }
 
-    // TODO: If this is a position_election with forOfficeId,
-    // auto-appoint the winner to the office (officeService.appoint)
-    // and sync the Discord role.
+    const updated = await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(elections)
+        .set({ status: 'certified', updatedAt: new Date() })
+        .where(eq(elections.id, electionId))
+        .returning();
 
-    return updated ?? null;
+      if (row && isAppointingPositionElection && election.forOfficeId) {
+        const winners = results?.winners ?? [];
+        const winnerId = winners[0];
+        if (winnerId) {
+          await appointToOffice(tx, election.forOfficeId, winnerId, election.createdById);
+        }
+      }
+
+      return row ?? null;
+    });
+
+    return updated;
   }
 }

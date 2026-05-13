@@ -29,6 +29,10 @@ import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { sendTicketStaffPing } from '../../utils/ticketStaffPing.js';
+import {
+  registerAwaitingInteraction,
+  unregisterAwaitingInteraction,
+} from '../../utils/awaitingInteractions.js';
 import type { Command } from '../../client.js';
 import {
   buildTicketActionRow,
@@ -155,8 +159,9 @@ const command: Command = {
     const visibleCategories = categoryRows.slice(0, 25);
 
     // Step 1: Show category selection.
+    const selectCustomId = `ticket_category_select:${interaction.user.id}`;
     const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId(`ticket_category_select:${interaction.user.id}`)
+      .setCustomId(selectCustomId)
       .setPlaceholder('Select a ticket category...')
       .addOptions(
         visibleCategories.map((cat) => {
@@ -188,13 +193,17 @@ const command: Command = {
       fetchReply: true,
     });
 
-    // Step 2: Wait for category selection.
+    // Step 2: Wait for category selection. Use a 14-minute window to match
+    // Discord's interaction-token lifetime — beyond that, Discord itself
+    // would reject the click. The registry call lets the global handler
+    // distinguish "in-flight" from "stale" if the user somehow exceeds it.
     let categoryInteraction: StringSelectMenuInteraction;
+    registerAwaitingInteraction(selectCustomId);
     try {
       categoryInteraction = await reply.awaitMessageComponent({
         componentType: ComponentType.StringSelect,
         filter: (i) => i.user.id === interaction.user.id,
-        time: 60_000,
+        time: 840_000,
       }) as StringSelectMenuInteraction;
     } catch {
       await interaction.editReply({
@@ -202,6 +211,8 @@ const command: Command = {
         components: [],
       });
       return;
+    } finally {
+      unregisterAwaitingInteraction(selectCustomId);
     }
 
     const selectedCategoryId = categoryInteraction.values[0];
@@ -244,16 +255,22 @@ const command: Command = {
 
     await categoryInteraction.showModal(modal);
 
-    // Step 4: Wait for modal submission.
+    // Step 4: Wait for modal submission. 14-minute window matches Discord's
+    // own interaction-token lifetime; beyond that the modal token expires
+    // anyway. The registry call keeps the global handler from acking this
+    // submission while we're still in flight.
     let modalInteraction: ModalSubmitInteraction;
+    registerAwaitingInteraction(modalCustomId);
     try {
       modalInteraction = await categoryInteraction.awaitModalSubmit({
         filter: (i) => i.customId === modalCustomId && i.user.id === interaction.user.id,
-        time: 300_000, // 5 minutes to fill out
+        time: 840_000,
       });
     } catch {
       // Modal timed out — no way to follow up since the original was ephemeral.
       return;
+    } finally {
+      unregisterAwaitingInteraction(modalCustomId);
     }
 
     await modalInteraction.deferReply({ ephemeral: true });

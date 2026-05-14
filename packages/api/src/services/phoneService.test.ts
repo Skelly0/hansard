@@ -228,6 +228,49 @@ describe('PhoneService.registerNumber', () => {
   });
 });
 
+describe('PhoneService.listDirectory', () => {
+  it('returns active phone directory rows with character owners', async () => {
+    const db = makeDb({
+      selectQueues: [[
+        {
+          id: 'n1',
+          playerId: 'p1',
+          numberRaw: '555-0101',
+          numberNormalized: '5550101',
+          label: 'Office',
+          characterName: 'Ada Vance',
+          discordUsername: 'ada',
+        },
+        {
+          id: 'n2',
+          playerId: 'p2',
+          numberRaw: '555-0102',
+          numberNormalized: '5550102',
+          label: null,
+          characterName: 'Bram Pike',
+          discordUsername: 'bram',
+        },
+      ]],
+    });
+
+    const svc = new PhoneService(db);
+    const rows = await svc.listDirectory();
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        numberRaw: '555-0101',
+        label: 'Office',
+        characterName: 'Ada Vance',
+      }),
+      expect.objectContaining({
+        numberRaw: '555-0102',
+        label: null,
+        characterName: 'Bram Pike',
+      }),
+    ]);
+  });
+});
+
 describe('PhoneService.initiateCall', () => {
   it('refuses dead callers', async () => {
     const db = makeDb({

@@ -66,7 +66,8 @@ async function main() {
     }
 
     await sql.begin(async (tx) => {
-      await tx`
+      const trx = tx as unknown as typeof sql;
+      await trx`
         UPDATE bills
         SET
           status = 'player_passed',
@@ -78,7 +79,7 @@ async function main() {
         WHERE id = ${bill.id}
       `;
 
-      await tx`
+      await trx`
         INSERT INTO bill_status_log (bill_id, from_status, to_status, changed_by_id, notes)
         VALUES (
           ${bill.id},

@@ -3,11 +3,12 @@ import {
   PermissionFlagsBits,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { eq } from 'drizzle-orm';
+import { desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { simulationClock, players } from '@hansard/db';
+import { simulationClock, players, timeAdvanceLog } from '@hansard/db';
 import { advanceTime, previewAdvance } from '@hansard/api/services/simulationService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import { postObituaryToGraveyard, type GraveyardPostResult } from '../../utils/graveyard.js';
 import { postGameEventsEmbed, type GameEventsPostResult } from '../../utils/gameEventsChannel.js';
 import type { Command } from '../../client.js';
@@ -152,7 +153,20 @@ const command: Command = {
             .setDescription('Whether passed bills should require NPC house review')
             .setRequired(true),
         ),
-    ) as unknown as SlashCommandBuilder,
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('history')
+        .setDescription('Show recent simulation advance log entries')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('limit')
+            .setDescription('Number of entries to show (default 10)')
+            .setMinValue(1)
+            .setMaxValue(25)
+            .setRequired(false),
+        ),
+    ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const sub = interaction.options.getSubcommand();
@@ -164,9 +178,88 @@ const command: Command = {
       case 'pause': await handlePauseToggle(interaction, true); break;
       case 'unpause': await handlePauseToggle(interaction, false); break;
       case 'npc-house': await handleNpcHouseToggle(interaction); break;
+      case 'history': await handleHistory(interaction); break;
     }
   },
 };
+
+async function handleHistory(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  if (!interaction.guild || !interaction.member) {
+    await interaction.editReply({ embeds: [errorEmbed('This command must be used in a server.')] });
+    return;
+  }
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!(await isStaff(member))) {
+    await interaction.editReply({
+      embeds: [errorEmbed('You do not have permission to view simulation history.')],
+    });
+    return;
+  }
+
+  const limit = interaction.options.getInteger('limit') ?? 10;
+
+  const rows = await db
+    .select()
+    .from(timeAdvanceLog)
+    .orderBy(desc(timeAdvanceLog.createdAt))
+    .limit(limit);
+
+  if (rows.length === 0) {
+    await interaction.editReply({
+      embeds: [
+        createEmbed({
+          title: 'Time Advance History',
+          description: '_No advance log entries yet._',
+          system: 'simulation',
+        }),
+      ],
+    });
+    return;
+  }
+
+  const advancerIds = Array.from(new Set(rows.map((r) => r.advancedById).filter(Boolean)));
+  const nameMap = new Map<string, string>();
+  if (advancerIds.length > 0) {
+    const playerRows = await db
+      .select({
+        id: players.id,
+        characterName: players.characterName,
+        discordUsername: players.discordUsername,
+      })
+      .from(players)
+      .where(inArray(players.id, advancerIds));
+    for (const p of playerRows) {
+      nameMap.set(p.id, p.characterName ?? p.discordUsername ?? 'Unknown');
+    }
+  }
+
+  const lines = rows.map((row) => {
+    const advancer = nameMap.get(row.advancedById) ?? '_unknown_';
+    const ticks = row.toTick - row.fromTick;
+    const summary = row.summary ?? { deaths: [], ailments: [], aged: 0 };
+    const deaths = summary.deaths?.length ?? 0;
+    const ailments = summary.ailments?.length ?? 0;
+    const aged = summary.aged ?? 0;
+    const when = `<t:${Math.floor(row.createdAt.getTime() / 1000)}:R>`;
+    return [
+      `**${row.fromDate}** → **${row.toDate}** (${ticks > 0 ? '+' : ''}${ticks} tick${ticks === 1 ? '' : 's'})`,
+      `  by **${advancer}** • ${when}`,
+      `  aged: ${aged} • ailments: ${ailments} • deaths: ${deaths}`,
+    ].join('\n');
+  });
+
+  await interaction.editReply({
+    embeds: [
+      createEmbed({
+        title: 'Time Advance History',
+        description: [`Showing last **${rows.length}** entr${rows.length === 1 ? 'y' : 'ies'}.`, '', lines.join('\n\n')].join('\n'),
+        system: 'simulation',
+      }),
+    ],
+  });
+}
 
 async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();

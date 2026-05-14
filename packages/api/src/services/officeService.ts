@@ -5,6 +5,7 @@ import {
   players,
   playerEventLog,
   type Database,
+  type Transaction,
 } from '@hansard/db';
 import type { Office, OfficeHolder } from '@hansard/shared';
 import { PlayerEventType } from '@hansard/shared';
@@ -228,7 +229,10 @@ export async function updateOffice(
  * creating a confirmation vote before calling this function.
  */
 export async function appointToOffice(
-  db: Database,
+  // Accepts a caller-supplied transaction so `voteService.certifyElection` can appoint a
+  // position-election winner inside the same `db.transaction` that flips the election to
+  // `certified`. The body only uses `.select()` / `.insert()`, both available on either.
+  db: Database | Transaction,
   officeId: string,
   playerId: string,
   appointedById: string,

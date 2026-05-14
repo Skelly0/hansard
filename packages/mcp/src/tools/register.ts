@@ -9,6 +9,7 @@ import { registerSimulationTools } from './simulation.js';
 import { registerFavourTools } from './favours.js';
 import { registerDocumentTools } from './documents.js';
 import { registerTicketTools } from './tickets.js';
+import { registerPhoneTools } from './phones.js';
 
 export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerPlayerTools(server, ctx);
@@ -20,4 +21,5 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
   registerFavourTools(server, ctx);
   registerDocumentTools(server, ctx);
   registerTicketTools(server, ctx);
+  registerPhoneTools(server, ctx);
 }

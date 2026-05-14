@@ -71,6 +71,8 @@ describe('message export routes', () => {
   beforeEach(() => {
     auth.authenticated = true;
     auth.isStaff = true;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-11T12:00:00.000Z'));
     process.env.DISCORD_BOT_TOKEN = 'bot-token';
     process.env.MESSAGE_EXPORT_CHANNEL_IDS = 'channel-1';
     // Anchor "now" so the fixture timestamp (2026-05-11T11:00:00.000Z) stays
@@ -82,6 +84,7 @@ describe('message export routes', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
     if (originalEnv.DISCORD_BOT_TOKEN === undefined) {
       delete process.env.DISCORD_BOT_TOKEN;
     } else {

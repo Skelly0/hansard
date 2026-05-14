@@ -375,7 +375,7 @@ async function handleLegislativeBillVoteCreate(
 
   await billInteraction.showModal(
     buildVoteCreateModal(modalCustomId, {
-      title: selectedBill ? `Vote on: ${selectedBill.title}` : undefined,
+      title: selectedBill ? `Vote on B-${String(selectedBill.billNumber).padStart(3, '0')}: ${selectedBill.title}` : undefined,
       description: defaultDescription,
       durationHours: DEFAULT_VOTE_DURATION_HOURS,
     }),

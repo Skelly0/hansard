@@ -50,7 +50,7 @@ export async function createLegislativeVoteForBill(
     const [election] = await tx
       .insert(elections)
       .values({
-        title: `Vote on: ${input.billTitle}`,
+        title: `Vote on B-${String(input.billNumber).padStart(3, '0')}: ${input.billTitle}`,
         description: input.billSummary
           ?? `Legislative vote on Bill #${input.billNumber}: ${input.billTitle}`,
         type: 'legislative_vote',

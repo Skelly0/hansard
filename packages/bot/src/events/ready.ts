@@ -1,4 +1,5 @@
 import { Events, type Client } from 'discord.js';
+import { VoteService } from '@hansard/api/services/voteService';
 import { commands } from '../client.js';
 import { db } from '../db.js';
 import { renderReactionResult } from '../commands/vote/close.js';
@@ -89,8 +90,12 @@ export function registerReadyEvent(client: Client): void {
     }
 
     if (!voteAutoCloseWorker) {
+      const voteService = new VoteService(db);
       voteAutoCloseWorker = startVoteAutoCloseWorker(db, {
         renderReactionResult,
+        tallyElection: async (election) => {
+          await voteService.tallyVotes(election.id);
+        },
         logger: console,
       });
       console.log('Vote auto-close worker started');

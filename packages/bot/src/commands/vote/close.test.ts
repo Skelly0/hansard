@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   },
   findElectionByReference: vi.fn(),
   hasPermission: vi.fn(),
+  tallyVotes: vi.fn(),
 }));
 
 vi.mock('drizzle-orm', () => ({
@@ -56,12 +57,19 @@ vi.mock('./_electionReference.js', () => ({
   findElectionByReference: mocks.findElectionByReference,
 }));
 
+vi.mock('@hansard/api/services/voteService', () => ({
+  VoteService: class {
+    tallyVotes = mocks.tallyVotes;
+  },
+}));
+
 import command from './close';
 
 const openElection = {
   id: 'election-1',
   title: 'Bridge Security Act',
   description: 'Establishes protections and patrol authority.',
+  type: 'legislative_vote',
   method: 'yea_nay_abstain',
   status: 'voting_open',
   useReactions: true,
@@ -175,6 +183,12 @@ describe('/vote-close reaction-mode embeds', () => {
     const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
     expect(resultEmbed?.data.description).toContain('**PASSED**');
     expect(resultEmbed?.data.fields?.[0]?.value).toContain('Abstain: **2**');
+    const majorityField = resultEmbed?.data.fields?.find((f: { name: string }) => f.name === 'Majority');
+    expect(majorityField?.value).toBe('Supermajority (67%)');
+    const typeField = resultEmbed?.data.fields?.find((f: { name: string }) => f.name === 'Type');
+    expect(typeField?.value).toBe('Legislative Vote');
+    const methodField = resultEmbed?.data.fields?.find((f: { name: string }) => f.name === 'Method');
+    expect(methodField?.value).toBe('Yea / Nay / Abstain');
   });
 
   it('does not pass tied simple-majority reaction votes', async () => {
@@ -193,5 +207,37 @@ describe('/vote-close reaction-mode embeds', () => {
 
     const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
     expect(resultEmbed?.data.description).toContain('**REJECTED**');
+  });
+
+  it('auto-tallies legislative votes that have a linked bill so the bill transitions', async () => {
+    const election = {
+      ...openElection,
+      relatedBillId: 'bill-1',
+      status: 'voting_closed',
+    };
+    mocks.db.update.mockReturnValue(updateReturning([election]));
+    mocks.client.channels.fetch.mockResolvedValue({
+      messages: {
+        fetch: vi.fn().mockResolvedValue({ edit: vi.fn() }),
+      },
+    });
+
+    await command.execute(makeInteraction() as any);
+
+    expect(mocks.tallyVotes).toHaveBeenCalledWith(election.id);
+  });
+
+  it('does not tally legislative votes that have no linked bill', async () => {
+    const election = { ...openElection, status: 'voting_closed' };
+    mocks.db.update.mockReturnValue(updateReturning([election]));
+    mocks.client.channels.fetch.mockResolvedValue({
+      messages: {
+        fetch: vi.fn().mockResolvedValue({ edit: vi.fn() }),
+      },
+    });
+
+    await command.execute(makeInteraction() as any);
+
+    expect(mocks.tallyVotes).not.toHaveBeenCalled();
   });
 });

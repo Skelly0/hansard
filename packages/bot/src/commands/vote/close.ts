@@ -7,12 +7,53 @@ import {
 import { eq, inArray } from 'drizzle-orm';
 import { ballots, candidates, elections, players } from '@hansard/db';
 import { meetsVoteThreshold, SUPERMAJORITY_PASS_THRESHOLD } from '@hansard/shared';
+import { VoteService } from '@hansard/api/services/voteService';
 import { client } from '../../client.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
+
+const METHOD_LABELS: Record<string, string> = {
+  yea_nay_abstain: 'Yea / Nay / Abstain',
+  fptp: 'First Past the Post',
+  ranked_choice: 'Ranked Choice (IRV)',
+  approval: 'Approval Voting',
+  two_round_runoff: 'Two-Round Runoff',
+  exhaustive_ballot: 'Exhaustive Ballot',
+  stv: 'Single Transferable Vote',
+  proportional: 'Proportional Representation',
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  referendum: 'Referendum',
+  confidence_vote: 'Vote of Confidence',
+  party_primary: 'Party Primary',
+  custom: 'Custom Vote',
+  legislative_vote: 'Legislative Vote',
+  position_election: 'Position Election',
+  appointment_confirmation: 'Appointment Confirmation',
+  general_election: 'General Election',
+  constitutional_amendment: 'Constitutional Amendment',
+};
+
+const MAJORITY_LABELS: Record<string, string> = {
+  simple: 'Simple Majority',
+  absolute: 'Absolute Majority',
+  supermajority: 'Supermajority',
+  qualified: 'Qualified Majority',
+  unanimous: 'Unanimous',
+};
+
+function formatMajority(majorityType: string | undefined, passThreshold: number | undefined): string {
+  const key = majorityType ?? 'simple';
+  const label = MAJORITY_LABELS[key] ?? key;
+  if ((key === 'supermajority' || key === 'qualified') && typeof passThreshold === 'number') {
+    return `${label} (${Math.round(passThreshold * 100)}%)`;
+  }
+  return label;
+}
 
 /**
  * /vote-close election:<title-or-id> — closes voting for an election.
@@ -105,6 +146,18 @@ const command: Command = {
       } catch (error) {
         console.error('[vote-close] failed to render reaction result:', error);
         // Non-fatal — the election is still marked closed; staff can re-run results manually.
+      }
+    }
+
+    // ---- Legislative votes: auto-tally so the linked bill transitions ----
+    // Without this, /vote-close leaves the bill stuck in `voting` and
+    // /bill-enact rejects it. Mirrors what /vote-tally would do.
+    if (updated.type === 'legislative_vote' && updated.relatedBillId) {
+      try {
+        await new VoteService(db).tallyVotes(updated.id);
+      } catch (error) {
+        console.error('[vote-close] failed to auto-tally legislative vote:', error);
+        // Non-fatal — staff can re-run /vote-tally manually.
       }
     }
 
@@ -259,6 +312,22 @@ export async function renderReactionResult(election: typeof elections.$inferSele
     return;
   }
 
+  const config = election.config ?? {};
+  const fields = [
+    { name: 'Result', value: resultLines.join('\n') || '*No votes cast*', inline: false },
+    { name: 'Total Ballots', value: String(allBallots.length), inline: true },
+    { name: 'Type', value: TYPE_LABELS[election.type] ?? election.type, inline: true },
+    { name: 'Method', value: METHOD_LABELS[election.method] ?? election.method, inline: true },
+  ];
+
+  if (election.method === 'yea_nay_abstain') {
+    fields.push({
+      name: 'Majority',
+      value: formatMajority(config.majorityType, config.passThreshold),
+      inline: true,
+    });
+  }
+
   const resultEmbed = createEmbed({
     title: election.title,
     description: [
@@ -269,11 +338,7 @@ export async function renderReactionResult(election: typeof elections.$inferSele
       .join('\n'),
     system: 'voting',
     colour: passed === true ? 0x788C5D : passed === false ? 0xC25B4E : 0x6A9BCC,
-    fields: [
-      { name: 'Result', value: resultLines.join('\n') || '*No votes cast*', inline: false },
-      { name: 'Total Ballots', value: String(allBallots.length), inline: true },
-      { name: 'Method', value: election.method, inline: true },
-    ],
+    fields,
   });
 
   await msg.edit({ embeds: [resultEmbed] });

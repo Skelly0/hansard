@@ -10,6 +10,7 @@ import {
 } from 'discord.js';
 import { commands } from '../client.js';
 import { errorEmbed } from '../utils/embeds.js';
+import { isAwaitingInteraction } from '../utils/awaitingInteractions.js';
 import { handleTicketButton, handleSetPriorityButton } from '../components/ticketButtons.js';
 import { handleTicketModal } from '../components/ticketModals.js';
 import { handleVoteButton, handleVoteCancel, isVoteButton } from '../components/voteButtons.js';
@@ -56,13 +57,70 @@ const COLLECTOR_MANAGED_PREFIXES = [
   'bill_submit_type:', 'bill_submit_modal:',
 ];
 
+/**
+ * Prefixes whose commands opt in to the stale-token recovery scheme
+ * (i.e. they call `registerAwaitingInteraction` / `unregisterAwaitingInteraction`
+ * around their awaits). For these, the global handler can safely ack a
+ * collector-managed customId that is NOT in the registry as "stale".
+ *
+ * Prefixes in `COLLECTOR_MANAGED_PREFIXES` but NOT here keep the original
+ * silent-bail behaviour (commit 1704822) — without the registry call, we
+ * can't tell in-flight from stale, so silence is the only safe choice.
+ */
+const STALE_RECOVERY_PREFIXES = [
+  'ticket_category_select:', 'ticket_create_modal:',
+];
+
 function isCollectorManaged(customId: string): boolean {
   return COLLECTOR_MANAGED_PREFIXES.some((prefix) => customId.startsWith(prefix));
 }
 
+function isStaleRecoveryEnabled(customId: string): boolean {
+  return STALE_RECOVERY_PREFIXES.some((prefix) => customId.startsWith(prefix));
+}
+
+/**
+ * Acknowledge a collector-managed interaction whose awaiter has already
+ * expired — without this, Discord paints "Something went wrong" on the
+ * user's screen because nothing responded within the 3-second window.
+ * Commands that participate must register their customIds via
+ * `registerAwaitingInteraction` so the in-flight case is preserved.
+ */
+async function ackStaleCollectorInteraction(
+  interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
+): Promise<void> {
+  try {
+    await interaction.reply({
+      embeds: [
+        errorEmbed(
+          'That session has expired. Please run the command again.',
+        ),
+      ],
+      ephemeral: true,
+    });
+  } catch (error) {
+    console.error(
+      `Failed to ack stale collector interaction ${interaction.customId}:`,
+      error,
+    );
+  }
+}
+
 async function handleButton(interaction: ButtonInteraction): Promise<void> {
-  // Skip interactions managed by command-level collectors
-  if (isCollectorManaged(interaction.customId)) return;
+  // Collector-managed: in-flight → bail to avoid racing the awaiter;
+  // stale (no live awaiter) → ack so Discord doesn't show "Something went wrong".
+  if (isCollectorManaged(interaction.customId)) {
+    // Only opt-in prefixes participate in stale-token recovery. Others keep
+    // the original silent-bail (commit 1704822) so we don't race awaiters
+    // that aren't using the `awaitingInteractions` registry.
+    if (
+      isStaleRecoveryEnabled(interaction.customId) &&
+      !isAwaitingInteraction(interaction.customId)
+    ) {
+      await ackStaleCollectorInteraction(interaction);
+    }
+    return;
+  }
 
   // Ticket buttons
   if (await handleTicketButton(interaction)) return;
@@ -92,8 +150,20 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
 }
 
 async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
-  // Skip interactions managed by command-level collectors
-  if (isCollectorManaged(interaction.customId)) return;
+  // Collector-managed: in-flight → bail to avoid racing the awaiter;
+  // stale (no live awaiter) → ack so Discord doesn't show "Something went wrong".
+  if (isCollectorManaged(interaction.customId)) {
+    // Only opt-in prefixes participate in stale-token recovery. Others keep
+    // the original silent-bail (commit 1704822) so we don't race awaiters
+    // that aren't using the `awaitingInteractions` registry.
+    if (
+      isStaleRecoveryEnabled(interaction.customId) &&
+      !isAwaitingInteraction(interaction.customId)
+    ) {
+      await ackStaleCollectorInteraction(interaction);
+    }
+    return;
+  }
 
   // Ticket modals
   if (await handleTicketModal(interaction)) return;
@@ -111,8 +181,20 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<v
 }
 
 async function handleSelectMenu(interaction: StringSelectMenuInteraction): Promise<void> {
-  // Skip interactions managed by command-level collectors
-  if (isCollectorManaged(interaction.customId)) return;
+  // Collector-managed: in-flight → bail to avoid racing the awaiter;
+  // stale (no live awaiter) → ack so Discord doesn't show "Something went wrong".
+  if (isCollectorManaged(interaction.customId)) {
+    // Only opt-in prefixes participate in stale-token recovery. Others keep
+    // the original silent-bail (commit 1704822) so we don't race awaiters
+    // that aren't using the `awaitingInteractions` registry.
+    if (
+      isStaleRecoveryEnabled(interaction.customId) &&
+      !isAwaitingInteraction(interaction.customId)
+    ) {
+      await ackStaleCollectorInteraction(interaction);
+    }
+    return;
+  }
 
   // Unhandled select menu — log and bow out. Same reasoning as
   // `handleButton`: an awaiting command would lose the response token.

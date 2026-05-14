@@ -89,7 +89,7 @@ const command: Command = {
       const [election] = await db
         .insert(elections)
         .values({
-          title: `Vote on: ${bill.title}`,
+          title: `Vote on B-${String(bill.billNumber).padStart(3, '0')}: ${bill.title}`,
           description: bill.summary ?? `Legislative vote on Bill #${bill.billNumber}: ${bill.title}`,
           type: 'legislative_vote',
           method: 'yea_nay_abstain',

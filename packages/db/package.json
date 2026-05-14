@@ -13,6 +13,7 @@
     "migrate:invite-only-parties": "tsx scripts/migrate-invite-only-parties.ts",
     "migrate:npc-house-active": "tsx scripts/migrate-npc-house-active.ts",
     "migrate:phones": "tsx scripts/migrate-phones.ts",
+    "fix:bill-5-status": "tsx scripts/fix-bill-5-status.ts",
     "push": "drizzle-kit push",
     "studio": "drizzle-kit studio",
     "build": "tsc && tsc -p tsconfig.scripts.json --noEmit",

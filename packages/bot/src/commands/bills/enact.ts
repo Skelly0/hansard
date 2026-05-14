@@ -133,6 +133,21 @@ const command: Command = {
 
     const changedById = actor?.id ?? bill.authorId;
 
+    // Resolve the bill's author for display attribution
+    const [billAuthor] = await db
+      .select({
+        characterName: players.characterName,
+        discordId: players.discordId,
+      })
+      .from(players)
+      .where(eq(players.id, bill.authorId))
+      .limit(1);
+
+    const authorName = billAuthor?.characterName ?? 'Unknown';
+    const authorDisplay = billAuthor?.discordId
+      ? `${authorName} (<@${billAuthor.discordId}>)`
+      : authorName;
+
     try {
       const oldStatus = bill.status;
       const now = new Date();
@@ -156,19 +171,34 @@ const command: Command = {
       });
 
       const padded = String(bill.billNumber).padStart(3, '0');
+      const enactedTimestamp = Math.floor(now.getTime() / 1000);
+      const summaryBlock = bill.summary
+        ? `\n\n> ${bill.summary.replace(/\n/g, '\n> ')}`
+        : '';
+      const sourceLink = bill.googleDocUrl
+        ? `\n\n[\u{1F4D6} Read the full text](${bill.googleDocUrl})`
+        : '';
+
+      const fields: { name: string; value: string; inline?: boolean }[] = [
+        { name: 'Author', value: authorDisplay, inline: true },
+      ];
+      if (bill.tags?.length) {
+        fields.push({ name: 'Tags', value: bill.tags.join(' · '), inline: true });
+      }
+      if (bill.policyAreas?.length) {
+        fields.push({ name: 'Policy Areas', value: bill.policyAreas.join(' · '), inline: true });
+      }
 
       const embed = createEmbed({
-        title: 'Bill Enacted',
+        title: bill.title,
+        url: bill.googleDocUrl ?? undefined,
         system: 'bills',
         description: [
-          `**${bill.title}** (Bill #\`B-${padded}\`)`,
+          `**Bill #B-${padded}** has been enacted and is now law.${summaryBlock}${sourceLink}`,
           '',
-          `\u{1F4DC} This bill has been **enacted** and is now law.`,
-          '',
-          `**Previous status:** ${oldStatus}`,
-          `**Enacted by:** <@${interaction.user.id}>`,
-          `**Effective:** <t:${Math.floor(now.getTime() / 1000)}:F>`,
+          `*Enacted by <@${interaction.user.id}> · <t:${enactedTimestamp}:F>*`,
         ].join('\n'),
+        fields,
       });
 
       await postLegislationEmbed({ client: interaction.client, embed });

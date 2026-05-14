@@ -52,8 +52,11 @@ describe('calculateAge', () => {
 });
 
 describe('birthDateForAge', () => {
-  it('anchors birthDate to ISO sim date', () => {
-    expect(birthDateForAge('1923-06-15', 30)).toBe('1893-01-01');
+  it('anchors birthDate to the ISO sim clock month/day so age math round-trips', () => {
+    // For ISO clocks the resulting birthDate carries the clock's month/day,
+    // so calculateAge(birthDate, clock) === age at any month/day rather than
+    // only on January 1.
+    expect(birthDateForAge('1923-06-15', 30)).toBe('1893-06-15');
   });
 
   it('anchors birthDate to freeform sim date', () => {

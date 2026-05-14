@@ -84,6 +84,19 @@ export interface CreateCategoryData {
   sortOrder?: number;
 }
 
+/**
+ * Thrown when a caller attempts to assign a ticket to a player who is not
+ * staff. The service enforces this so that web/API and bot paths share the
+ * same trust boundary — assigning to a non-staff player would otherwise
+ * grant that player ticket visibility via `assignedToId === user.id`.
+ */
+export class TicketAssigneeNotStaffError extends Error {
+  constructor(message = 'Ticket assignee must be a staff member') {
+    super(message);
+    this.name = 'TicketAssigneeNotStaffError';
+  }
+}
+
 // ============================================================
 // Service
 // ============================================================
@@ -517,6 +530,23 @@ export class TicketService {
   // ----------------------------------------------------------
 
   async assignTicket(ticketId: string, assigneeId: string, actorId: string): Promise<Ticket | null> {
+    // Verify the target is staff before mutating the ticket. Without this
+    // guard, assigning a ticket to an ordinary player would silently grant
+    // that player ticket visibility (getTicket / listTickets treat the
+    // assignee as a permitted viewer). CLAUDE.md is explicit that
+    // `/ticket-assign` must validate this — the bot already does so locally,
+    // and the rule lives here so any caller (web API, future bot rewrites)
+    // benefits from the same check.
+    const [target] = await this.db
+      .select({ id: players.id, isStaff: players.isStaff })
+      .from(players)
+      .where(eq(players.id, assigneeId))
+      .limit(1);
+
+    if (!target || !target.isStaff) {
+      throw new TicketAssigneeNotStaffError();
+    }
+
     return this.updateTicket(
       ticketId,
       {

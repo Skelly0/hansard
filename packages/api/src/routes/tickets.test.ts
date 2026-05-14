@@ -10,7 +10,18 @@ const auth = vi.hoisted(() => ({
 const serviceMocks = vi.hoisted(() => ({
   getTicket: vi.fn(),
   updateTicket: vi.fn(),
+  assignTicket: vi.fn(),
 }));
+
+const errorStubs = vi.hoisted(() => {
+  class TicketAssigneeNotStaffErrorStub extends Error {
+    constructor() {
+      super('Assignee must be staff');
+      this.name = 'TicketAssigneeNotStaffError';
+    }
+  }
+  return { TicketAssigneeNotStaffErrorStub };
+});
 
 vi.mock('../middleware/requireAuth.js', () => ({
   requireAuth: async (request: any) => {
@@ -27,7 +38,9 @@ vi.mock('../services/ticketService.js', () => ({
   TicketService: class {
     getTicket = serviceMocks.getTicket;
     updateTicket = serviceMocks.updateTicket;
+    assignTicket = serviceMocks.assignTicket;
   },
+  TicketAssigneeNotStaffError: errorStubs.TicketAssigneeNotStaffErrorStub,
 }));
 
 async function appWithDb() {
@@ -66,5 +79,25 @@ describe('ticket routes', () => {
 
     expect(res.statusCode).toBe(403);
     expect(serviceMocks.updateTicket).not.toHaveBeenCalled();
+  });
+
+  it('refuses to assign a ticket to a non-staff player and returns 400', async () => {
+    auth.isStaff = true;
+    serviceMocks.assignTicket.mockRejectedValue(new errorStubs.TicketAssigneeNotStaffErrorStub());
+
+    const app = await appWithDb();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tickets/ticket-1/assign',
+      payload: { assigneeId: 'non-staff-player' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(serviceMocks.assignTicket).toHaveBeenCalledWith(
+      'ticket-1',
+      'non-staff-player',
+      'creator-player',
+    );
   });
 });

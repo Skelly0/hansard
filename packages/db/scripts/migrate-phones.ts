@@ -57,6 +57,33 @@ const statements: string[] = [
       EXECUTE format('ALTER TABLE "phone_numbers" DROP CONSTRAINT %I', uniq_name);
     END IF;
   END $$;`,
+  // Some legacy deployments may have a standalone unique index rather than a unique
+  // constraint. Drop only whole-table unique indexes that cover exactly number_normalized;
+  // keep the new partial active-only index (indpred IS NOT NULL) and unrelated indexes.
+  `DO $$
+  DECLARE
+    idx record;
+  BEGIN
+    FOR idx IN
+      SELECT ns.nspname AS schema_name, cls.relname AS index_name
+      FROM pg_index i
+      JOIN pg_class cls ON cls.oid = i.indexrelid
+      JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+      WHERE i.indrelid = '"phone_numbers"'::regclass
+        AND i.indisunique = true
+        AND i.indisprimary = false
+        AND i.indexprs IS NULL
+        AND i.indpred IS NULL
+        AND i.indkey = (
+          SELECT a.attnum::text::int2vector
+          FROM pg_attribute a
+          WHERE a.attrelid = '"phone_numbers"'::regclass
+            AND a.attname = 'number_normalized'
+        )
+    LOOP
+      EXECUTE format('DROP INDEX IF EXISTS %I.%I', idx.schema_name, idx.index_name);
+    END LOOP;
+  END $$;`,
   // CHECK added with NOT VALID so pre-existing violating rows don't abort the migration.
   // The CHECK still enforces on every future insert/update; legacy rows can be reconciled later.
   `DO $$ BEGIN
@@ -227,6 +254,60 @@ const statements: string[] = [
   `CREATE INDEX IF NOT EXISTS "phone_taps_active_number_idx"
     ON "phone_taps" ("target_number_id")
     WHERE is_active = true;`,
+  // The duplicate-tap cleanup below writes audit rows, so ensure the audit table + columns
+  // exist before retiring legacy rows. The canonical audit section later repeats these
+  // idempotent guards and adds constraints/indexes/triggers.
+  `CREATE TABLE IF NOT EXISTS "phone_tap_audit_log" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "tap_id" uuid NOT NULL REFERENCES "phone_taps"("id") ON DELETE RESTRICT,
+    "actor_id" uuid NOT NULL REFERENCES "players"("id"),
+    "action" varchar(32) NOT NULL,
+    "target_number_id" uuid,
+    "target_number_normalized" varchar(32),
+    "mirror_channel_id" varchar(20),
+    "mirror_discord_user_id" varchar(20),
+    "notes" text,
+    "created_at" timestamptz NOT NULL DEFAULT now()
+  );`,
+  `ALTER TABLE "phone_tap_audit_log" ADD COLUMN IF NOT EXISTS "target_number_id" uuid;`,
+  `ALTER TABLE "phone_tap_audit_log" ADD COLUMN IF NOT EXISTS "target_number_normalized" varchar(32);`,
+  `ALTER TABLE "phone_tap_audit_log" ADD COLUMN IF NOT EXISTS "mirror_channel_id" varchar(20);`,
+  `ALTER TABLE "phone_tap_audit_log" ADD COLUMN IF NOT EXISTS "mirror_discord_user_id" varchar(20);`,
+  `INSERT INTO "phone_tap_audit_log" (
+      "tap_id",
+      "actor_id",
+      "action",
+      "target_number_id",
+      "target_number_normalized",
+      "mirror_channel_id",
+      "mirror_discord_user_id",
+      "notes"
+    )
+    SELECT
+      t."id",
+      t."created_by_id",
+      'orphaned_target_deactivated',
+      t."target_number_id",
+      n."number_normalized",
+      t."mirror_channel_id",
+      t."mirror_discord_user_id",
+      'Duplicate active tap auto-revoked by migration'
+    FROM "phone_taps" t
+    LEFT JOIN "phone_numbers" n ON n."id" = t."target_number_id"
+    WHERE t."is_active" = true
+      AND EXISTS (
+        SELECT 1 FROM "phone_taps" newer
+        WHERE newer."target_number_id" = t."target_number_id"
+          AND newer."is_active" = true
+          AND (newer."created_at" > t."created_at"
+               OR (newer."created_at" = t."created_at" AND newer."id" > t."id"))
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM "phone_tap_audit_log" existing
+        WHERE existing."tap_id" = t."id"
+          AND existing."action" = 'orphaned_target_deactivated'
+          AND existing."notes" = 'Duplicate active tap auto-revoked by migration'
+      );`,
   // Before adding the active-target unique index, retire any pre-existing duplicate active
   // taps on the same number — keep the newest, deactivate the rest — so `CREATE UNIQUE INDEX`
   // does not abort on legacy data. Skipped (no rows updated) once the invariant holds, so
@@ -371,6 +452,7 @@ const rollbackStatements: string[] = [
   // Reverse FK order: deliveries → audit_log → taps → threads → messages → calls → numbers.
   `DROP TABLE IF EXISTS "phone_message_tap_deliveries" CASCADE;`,
   `DROP TABLE IF EXISTS "phone_tap_audit_log" CASCADE;`,
+  `DROP FUNCTION IF EXISTS "phone_tap_audit_log_immutable"();`,
   `DROP TABLE IF EXISTS "phone_taps" CASCADE;`,
   `DROP TABLE IF EXISTS "phone_threads" CASCADE;`,
   `DROP TABLE IF EXISTS "phone_messages" CASCADE;`,

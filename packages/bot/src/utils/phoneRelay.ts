@@ -27,7 +27,6 @@ import {
 
 const PHONE_LOG_CHANNEL_ENV = 'PHONE_LOG_CHANNEL_ID';
 const PHONE_TAP_CHANNEL_ENV = 'PHONE_TAP_CHANNEL_ID';
-const PHONE_GUILD_ENV = 'PHONE_GUILD_ID';
 
 const CALL_COLOR = 0x9b7cb8;
 const STAFF_PALETTE = 0x788c5d;
@@ -92,19 +91,6 @@ function chunkText(text: string, budget: number): string[] {
   return chunks;
 }
 
-function resolveGuild(client: Client): Guild | null {
-  const configured = process.env[PHONE_GUILD_ENV]?.trim();
-  if (configured) {
-    const cached = client.guilds.cache.get(configured);
-    if (cached) return cached;
-  }
-  // Single-guild deployment fallback (mirrors how /ticket create operates from DMs).
-  if (client.guilds.cache.size > 1 && !configured) {
-    console.warn('[phone:relay] Multiple guilds in cache and PHONE_GUILD_ID unset — picking arbitrary guild');
-  }
-  return client.guilds.cache.first() ?? null;
-}
-
 async function fetchPhoneLogChannel(client: Client): Promise<TextChannel | null> {
   const id = process.env[PHONE_LOG_CHANNEL_ENV]?.trim();
   if (!id) return null;
@@ -148,6 +134,7 @@ export async function ensurePhoneThread(
     participants.callerPlayer.id,
     participants.recipientPlayer.id,
   );
+  let staleThreadId: string | null = null;
 
   if (existing) {
     try {
@@ -155,8 +142,10 @@ export async function ensurePhoneThread(
       if (fetched && (fetched.type === ChannelType.PrivateThread || fetched.type === ChannelType.PublicThread)) {
         return fetched as ThreadChannel;
       }
+      staleThreadId = existing.discordThreadId;
     } catch (err) {
       console.error('[phone:relay] failed to fetch persisted phone thread, recreating:', err);
+      staleThreadId = existing.discordThreadId;
     }
   }
 
@@ -171,11 +160,7 @@ export async function ensurePhoneThread(
       return null;
     }
 
-    const guild = resolveGuild(client);
-    if (!guild) {
-      console.warn('[phone:relay] no guild available for staff thread creation');
-      return null;
-    }
+    const guild = channel.guild;
 
     const callerName = participants.callerPlayer.characterName ?? 'Unknown';
     const recipientName = participants.recipientPlayer.characterName ?? 'Unknown';
@@ -204,6 +189,7 @@ export async function ensurePhoneThread(
             return null;
           }
         },
+        replaceThreadId: staleThreadId ?? undefined,
         onOrphan: async (discordThreadId) => {
           // We lost the persist race — another relay's row won. Delete the thread we just
           // created so it isn't left as a dangling private thread nobody references.

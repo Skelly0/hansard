@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ticketServiceMocks = vi.hoisted(() => ({
   listTickets: vi.fn(),
@@ -29,6 +29,10 @@ vi.mock('@hansard/api/services/phoneService', () => ({
 }));
 
 import { registerAllTools } from './register.js';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 function createServer() {
   const tools = new Map<string, { config: unknown; handler: (args: unknown) => Promise<unknown> }>();
@@ -154,6 +158,38 @@ describe('MCP phone tools', () => {
     );
   });
 
+  it('redacts internal Discord/staff IDs from non-staff call history results', async () => {
+    phoneServiceMocks.getCallHistory.mockResolvedValue({
+      calls: [{
+        id: 'call-1',
+        status: 'ended',
+        callerPlayerId: session.playerId,
+        recipientPlayerId: '00000000-0000-4000-8000-000000000002',
+        ringDiscordMessageId: 'ring-msg',
+        staffThreadId: 'staff-thread',
+        forceEndedById: 'staff-player',
+      }],
+      total: 1,
+    });
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(session) } as never,
+    });
+
+    const result = await tools.get('get_phone_call_history')!.handler({
+      playerId: session.playerId,
+      limit: 10,
+      offset: 0,
+    });
+
+    const payload = JSON.parse((result as { content: [{ text: string }] }).content[0].text);
+    expect(payload.calls[0]).toMatchObject({ id: 'call-1', status: 'ended' });
+    expect(payload.calls[0]).not.toHaveProperty('ringDiscordMessageId');
+    expect(payload.calls[0]).not.toHaveProperty('staffThreadId');
+    expect(payload.calls[0]).not.toHaveProperty('forceEndedById');
+  });
+
   it('forwards transcript lookups with viewer context', async () => {
     phoneServiceMocks.getCallTranscript.mockResolvedValue({
       call: { id: 'call-1' },
@@ -173,6 +209,81 @@ describe('MCP phone tools', () => {
       '00000000-0000-4000-8000-00000000aaaa',
       { userId: session.playerId, isStaff: false },
     );
+  });
+
+  it('redacts transcript internals and tap audit rows for non-staff sessions', async () => {
+    phoneServiceMocks.getCallTranscript.mockResolvedValue({
+      call: {
+        id: 'call-1',
+        status: 'ended',
+        ringDiscordMessageId: 'ring-msg',
+        staffThreadId: 'staff-thread',
+        forceEndedById: 'staff-player',
+      },
+      messages: [{
+        id: 'msg-1',
+        content: 'hello',
+        senderDiscordMessageId: 'source-msg',
+        recipientDiscordMessageId: 'copy-msg',
+        staffMirrorMessageId: 'mirror-msg',
+      }],
+      taps: [{ id: 'delivery-1', tapId: 'tap-1', mirrorMessageId: 'tap-msg' }],
+    });
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(session) } as never,
+    });
+
+    const result = await tools.get('get_phone_call_transcript')!.handler({
+      callId: '00000000-0000-4000-8000-00000000aaaa',
+    });
+
+    const payload = JSON.parse((result as { content: [{ text: string }] }).content[0].text);
+    expect(payload.call).toMatchObject({ id: 'call-1', status: 'ended' });
+    expect(payload.call).not.toHaveProperty('ringDiscordMessageId');
+    expect(payload.call).not.toHaveProperty('staffThreadId');
+    expect(payload.call).not.toHaveProperty('forceEndedById');
+    expect(payload.messages[0]).toMatchObject({ id: 'msg-1', content: 'hello' });
+    expect(payload.messages[0]).not.toHaveProperty('senderDiscordMessageId');
+    expect(payload.messages[0]).not.toHaveProperty('recipientDiscordMessageId');
+    expect(payload.messages[0]).not.toHaveProperty('staffMirrorMessageId');
+    expect(payload).not.toHaveProperty('taps');
+  });
+
+  it('preserves phone transcript internals for staff sessions', async () => {
+    const staffSession = { ...session, isStaff: true };
+    phoneServiceMocks.getCallTranscript.mockResolvedValue({
+      call: {
+        id: 'call-1',
+        status: 'ended',
+        ringDiscordMessageId: 'ring-msg',
+        staffThreadId: 'staff-thread',
+        forceEndedById: 'staff-player',
+      },
+      messages: [{
+        id: 'msg-1',
+        content: 'hello',
+        senderDiscordMessageId: 'source-msg',
+        recipientDiscordMessageId: 'copy-msg',
+        staffMirrorMessageId: 'mirror-msg',
+      }],
+      taps: [{ id: 'delivery-1', tapId: 'tap-1', mirrorMessageId: 'tap-msg' }],
+    });
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(staffSession) } as never,
+    });
+
+    const result = await tools.get('get_phone_call_transcript')!.handler({
+      callId: '00000000-0000-4000-8000-00000000aaaa',
+    });
+
+    const payload = JSON.parse((result as { content: [{ text: string }] }).content[0].text);
+    expect(payload.call.ringDiscordMessageId).toBe('ring-msg');
+    expect(payload.messages[0].staffMirrorMessageId).toBe('mirror-msg');
+    expect(payload.taps[0].mirrorMessageId).toBe('tap-msg');
   });
 
   it('returns an empty payload when getCallTranscript yields null (call not found)', async () => {

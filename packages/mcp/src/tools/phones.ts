@@ -2,6 +2,24 @@ import { z } from 'zod';
 import { PhoneService } from '@hansard/api/services/phoneService';
 import { jsonResult, safeHandler, type RegisterToolsFn } from './types.js';
 
+function redactCallForParticipant<T extends Record<string, unknown>>(call: T): Omit<T, 'ringDiscordMessageId' | 'staffThreadId' | 'forceEndedById'> {
+  const safeCall = { ...call };
+  delete safeCall.ringDiscordMessageId;
+  delete safeCall.staffThreadId;
+  delete safeCall.forceEndedById;
+  return safeCall;
+}
+
+function redactMessageForParticipant<T extends Record<string, unknown>>(
+  message: T,
+): Omit<T, 'senderDiscordMessageId' | 'recipientDiscordMessageId' | 'staffMirrorMessageId'> {
+  const safeMessage = { ...message };
+  delete safeMessage.senderDiscordMessageId;
+  delete safeMessage.recipientDiscordMessageId;
+  delete safeMessage.staffMirrorMessageId;
+  return safeMessage;
+}
+
 export const registerPhoneTools: RegisterToolsFn = (server, ctx) => {
   server.registerTool(
     'list_my_phone_numbers',
@@ -36,7 +54,13 @@ export const registerPhoneTools: RegisterToolsFn = (server, ctx) => {
         { userId: session.playerId, isStaff: session.isStaff },
         { limit: args.limit, offset: args.offset },
       );
-      return jsonResult({ count: calls.length, total, calls });
+      return jsonResult({
+        count: calls.length,
+        total,
+        calls: session.isStaff
+          ? calls
+          : calls.map((call) => redactCallForParticipant(call as unknown as Record<string, unknown>)),
+      });
     }),
   );
 
@@ -59,7 +83,13 @@ export const registerPhoneTools: RegisterToolsFn = (server, ctx) => {
       if (!result) {
         return jsonResult({ call: null, messages: [] });
       }
-      return jsonResult(result);
+      if (session.isStaff) return jsonResult(result);
+      return jsonResult({
+        call: redactCallForParticipant(result.call as unknown as Record<string, unknown>),
+        messages: result.messages.map((message) =>
+          redactMessageForParticipant(message as unknown as Record<string, unknown>),
+        ),
+      });
     }),
   );
 };

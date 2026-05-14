@@ -51,6 +51,14 @@ describe('migrate-phones', () => {
     expect(script).toContain("ALTER TABLE \"phone_numbers\" DROP CONSTRAINT %I");
   });
 
+  it('drops standalone legacy unique indexes on phone_numbers.number_normalized too', () => {
+    // Some deployments used CREATE UNIQUE INDEX rather than a table constraint. Those
+    // indexes also block retired-number reuse and must be removed before the partial index.
+    expect(script).toContain('FROM pg_index i');
+    expect(script).toContain('DROP INDEX IF EXISTS %I');
+    expect(script).toContain('indpred IS NULL');
+  });
+
   it('records the staff force-end actor on phone_calls', () => {
     // Audit column for `forceEndCall` — staff actor uuid must be queryable without parsing
     // `ended_reason`. Nullable: only set when staff force-ended the call.
@@ -88,6 +96,13 @@ describe('migrate-phones', () => {
     expect(script).toMatch(/ON "phone_taps" \("target_number_id"\)\s*WHERE is_active = true/);
     // Legacy duplicate active taps must be retired before the unique index can be created.
     expect(script).toContain('UPDATE "phone_taps" t');
+  });
+
+  it('audits legacy duplicate active taps before retiring them', () => {
+    expect(script).toMatch(
+      /INSERT INTO "phone_tap_audit_log"[\s\S]*"phone_taps" t[\s\S]*"is_active" = true/,
+    );
+    expect(script).toContain('Duplicate active tap auto-revoked by migration');
   });
 
   it('enforces one DB row per Discord thread id', () => {
@@ -238,6 +253,7 @@ describe('migrate-phones', () => {
     expect(script).toContain("process.argv.includes('--confirm')");
     expect(script).toMatch(/DROP TABLE IF EXISTS "phone_numbers" CASCADE/);
     expect(script).toMatch(/DROP TABLE IF EXISTS "phone_message_tap_deliveries" CASCADE/);
+    expect(script).toMatch(/DROP FUNCTION IF EXISTS "phone_tap_audit_log_immutable"\(\)/);
   });
 
   it('scopes pg_constraint lookups by conrelid to avoid name collisions across tables', () => {

@@ -43,12 +43,14 @@ function makeDb(plan: {
   insertErrors?: (Error | undefined)[];
   updateReturning?: unknown[];
   transactionCalls?: { count: number };
+  chainEvents?: { method: string; args: unknown[] }[];
 }) {
   const selectQueues = [...(plan.selectQueues ?? [])];
   const insertReturning = [...(plan.insertReturning ?? [])];
   const insertErrors = [...(plan.insertErrors ?? [])];
   const updateReturning = [...(plan.updateReturning ?? [])];
   const transactionCalls = plan.transactionCalls;
+  const chainEvents = plan.chainEvents;
 
   // Each chain step returns a Proxy that:
   //   - is awaitable (resolves to the next selectQueue entry)
@@ -71,7 +73,12 @@ function makeDb(plan: {
         if (prop === 'finally') {
           return (onFinally: () => void) => ensure().finally(onFinally);
         }
-        return () => thenableChain();
+        return (...args: unknown[]) => {
+          if (typeof prop === 'string') {
+            chainEvents?.push({ method: prop, args });
+          }
+          return thenableChain();
+        };
       },
     };
     return new Proxy({}, handler);
@@ -109,13 +116,17 @@ function makeDb(plan: {
 
   const select = (_proj?: unknown) => thenableChain();
 
+  const remove = (_table?: unknown) => ({
+    where: (_w: unknown) => Promise.resolve(undefined),
+  });
+
   // db.transaction((tx) => fn(tx)) — pass the same fake db back as `tx`.
   const transaction = async (fn: (tx: unknown) => unknown) => {
     if (transactionCalls) transactionCalls.count++;
     return fn(api);
   };
 
-  const api = { select, insert, update, transaction };
+  const api = { select, insert, update, delete: remove, transaction };
   return api as any;
 }
 
@@ -353,6 +364,25 @@ describe('PhoneService.recordMessage', () => {
     expect(result.tapDeliveries).toEqual([]);
   });
 
+  it('locks the sender row while re-checking liveness before inserting', async () => {
+    const chainEvents: { method: string; args: unknown[] }[] = [];
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'call-1', status: 'active', callerPlayerId: 'p1', recipientPlayerId: 'p2', callerNumberId: 'n1', recipientNumberId: 'n2' }],
+        [{ isAlive: true }],
+        [],
+      ],
+      insertReturning: [
+        [{ id: 'm1', callId: 'call-1', senderPlayerId: 'p1', content: 'hi' }],
+      ],
+      chainEvents,
+    });
+    const svc = new PhoneService(db);
+    await svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p1', content: 'hi' });
+    const updateLocks = chainEvents.filter((event) => event.method === 'for' && event.args[0] === 'update');
+    expect(updateLocks).toHaveLength(2);
+  });
+
   it('pre-creates a placeholder tap-delivery row per active tap inside the message transaction (H1)', async () => {
     // H1: the delivery rows must exist the moment the message commits — not after the relay
     // posts to Discord — so a relay crash can't strand an active tap with no delivery row.
@@ -470,6 +500,29 @@ describe('PhoneService.findOrCreateThread', () => {
     expect(result.created).toBe(false);
     expect(result.thread?.discordThreadId).toBe('D1');
     expect(txCounter.count).toBe(1);
+  });
+
+  it('replaces a stale persisted Discord thread row when the relay reports the thread is gone', async () => {
+    let createCalled = false;
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 't1', playerAId: 'a', playerBId: 'b', discordThreadId: 'D-stale' }],
+      ],
+      insertReturning: [
+        [{ id: 't2', playerAId: 'a', playerBId: 'b', discordThreadId: 'D-new' }],
+      ],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.findOrCreateThread('a', 'b', {
+      replaceThreadId: 'D-stale',
+      createThread: async () => {
+        createCalled = true;
+        return 'D-new';
+      },
+    } as never);
+    expect(createCalled).toBe(true);
+    expect(result.created).toBe(true);
+    expect(result.thread?.discordThreadId).toBe('D-new');
   });
 
   it('creates + persists a thread when none exists (H5)', async () => {
@@ -755,11 +808,29 @@ describe('PhoneService.answerCall / declineCall isAlive guard', () => {
     await expect(svc.declineCall('call-1', 'r')).rejects.toMatchObject({ code: 'dead' });
   });
 
+  it('refuses a decline after ring expiry even if the timeout worker has not swept yet', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [{
+          id: 'call-1',
+          status: 'ringing',
+          callerPlayerId: 'c',
+          recipientPlayerId: 'r',
+          ringExpiresAt: new Date(Date.now() - 1_000),
+        }],
+      ],
+      updateReturning: [[{ id: 'call-1', status: 'declined' }]],
+    });
+    const svc = new PhoneService(db);
+    await expect(svc.declineCall('call-1', 'r')).rejects.toMatchObject({ code: 'invalid_state' });
+  });
+
   it('runs answerCall ring-check + alive-check + state update inside one transaction (M2)', async () => {
     // M2: the FOR UPDATE-locked transaction is what closes the alive-check TOCTOU — a death
     // finalization can no longer land between the alive check and the status UPDATE. Assert
     // the transaction boundary directly.
     const txCounter = { count: 0 };
+    const chainEvents: { method: string; args: unknown[] }[] = [];
     const db = makeDb({
       selectQueues: [
         [{ id: 'call-1', status: 'ringing', callerPlayerId: 'c', recipientPlayerId: 'r' }],
@@ -767,15 +838,18 @@ describe('PhoneService.answerCall / declineCall isAlive guard', () => {
       ],
       updateReturning: [[{ id: 'call-1', status: 'active' }]],
       transactionCalls: txCounter,
+      chainEvents,
     });
     const svc = new PhoneService(db);
     const result = await svc.answerCall('call-1', 'r');
     expect(txCounter.count).toBe(1);
+    expect(chainEvents.filter((event) => event.method === 'for' && event.args[0] === 'update')).toHaveLength(2);
     expect(result.status).toBe('active');
   });
 
   it('runs declineCall alive-check + state update inside one transaction (M2)', async () => {
     const txCounter = { count: 0 };
+    const chainEvents: { method: string; args: unknown[] }[] = [];
     const db = makeDb({
       selectQueues: [
         [{ id: 'call-1', status: 'ringing', callerPlayerId: 'c', recipientPlayerId: 'r' }],
@@ -783,10 +857,12 @@ describe('PhoneService.answerCall / declineCall isAlive guard', () => {
       ],
       updateReturning: [[{ id: 'call-1', status: 'declined' }]],
       transactionCalls: txCounter,
+      chainEvents,
     });
     const svc = new PhoneService(db);
     const result = await svc.declineCall('call-1', 'r');
     expect(txCounter.count).toBe(1);
+    expect(chainEvents.filter((event) => event.method === 'for' && event.args[0] === 'update')).toHaveLength(2);
     expect(result.status).toBe('declined');
   });
 });
@@ -919,6 +995,51 @@ describe('PhoneService.setTap', () => {
         { userId: 'staff', isStaff: true },
       ),
     ).rejects.toMatchObject({ code: 'invalid_state' });
+  });
+
+  it('re-checks the target number under the setTap transaction lock', async () => {
+    let inTransaction = false;
+    let insertCalled = false;
+    const chain = (rows: unknown[]) => {
+      const resolved = Promise.resolve(rows);
+      const handler: ProxyHandler<object> = {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (ok: (v: unknown) => unknown, err?: (r: unknown) => unknown) => resolved.then(ok, err);
+          }
+          return () => new Proxy({}, handler);
+        },
+      };
+      return new Proxy({}, handler);
+    };
+    const db: any = {
+      transaction: async (fn: (tx: unknown) => unknown) => {
+        inTransaction = true;
+        try {
+          return await fn(db);
+        } finally {
+          inTransaction = false;
+        }
+      },
+      execute: async () => undefined,
+      select: () => chain(inTransaction
+        ? [{ id: 'n1', numberNormalized: '+15550142', isActive: false }]
+        : [{ id: 'n1', numberNormalized: '+15550142', isActive: true }]),
+      insert: () => ({
+        values: () => {
+          insertCalled = true;
+          return { returning: () => Promise.resolve([{ id: 'tap-1', targetNumberId: 'n1' }]) };
+        },
+      }),
+    };
+    const svc = new PhoneService(db);
+    await expect(
+      svc.setTap(
+        { targetNumberId: 'n1', createdById: 'staff', mirrorChannelId: 'C1' },
+        { userId: 'staff', isStaff: true },
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_state' });
+    expect(insertCalled).toBe(false);
   });
 
   it('translates a 23505 from the active-target unique index into a friendly already-tapped error (H2)', async () => {
@@ -1106,21 +1227,21 @@ describe('PhoneService.autoRevokeBrokenTap', () => {
   it('is idempotent — does nothing for already-inactive taps', async () => {
     const txCounter = { count: 0 };
     const db = makeDb({
-      selectQueues: [
-        [{ id: 'tap-1', isActive: false, targetNumberId: 'n1', createdById: 'staff' }],
-      ],
+      updateReturning: [[]],
       transactionCalls: txCounter,
     });
     const svc = new PhoneService(db);
     await svc.autoRevokeBrokenTap('tap-1', 'circuit-breaker fired');
-    expect(txCounter.count).toBe(0); // never entered the transaction
+    expect(txCounter.count).toBe(1);
   });
 
   it('runs the revoke + audit write in a single transaction with orphaned action', async () => {
     const txCounter = { count: 0 };
     const db = makeDb({
+      updateReturning: [
+        [{ id: 'tap-1', isActive: false, targetNumberId: 'n1', createdById: 'staff', mirrorChannelId: 'C', mirrorDiscordUserId: null }],
+      ],
       selectQueues: [
-        [{ id: 'tap-1', isActive: true, targetNumberId: 'n1', createdById: 'staff', mirrorChannelId: 'C', mirrorDiscordUserId: null }],
         [{ numberNormalized: '+15550142' }],
       ],
       transactionCalls: txCounter,
@@ -1128,6 +1249,46 @@ describe('PhoneService.autoRevokeBrokenTap', () => {
     const svc = new PhoneService(db);
     await svc.autoRevokeBrokenTap('tap-1', 'too many failures');
     expect(txCounter.count).toBe(1);
+  });
+
+  it('does not write an audit row when a concurrent revoke already won', async () => {
+    let auditInserts = 0;
+    const queue: unknown[][] = [
+      [{ id: 'tap-1', isActive: true, targetNumberId: 'n1', createdById: 'staff', mirrorChannelId: 'C', mirrorDiscordUserId: null }],
+      [{ numberNormalized: '+15550142' }],
+    ];
+    const db: any = {
+      transaction: async (fn: (tx: unknown) => unknown) => fn(db),
+      select: () => {
+        const rows = queue.shift() ?? [];
+        const resolved = Promise.resolve(rows);
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (ok: (v: unknown) => unknown, err?: (r: unknown) => unknown) => resolved.then(ok, err);
+            }
+            return () => new Proxy({}, handler);
+          },
+        };
+        return new Proxy({}, handler);
+      },
+      update: () => ({
+        set: () => ({
+          where: () => ({
+            returning: () => Promise.resolve([]),
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: () => {
+          auditInserts++;
+          return { then: (ok: (v: unknown) => unknown) => Promise.resolve(undefined).then(ok) };
+        },
+      }),
+    };
+    const svc = new PhoneService(db);
+    await svc.autoRevokeBrokenTap('tap-1', 'too many failures');
+    expect(auditInserts).toBe(0);
   });
 });
 

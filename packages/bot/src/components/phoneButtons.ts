@@ -38,6 +38,38 @@ export function buildIncomingCallActions(callId: string): ActionRowBuilder<Butto
   return row;
 }
 
+function isExpiredRingError(err: PhoneServiceError): boolean {
+  return err.code === 'invalid_state' && err.message === 'Call is no longer ringing.';
+}
+
+async function handleExpiredRingButton(
+  interaction: ButtonInteraction,
+  svc: PhoneService,
+  callId: string,
+): Promise<void> {
+  const ended = await svc.systemEndCall(callId, 'ring_timeout');
+  if (ended) {
+    await hangUpAndNotify(interaction.client, callId, 'ring_timeout');
+  }
+  try {
+    const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId('phone_expired_disabled')
+        .setLabel('Expired')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+    );
+    const expiredEmbed = new EmbedBuilder()
+      .setTitle('\u{260E} Call ended')
+      .setColor(0x9c9890)
+      .setDescription('The recipient did not answer in time.');
+    await interaction.message.edit({ embeds: [expiredEmbed], components: [disabledRow] });
+  } catch (editErr) {
+    console.error('[phone:button] expired ring: failed to update ring DM:', editErr);
+  }
+  await interaction.editReply({ embeds: [errorEmbed('That call has already timed out.')] });
+}
+
 /** Returns true if the interaction was a phone button and we handled it. */
 export async function handlePhoneButton(interaction: ButtonInteraction): Promise<boolean> {
   const customId = interaction.customId;
@@ -70,6 +102,10 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
       await svc.answerCall(callId, player.id);
     } catch (err) {
       if (err instanceof PhoneServiceError) {
+        if (isExpiredRingError(err)) {
+          await handleExpiredRingButton(interaction, svc, callId);
+          return true;
+        }
         await interaction.editReply({ embeds: [errorEmbed(err.message)] });
       } else {
         console.error('[phone:button] answer failed:', err);
@@ -136,6 +172,10 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
     await svc.declineCall(callId, player.id);
   } catch (err) {
     if (err instanceof PhoneServiceError) {
+      if (isExpiredRingError(err)) {
+        await handleExpiredRingButton(interaction, svc, callId);
+        return true;
+      }
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
     } else {
       console.error('[phone:button] decline failed:', err);

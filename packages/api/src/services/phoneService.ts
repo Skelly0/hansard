@@ -460,10 +460,6 @@ export class PhoneService {
       }
       const now = new Date();
       if (call.ringExpiresAt && call.ringExpiresAt <= now) {
-        await tx
-          .update(phoneCalls)
-          .set({ status: 'missed', endedAt: now, endedReason: 'ring_timeout' })
-          .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing')));
         throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
       }
       // Alive re-check inside the txn — the FOR UPDATE lock above means a concurrent death
@@ -473,6 +469,7 @@ export class PhoneService {
         .select({ isAlive: players.isAlive })
         .from(players)
         .where(eq(players.id, actingPlayerId))
+        .for('update')
         .limit(1);
       if (!actor || !actor.isAlive) {
         throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
@@ -509,10 +506,15 @@ export class PhoneService {
       if (call.status !== 'ringing') {
         throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
       }
+      const now = new Date();
+      if (call.ringExpiresAt && call.ringExpiresAt <= now) {
+        throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
+      }
       const [actor] = await tx
         .select({ isAlive: players.isAlive })
         .from(players)
         .where(eq(players.id, actingPlayerId))
+        .for('update')
         .limit(1);
       if (!actor || !actor.isAlive) {
         throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
@@ -520,7 +522,7 @@ export class PhoneService {
 
       const [updated] = await tx
         .update(phoneCalls)
-        .set({ status: 'declined', endedAt: new Date(), endedReason: 'declined_by_recipient' })
+        .set({ status: 'declined', endedAt: now, endedReason: 'declined_by_recipient' })
         .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing')))
         .returning();
       if (!updated) {
@@ -759,6 +761,7 @@ export class PhoneService {
         .select({ isAlive: players.isAlive })
         .from(players)
         .where(eq(players.id, input.senderPlayerId))
+        .for('update')
         .limit(1);
       if (!sender || !sender.isAlive) {
         throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
@@ -880,50 +883,59 @@ export class PhoneService {
       createThread: (pair: [string, string]) => Promise<string | null>;
       /** Delete an orphaned Discord thread when this caller lost the persist race. */
       onOrphan?: (discordThreadId: string) => Promise<void>;
+      /** Replace this persisted Discord thread id if the relay already proved it is stale. */
+      replaceThreadId?: string;
     },
   ): Promise<{ thread: PhoneThread | null; created: boolean }> {
     const [a, b] = [callerPlayerId, recipientPlayerId].sort() as [string, string];
-    return this.db.transaction(async (tx) => {
-      // Cluster-wide mutex for this pair: serializes the create section across processes.
-      await lockPhoneKey(tx, 'player', `thread:${a}:${b}`);
+    let createdDiscordThreadId: string | null = null;
+    try {
+      return await this.db.transaction(async (tx) => {
+        // Cluster-wide mutex for this pair: serializes the create section across processes.
+        await lockPhoneKey(tx, 'player', `thread:${a}:${b}`);
 
-      const [existing] = await tx
-        .select()
-        .from(phoneThreads)
-        .where(and(eq(phoneThreads.playerAId, a), eq(phoneThreads.playerBId, b)))
-        .limit(1);
-      if (existing) return { thread: existing, created: false };
+        const [existing] = await tx
+          .select()
+          .from(phoneThreads)
+          .where(and(eq(phoneThreads.playerAId, a), eq(phoneThreads.playerBId, b)))
+          .limit(1);
+        if (existing) {
+          if (hooks.replaceThreadId !== existing.discordThreadId) {
+            return { thread: existing, created: false };
+          }
+          await tx.delete(phoneThreads).where(eq(phoneThreads.id, existing.id));
+        }
 
-      const discordThreadId = await hooks.createThread([a, b]);
-      if (!discordThreadId) return { thread: null, created: false };
+        const discordThreadId = await hooks.createThread([a, b]);
+        if (!discordThreadId) return { thread: null, created: false };
+        createdDiscordThreadId = discordThreadId;
 
-      try {
         const [row] = await tx
           .insert(phoneThreads)
           .values({ playerAId: a, playerBId: b, discordThreadId })
           .returning();
         return { thread: row, created: true };
-      } catch (err) {
-        if (isUniqueViolation(err)) {
-          // Lost the race (pair index or discord_thread_id index). Delete our orphan thread
-          // and hand back whatever row already exists for this pair.
-          if (hooks.onOrphan) {
-            try {
-              await hooks.onOrphan(discordThreadId);
-            } catch (cleanupErr) {
-              console.error('[phoneService] failed to delete orphaned phone thread:', cleanupErr);
-            }
+      });
+    } catch (err) {
+      if (isUniqueViolation(err) && createdDiscordThreadId) {
+        // Lost the race (pair index or discord_thread_id index). The failed INSERT aborts
+        // the transaction on Postgres, so cleanup + winner lookup must happen after rollback.
+        if (hooks.onOrphan) {
+          try {
+            await hooks.onOrphan(createdDiscordThreadId);
+          } catch (cleanupErr) {
+            console.error('[phoneService] failed to delete orphaned phone thread:', cleanupErr);
           }
-          const [row] = await tx
-            .select()
-            .from(phoneThreads)
-            .where(and(eq(phoneThreads.playerAId, a), eq(phoneThreads.playerBId, b)))
-            .limit(1);
-          return { thread: row ?? null, created: false };
         }
-        throw err;
+        const [row] = await this.db
+          .select()
+          .from(phoneThreads)
+          .where(and(eq(phoneThreads.playerAId, a), eq(phoneThreads.playerBId, b)))
+          .limit(1);
+        return { thread: row ?? null, created: false };
       }
-    });
+      throw err;
+    }
   }
 
   // ----------------------------------------------------------
@@ -948,25 +960,27 @@ export class PhoneService {
       );
     }
 
-    const [target] = await this.db
-      .select()
-      .from(phoneNumbers)
-      .where(eq(phoneNumbers.id, input.targetNumberId))
-      .limit(1);
-    if (!target) {
-      throw new PhoneServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
-    }
-    // M3: a retired number id still resolves through the FK, but a tap on it would silently
-    // never fire (no call routes through an inactive number) while showing live in tap-list.
-    // Refuse it at the boundary rather than create a dead tap.
-    if (!target.isActive) {
-      throw new PhoneServiceError(
-        'invalid_state',
-        'That number has been retired — taps on inactive numbers never fire.',
-      );
-    }
-
     return this.db.transaction(async (tx) => {
+      await lockPhoneKey(tx, 'number', input.targetNumberId);
+      const [target] = await tx
+        .select()
+        .from(phoneNumbers)
+        .where(eq(phoneNumbers.id, input.targetNumberId))
+        .for('update')
+        .limit(1);
+      if (!target) {
+        throw new PhoneServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
+      }
+      // M3: a retired number id still resolves through the FK, but a tap on it would silently
+      // never fire (no call routes through an inactive number) while showing live in tap-list.
+      // Refuse it at the boundary rather than create a dead tap.
+      if (!target.isActive) {
+        throw new PhoneServiceError(
+          'invalid_state',
+          'That number has been retired — taps on inactive numbers never fire.',
+        );
+      }
+
       let row: PhoneTap;
       try {
         [row] = await tx
@@ -1150,19 +1164,18 @@ export class PhoneService {
    * The `actorId` is the tap's creator (we have no other system actor to attribute to).
    */
   async autoRevokeBrokenTap(tapId: string, notes: string): Promise<void> {
-    const [tap] = await this.db.select().from(phoneTaps).where(eq(phoneTaps.id, tapId)).limit(1);
-    if (!tap || !tap.isActive) return;
-    const [target] = await this.db
-      .select({ numberNormalized: phoneNumbers.numberNormalized })
-      .from(phoneNumbers)
-      .where(eq(phoneNumbers.id, tap.targetNumberId))
-      .limit(1);
-
     await this.db.transaction(async (tx) => {
-      await tx
+      const [tap] = await tx
         .update(phoneTaps)
-        .set({ isActive: false, revokedAt: new Date(), revokedById: tap.createdById })
-        .where(eq(phoneTaps.id, tapId));
+        .set({ isActive: false, revokedAt: new Date(), revokedById: sql`${phoneTaps.createdById}` })
+        .where(and(eq(phoneTaps.id, tapId), eq(phoneTaps.isActive, true)))
+        .returning();
+      if (!tap) return;
+      const [target] = await tx
+        .select({ numberNormalized: phoneNumbers.numberNormalized })
+        .from(phoneNumbers)
+        .where(eq(phoneNumbers.id, tap.targetNumberId))
+        .limit(1);
       await tx.insert(phoneTapAuditLog).values({
         tapId,
         actorId: tap.createdById,

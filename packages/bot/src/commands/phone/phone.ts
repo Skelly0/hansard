@@ -10,7 +10,6 @@ import {
 import { eq } from 'drizzle-orm';
 import { players } from '@hansard/db';
 import { db } from '../../db.js';
-import { isStaff } from '../../utils/permissions.js';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import {
   PhoneService,
@@ -374,35 +373,11 @@ function guildsForStaffCheck(interaction: ChatInputCommandInteraction): Iterable
 }
 
 async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<boolean> {
-  // In DM context `interaction.member` is null, so `isStaff(...)` would always refuse. Fall
-  // back to (a) the DB `players.isStaff` flag, and (b) checking whether the invoking user
-  // has any guild role configured via `STAFF_ROLE_IDS`/`STAFF_ROLE_ID`/role named "Staff".
-  // This matches the trust surface of `isStaff(GuildMember)` so a role-only staff member
-  // hitting admin commands from a DM gets the same access as in a guild channel.
-  if (interaction.member) {
-    if (await isStaff(interaction.member)) return true;
-  } else {
-    const [row] = await db
-      .select({ isStaff: players.isStaff })
-      .from(players)
-      .where(eq(players.discordId, interaction.user.id))
-      .limit(1);
-    if (row?.isStaff) return true;
-    // Role-only-staff fallback: walk the configured-or-all guilds, find the invoker as a
-    // GuildMember, and check whether they hold any resolved staff role. When `PHONE_GUILD_ID`
-    // is set we restrict to that one guild so staff trust cannot leak across guilds.
-    for (const guild of guildsForStaffCheck(interaction)) {
-      try {
-        const member = await guild.members.fetch(interaction.user.id).catch(() => null);
-        if (!member) continue;
-        const staffRoleIds = await resolveStaffRoleIds(guild, 'phone:ensureStaff');
-        if (staffRoleIds.length === 0) continue;
-        if (member.roles.cache.some((r) => staffRoleIds.includes(r.id))) return true;
-      } catch (err) {
-        console.error('[phone:cmd] ensureStaff role fallback failed:', err);
-      }
-    }
-  }
+  // Phone admin can run in DMs, so `interaction.member` is not a reliable trust source.
+  // Require the same strict check used for wiretap mirror-users: a DB staff flag AND a live
+  // configured staff role in the configured/all guilds. That prevents stale DB flags from
+  // keeping admin powers after someone leaves staff or leaves the guild.
+  if (await discordUserIsStaff(interaction, interaction.user.id)) return true;
   await interaction.editReply({ embeds: [errorEmbed('Only staff can use phone admin tools.')] });
   return false;
 }
@@ -843,3 +818,4 @@ const command: Command = {
 
 export default command;
 export { validateTapMirrorChannel };
+export const __testables = { ensureStaff, discordUserIsStaff };

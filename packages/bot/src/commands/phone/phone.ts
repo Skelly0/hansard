@@ -47,6 +47,19 @@ function svc(): PhoneService {
   return new PhoneService(db);
 }
 
+/**
+ * Detect a Postgres error meaning the phone tables/columns are not present on this
+ * database — i.e. `migrate:phones` has not been run. `42P01` is undefined_table and
+ * `42703` is undefined_column (a partially-applied migration). Surfacing these
+ * distinctly turns an opaque "something went wrong" into an actionable message, since
+ * every `/phone` subcommand reads `phone_numbers` and fails identically without it.
+ */
+function isPhoneSchemaMissing(err: unknown): boolean {
+  if (!err || typeof err !== 'object' || !('code' in err)) return false;
+  const code = (err as { code: unknown }).code;
+  return code === '42P01' || code === '42703';
+}
+
 // -----------------------------------------------------------------------------
 // register / numbers / delete
 // -----------------------------------------------------------------------------
@@ -811,11 +824,14 @@ const command: Command = {
       }
     } catch (err) {
       console.error(`[phone:cmd] ${group ?? ''} ${sub} uncaught:`, err);
-      await interaction.editReply({ embeds: [errorEmbed('Something went wrong handling that command.')] });
+      const message = isPhoneSchemaMissing(err)
+        ? "The phone system isn't set up on this server yet — its database tables are missing. An admin needs to run `pnpm --filter @hansard/db migrate:phones` before `/phone` will work."
+        : 'Something went wrong handling that command.';
+      await interaction.editReply({ embeds: [errorEmbed(message)] });
     }
   },
 };
 
 export default command;
 export { validateTapMirrorChannel };
-export const __testables = { ensureStaff, discordUserIsStaff };
+export const __testables = { ensureStaff, discordUserIsStaff, isPhoneSchemaMissing };

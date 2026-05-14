@@ -15,6 +15,10 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { bills, billStatusLog, players } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
+import {
+  registerAwaitingInteraction,
+  unregisterAwaitingInteraction,
+} from '../../utils/awaitingInteractions.js';
 import type { Command } from '../../client.js';
 import { SHORT_BILL_TEXT_MAX_LENGTH } from './display.js';
 import { extractDocId } from './shared.js';
@@ -62,15 +66,6 @@ async function uniqueBillSlug(title: string): Promise<string> {
     finalSlug = `${baseSlug}-${counter}`;
     counter++;
   }
-}
-
-async function logSubmittedBill(billId: string, playerId: string): Promise<void> {
-  await db.insert(billStatusLog).values({
-    billId,
-    fromStatus: null,
-    toStatus: 'submitted',
-    changedById: playerId,
-  });
 }
 
 function parseModalMetadata(modalSubmit: ModalSubmitInteraction) {
@@ -129,7 +124,12 @@ const command: Command = {
       fetchReply: true,
     });
 
+    const googleDocButtonId = `bill_submit_type:${interaction.user.id}:google_doc`;
+    const shortButtonId = `bill_submit_type:${interaction.user.id}:short`;
+
     let typeInteraction: ButtonInteraction;
+    registerAwaitingInteraction(googleDocButtonId);
+    registerAwaitingInteraction(shortButtonId);
     try {
       typeInteraction = await chooser.awaitMessageComponent({
         componentType: ComponentType.Button,
@@ -144,6 +144,9 @@ const command: Command = {
         components: [],
       });
       return;
+    } finally {
+      unregisterAwaitingInteraction(googleDocButtonId);
+      unregisterAwaitingInteraction(shortButtonId);
     }
 
     const submissionType: BillSubmissionType = typeInteraction.customId.endsWith(':short')
@@ -220,6 +223,7 @@ const command: Command = {
 
     // Wait for modal submission
     let modalSubmit: ModalSubmitInteraction;
+    registerAwaitingInteraction(modalId);
     try {
       modalSubmit = await typeInteraction.awaitModalSubmit({
         filter: (i) => i.customId === modalId && i.user.id === interaction.user.id,
@@ -227,9 +231,11 @@ const command: Command = {
       });
     } catch {
       return; // Modal timed out
+    } finally {
+      unregisterAwaitingInteraction(modalId);
     }
 
-    await modalSubmit.deferReply();
+    await modalSubmit.deferReply({ ephemeral: true });
 
     const { summary, tags, policyAreas } = parseModalMetadata(modalSubmit);
     const googleDocUrl = isShortBill ? null : modalSubmit.fields.getTextInputValue('google_doc_url').trim();
@@ -264,31 +270,43 @@ const command: Command = {
       const finalSlug = await uniqueBillSlug(title);
       const now = new Date();
 
-      // Insert the bill
-      const [bill] = await db
-        .insert(bills)
-        .values({
-          title,
-          slug: finalSlug,
-          billType: isShortBill ? 'short' : 'google_doc',
-          googleDocUrl,
-          googleDocId: docId,
-          cachedContent: isShortBill ? shortBillText : null,
-          cachedAt: isShortBill ? now : null,
-          summary,
-          authorId: player.id,
-          submittedById: player.id,
-          status: 'submitted',
-          tags,
-          policyAreas,
-          coSponsorIds: [],
-        })
-        .returning({
-          id: bills.id,
-          billNumber: bills.billNumber,
+      // Bill insert + status-log insert must be atomic: if the audit row
+      // fails to write, the bill row should not be persisted (otherwise
+      // the user sees a "Failed to submit" error even though the bill
+      // exists, with no `submitted` audit entry).
+      const bill = await db.transaction(async (tx) => {
+        const [inserted] = await tx
+          .insert(bills)
+          .values({
+            title,
+            slug: finalSlug,
+            billType: isShortBill ? 'short' : 'google_doc',
+            googleDocUrl,
+            googleDocId: docId,
+            cachedContent: isShortBill ? shortBillText : null,
+            cachedAt: isShortBill ? now : null,
+            summary,
+            authorId: player.id,
+            submittedById: player.id,
+            status: 'submitted',
+            tags,
+            policyAreas,
+            coSponsorIds: [],
+          })
+          .returning({
+            id: bills.id,
+            billNumber: bills.billNumber,
+          });
+
+        await tx.insert(billStatusLog).values({
+          billId: inserted.id,
+          fromStatus: null,
+          toStatus: 'submitted',
+          changedById: player.id,
         });
 
-      await logSubmittedBill(bill.id, player.id);
+        return inserted;
+      });
 
       const embed = successEmbed(
         isShortBill ? 'Short Bill Submitted' : 'Bill Submitted',

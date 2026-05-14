@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getVoters, listBills } from './billService';
+import { createVoteOnBill, getVoters, listBills } from './billService';
 
 const baseDate = new Date('2026-01-01T00:00:00.000Z');
 
@@ -207,5 +207,66 @@ describe('getVoters', () => {
 
     expect(result?.playerVotes).toEqual([]);
     expect(db.innerJoin).not.toHaveBeenCalled();
+  });
+});
+
+describe('createVoteOnBill transactional safety', () => {
+  it('rolls back the election insert and bill update when the status log insert fails', async () => {
+    const billLimit = vi.fn().mockResolvedValue([{
+      id: 'bill-1',
+      title: 'Transit Reform Act',
+      slug: 'transit-reform-act',
+      summary: 'A reform',
+      billNumber: 1,
+      status: 'submitted',
+    }]);
+    const billWhere = vi.fn().mockReturnValue({ limit: billLimit });
+    const billFrom = vi.fn().mockReturnValue({ where: billWhere });
+
+    const select = vi.fn().mockReturnValue({ from: billFrom });
+
+    // tx mocks: election insert + bill update succeed, status log insert throws.
+    const electionInsertReturning = vi.fn().mockResolvedValue([{ id: 'election-1' }]);
+    const billUpdateReturning = vi.fn().mockResolvedValue([{
+      id: 'bill-1',
+      title: 'Transit Reform Act',
+      slug: 'transit-reform-act',
+      status: 'voting',
+    }]);
+    const statusLogValues = vi.fn().mockRejectedValue(new Error('status log insert failed'));
+
+    const insert = vi.fn(() => {
+      // First insert is the elections row; second is the bill_status_log row.
+      if (insert.mock.calls.length === 1) {
+        return { values: vi.fn().mockReturnValue({ returning: electionInsertReturning }) };
+      }
+      return { values: statusLogValues };
+    });
+
+    const update = vi.fn().mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ returning: billUpdateReturning }),
+      }),
+    });
+
+    const tx = { insert, update };
+    const transaction = vi.fn(async (fn: (tx: any) => any) => fn(tx));
+
+    const topLevelInsert = vi.fn();
+    const topLevelUpdate = vi.fn();
+
+    const db: any = {
+      select,
+      insert: topLevelInsert,
+      update: topLevelUpdate,
+      transaction,
+    };
+
+    await expect(createVoteOnBill(db, 'transit-reform-act', 'creator-player'))
+      .rejects.toThrow('status log insert failed');
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(topLevelInsert).not.toHaveBeenCalled();
+    expect(topLevelUpdate).not.toHaveBeenCalled();
   });
 });

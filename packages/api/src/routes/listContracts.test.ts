@@ -8,6 +8,7 @@ import ticketRoutes from './tickets';
 
 const mocks = vi.hoisted(() => ({
   listBills: vi.fn(),
+  searchBills: vi.fn(),
   listDocuments: vi.fn(),
   getPlayer: vi.fn(),
   getPlayerEvents: vi.fn(),
@@ -45,7 +46,7 @@ vi.mock('../services/billService.js', () => ({
   getBill: vi.fn(),
   getBillByNumber: vi.fn(),
   listBills: mocks.listBills,
-  searchBills: vi.fn(),
+  searchBills: mocks.searchBills,
   updateBill: vi.fn(),
   updateEffects: vi.fn(),
   createVoteOnBill: vi.fn(),
@@ -129,6 +130,7 @@ describe('list route response contracts', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listBills.mockResolvedValue({ bills: [{ id: 'b1' }], total: 1 });
+    mocks.searchBills.mockResolvedValue({ bills: [{ id: 'b1' }], total: 1 });
     mocks.listDocuments.mockResolvedValue({ documents: [{ id: 'd1' }], total: 1 });
     mocks.getPlayer.mockResolvedValue({ id: 'p1', characterName: 'Ada' });
     mocks.getPlayerEvents.mockResolvedValue([{ id: 'e1' }]);
@@ -158,6 +160,15 @@ describe('list route response contracts', () => {
       limit: 20,
       offset: 40,
     }));
+  });
+
+  it('returns bill search as { data, total }', async () => {
+    const app = await appWith(billRoutes);
+    const res = await app.inject('/api/bills/search?q=tax&limit=10&offset=20');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ data: [{ id: 'b1' }], total: 1 });
+    expect(mocks.searchBills).toHaveBeenCalledWith(expect.anything(), 'tax', 10, 20);
   });
 
   it('returns documents as { data, total } and passes list query filters through', async () => {

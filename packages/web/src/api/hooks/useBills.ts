@@ -158,7 +158,12 @@ export function useBillVoters(slug?: string) {
 export function useSearchBills(query?: string) {
   return useQuery({
     queryKey: ['bills', 'search', query],
-    queryFn: () => api.get<Bill[]>(`/bills/search?q=${encodeURIComponent(query || '')}`),
+    queryFn: async () => {
+      const response = await api.get<{ data: Bill[]; total: number }>(
+        `/bills/search?q=${encodeURIComponent(query || '')}`,
+      );
+      return response.data;
+    },
     enabled: !!query && query.length > 1,
   });
 }

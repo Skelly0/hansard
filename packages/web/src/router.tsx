@@ -24,12 +24,10 @@ import { Graveyard } from './pages/Graveyard';
 import { Favours } from './pages/Favours';
 import { Simulation } from './pages/Simulation';
 
+// Bare root — does NOT mount the app Shell, so unauthenticated routes
+// (e.g. /login) get a clean full-screen layout without the sidebar.
 const rootRoute = createRootRoute({
-  component: () => (
-    <Shell>
-      <Outlet />
-    </Shell>
-  ),
+  component: () => <Outlet />,
 });
 
 // /login is the only unauthenticated route
@@ -39,13 +37,17 @@ const loginRoute = createRoute({
   component: Login,
 });
 
-// Layout route applying RouteGuard to all protected pages
+// Layout route applying RouteGuard + the app Shell (sidebar/main) to all
+// protected pages. Shell lives here — not on the root — so logged-out users
+// never see the sidebar squeezed next to the login card.
 const protectedLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'protected',
   component: () => (
     <RouteGuard>
-      <Outlet />
+      <Shell>
+        <Outlet />
+      </Shell>
     </RouteGuard>
   ),
 });

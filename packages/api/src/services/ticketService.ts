@@ -332,6 +332,21 @@ export class TicketService {
 
     if (!current) return null;
 
+    if (
+      updates.assignedToId !== undefined
+      && updates.assignedToId !== null
+      && updates.assignedToId !== current.assignedToId
+    ) {
+      const [target] = await this.db
+        .select()
+        .from(players)
+        .where(eq(players.id, updates.assignedToId))
+        .limit(1);
+      if (!target || !(target as { isStaff?: boolean }).isStaff) {
+        throw new TicketAssigneeNotStaffError();
+      }
+    }
+
     const setValues: Record<string, unknown> = { updatedAt: new Date() };
     const auditEntries: { action: string; oldValue: unknown; newValue: unknown }[] = [];
 

@@ -159,3 +159,126 @@ describe('TicketService.assignTicket staff guard', () => {
     expect(insert).not.toHaveBeenCalled();
   });
 });
+
+describe('TicketService.updateTicket staff-assignee guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Build a db harness where each select() call returns one queued row set.
+  function queueDb(queue: unknown[][]) {
+    const pending = [...queue];
+    const limit = vi.fn().mockImplementation(() => Promise.resolve(pending.shift() ?? []));
+    const where = vi.fn().mockReturnValue({ limit });
+    const from = vi.fn().mockReturnValue({ where });
+    const select = vi.fn().mockReturnValue({ from });
+
+    const updateWhereReturning = vi.fn().mockImplementation(() => Promise.resolve([{
+      id: 'ticket-a',
+      assignedToId: 'non-staff-player',
+    }]));
+    const updateWhere = vi.fn().mockImplementation((..._args: unknown[]) => ({
+      returning: updateWhereReturning,
+      then: (resolve: any) => resolve(undefined),
+    }));
+    const set = vi.fn().mockReturnValue({ where: updateWhere });
+    const update = vi.fn().mockReturnValue({ set });
+
+    const insertValues = vi.fn().mockResolvedValue(undefined);
+    const insert = vi.fn().mockReturnValue({ values: insertValues });
+
+    return { db: { select, update, insert }, update, insert };
+  }
+
+  it('rejects updateTicket when assignedToId targets a non-staff player', async () => {
+    // Two select calls happen before validation: 1) ticket row, 2) player row.
+    // Order in our implementation: load current ticket first, then look up the
+    // player when assignedToId is set; both before any DB write.
+    const currentTicket = {
+      id: 'ticket-a',
+      assignedToId: null,
+      status: 'open',
+      priority: 'normal',
+      tags: [],
+      title: 't',
+      description: 'd',
+      discordThreadId: null,
+    };
+    const nonStaffPlayer = { id: 'non-staff-player', isStaff: false };
+
+    const { db, update, insert } = queueDb([
+      [currentTicket], // initial ticket fetch in updateTicket
+      [nonStaffPlayer], // assignee lookup
+    ]);
+
+    const service = new TicketService(db as any);
+
+    await expect(
+      service.updateTicket(
+        'ticket-a',
+        { assignedToId: 'non-staff-player' },
+        'staff-actor',
+      ),
+    ).rejects.toBeInstanceOf(TicketAssigneeNotStaffError);
+
+    // No ticket UPDATE should have happened.
+    expect(update).not.toHaveBeenCalled();
+    // No audit row inserted.
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('rejects updateTicket when assignedToId references a player that does not exist', async () => {
+    const currentTicket = {
+      id: 'ticket-a',
+      assignedToId: null,
+      status: 'open',
+      priority: 'normal',
+      tags: [],
+      title: 't',
+      description: 'd',
+      discordThreadId: null,
+    };
+
+    const { db, update, insert } = queueDb([
+      [currentTicket],
+      [], // assignee lookup returns no rows
+    ]);
+
+    const service = new TicketService(db as any);
+
+    await expect(
+      service.updateTicket(
+        'ticket-a',
+        { assignedToId: 'ghost-player' },
+        'staff-actor',
+      ),
+    ).rejects.toBeInstanceOf(TicketAssigneeNotStaffError);
+
+    expect(update).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('allows clearing assignedToId (null) without a staff lookup', async () => {
+    const currentTicket = {
+      id: 'ticket-a',
+      assignedToId: 'prev-assignee',
+      status: 'in_progress',
+      priority: 'normal',
+      tags: [],
+      title: 't',
+      description: 'd',
+      discordThreadId: null,
+    };
+
+    const { db } = queueDb([[currentTicket]]);
+    const service = new TicketService(db as any);
+
+    await expect(
+      service.updateTicket(
+        'ticket-a',
+        { assignedToId: null },
+        'staff-actor',
+      ),
+    ).resolves.toBeTruthy();
+  });
+});

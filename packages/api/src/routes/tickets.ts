@@ -242,11 +242,19 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       if (body.description !== undefined) updates.description = body.description;
       if (wantsDiscordThreadEdit) updates.discordThreadId = body.discordThreadId ?? null;
 
-      const updated = await ticketService.updateTicket(
-        request.params.id,
-        updates,
-        user.id,
-      );
+      let updated;
+      try {
+        updated = await ticketService.updateTicket(
+          request.params.id,
+          updates,
+          user.id,
+        );
+      } catch (err) {
+        if (err instanceof TicketAssigneeNotStaffError) {
+          return reply.status(400).send({ error: err.message });
+        }
+        throw err;
+      }
 
       if (!updated) {
         return reply.status(404).send({ error: 'Ticket not found' });

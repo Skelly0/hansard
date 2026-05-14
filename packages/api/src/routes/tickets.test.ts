@@ -15,8 +15,8 @@ const serviceMocks = vi.hoisted(() => ({
 
 const errorStubs = vi.hoisted(() => {
   class TicketAssigneeNotStaffErrorStub extends Error {
-    constructor() {
-      super('Assignee must be staff');
+    constructor(message = 'Assignee must be staff') {
+      super(message);
       this.name = 'TicketAssigneeNotStaffError';
     }
   }
@@ -99,5 +99,32 @@ describe('ticket routes', () => {
       'non-staff-player',
       'creator-player',
     );
+  });
+
+  it('rejects PATCH with assignedToId targeting a non-staff player as 400 from staff caller', async () => {
+    auth.userId = 'staff-player';
+    auth.isStaff = true;
+    serviceMocks.getTicket.mockResolvedValue({
+      id: 'ticket-1',
+      createdById: 'creator-player',
+      assignedToId: null,
+    });
+    serviceMocks.updateTicket.mockRejectedValue(
+      new errorStubs.TicketAssigneeNotStaffErrorStub('Cannot assign ticket to a non-staff player'),
+    );
+
+    const app = await appWithDb();
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/tickets/ticket-1',
+      payload: {
+        assignedToId: 'non-staff-uuid',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toContain('non-staff');
   });
 });

@@ -8,6 +8,7 @@ import { db } from '../../db.js';
 import { simulationClock, players, timeAdvanceLog } from '@hansard/db';
 import { advanceTime, previewAdvance } from '@hansard/api/services/simulationService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { isStaff } from '../../utils/permissions.js';
 import { postObituaryToGraveyard, type GraveyardPostResult } from '../../utils/graveyard.js';
 import { postGameEventsEmbed, type GameEventsPostResult } from '../../utils/gameEventsChannel.js';
 import type { Command } from '../../client.js';
@@ -165,7 +166,7 @@ const command: Command = {
             .setMaxValue(25)
             .setRequired(false),
         ),
-    ) as unknown as SlashCommandBuilder,
+    ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const sub = interaction.options.getSubcommand();
@@ -190,7 +191,6 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
     return;
   }
   const member = await interaction.guild.members.fetch(interaction.user.id);
-  const { isStaff } = await import('../../utils/permissions.js');
   if (!(await isStaff(member))) {
     await interaction.editReply({
       embeds: [errorEmbed('You do not have permission to view simulation history.')],

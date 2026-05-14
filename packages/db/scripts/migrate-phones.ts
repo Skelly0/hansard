@@ -106,6 +106,8 @@ const statements: string[] = [
   `ALTER TABLE "phone_calls" ADD COLUMN IF NOT EXISTS "force_ended_by_id" uuid REFERENCES "players"("id");`,
   // Only re-issue the ALTER COLUMN TYPE on legacy deployments where the column is not yet
   // varchar(80). Skipping the AccessExclusiveLock on healthy schemas keeps re-runs cheap.
+  // The USING cast mirrors the parallel `error`-column ALTER below: if a legacy row already
+  // exceeds 80 chars the implicit cast would abort the migration, so truncate explicitly.
   `DO $$ BEGIN
     IF EXISTS (
       SELECT 1 FROM information_schema.columns
@@ -113,7 +115,7 @@ const statements: string[] = [
         AND column_name = 'ended_reason'
         AND (character_maximum_length IS NULL OR character_maximum_length <> 80)
     ) THEN
-      ALTER TABLE "phone_calls" ALTER COLUMN "ended_reason" TYPE varchar(80);
+      ALTER TABLE "phone_calls" ALTER COLUMN "ended_reason" TYPE varchar(80) USING substr("ended_reason", 1, 80);
     END IF;
   END $$;`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "phone_calls_one_open_caller"
@@ -130,6 +132,10 @@ const statements: string[] = [
   `CREATE INDEX IF NOT EXISTS "phone_calls_active_started_idx"
     ON "phone_calls" ("started_at")
     WHERE status = 'active';`,
+  // Index for the ring-timeout worker — only scans ringing rows, ordered by ring_expires_at.
+  `CREATE INDEX IF NOT EXISTS "phone_calls_ring_timeout_idx"
+    ON "phone_calls" ("ring_expires_at")
+    WHERE status = 'ringing';`,
 
   // === phone_messages ===
   `CREATE TABLE IF NOT EXISTS "phone_messages" (
@@ -140,8 +146,23 @@ const statements: string[] = [
     "sender_discord_message_id" varchar(20),
     "recipient_discord_message_id" varchar(20),
     "staff_mirror_message_id" varchar(20),
-    "created_at" timestamptz NOT NULL DEFAULT now()
+    "created_at" timestamptz NOT NULL DEFAULT now(),
+    "sequence_no" bigserial NOT NULL
   );`,
+  // `sequence_no` is the monotonic transcript tiebreaker — `created_at` alone is
+  // millisecond-resolution and ties sort non-deterministically. For legacy deployments that
+  // predate this column, add it as bigserial: Postgres creates the owned sequence and
+  // backfills every existing row with a strictly-increasing value. Idempotent — skipped if
+  // the column already exists. `bigserial` is `bigint NOT NULL DEFAULT nextval(...)`, so the
+  // ADD COLUMN is rewrite-safe (every existing row gets a value).
+  `DO $$ BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'phone_messages' AND column_name = 'sequence_no'
+    ) THEN
+      ALTER TABLE "phone_messages" ADD COLUMN "sequence_no" bigserial NOT NULL;
+    END IF;
+  END $$;`,
   `CREATE INDEX IF NOT EXISTS "phone_messages_call_idx"
     ON "phone_messages" ("call_id", "created_at");`,
   `CREATE INDEX IF NOT EXISTS "phone_messages_pending_delivery_idx"
@@ -168,6 +189,11 @@ const statements: string[] = [
   END $$;`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "phone_threads_pair_unique"
     ON "phone_threads" ("player_a_id", "player_b_id");`,
+  // One DB row per Discord thread id. Backstops the find/create/persist race: if two relays
+  // both create a Discord thread for the same pair, the second INSERT trips this unique index
+  // and the loser deletes its just-created orphan thread.
+  `CREATE UNIQUE INDEX IF NOT EXISTS "phone_threads_discord_thread_unique"
+    ON "phone_threads" ("discord_thread_id");`,
 
   // === phone_taps ===
   `CREATE TABLE IF NOT EXISTS "phone_taps" (
@@ -197,6 +223,26 @@ const statements: string[] = [
     END IF;
   END $$;`,
   `CREATE INDEX IF NOT EXISTS "phone_taps_active_number_idx"
+    ON "phone_taps" ("target_number_id")
+    WHERE is_active = true;`,
+  // Before adding the active-target unique index, retire any pre-existing duplicate active
+  // taps on the same number — keep the newest, deactivate the rest — so `CREATE UNIQUE INDEX`
+  // does not abort on legacy data. Skipped (no rows updated) once the invariant holds, so
+  // re-runs are no-ops.
+  `UPDATE "phone_taps" t
+     SET "is_active" = false,
+         "revoked_at" = COALESCE(t."revoked_at", now())
+   WHERE t."is_active" = true
+     AND EXISTS (
+       SELECT 1 FROM "phone_taps" newer
+       WHERE newer."target_number_id" = t."target_number_id"
+         AND newer."is_active" = true
+         AND (newer."created_at" > t."created_at"
+              OR (newer."created_at" = t."created_at" AND newer."id" > t."id"))
+     );`,
+  // At most one active tap per target number. Without this, two staff tapping the same number
+  // produce two active rows and every message mirrors once per duplicate tap.
+  `CREATE UNIQUE INDEX IF NOT EXISTS "phone_taps_active_target_unique"
     ON "phone_taps" ("target_number_id")
     WHERE is_active = true;`,
   // Drop redundant index — the original `phone_taps_consecutive_failure_idx` on (id) WHERE
@@ -234,16 +280,47 @@ const statements: string[] = [
       ALTER TABLE "phone_tap_audit_log" DROP COLUMN "mirror_user_id";
     END IF;
   END $$;`,
-  `DO $$ BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_constraint
-      WHERE conname = 'phone_tap_audit_log_action_check'
-        AND conrelid = '"phone_tap_audit_log"'::regclass
-    )
-    THEN ALTER TABLE "phone_tap_audit_log" ADD CONSTRAINT "phone_tap_audit_log_action_check"
-      CHECK (action IN ('created','revoked','orphaned_target_deactivated')) NOT VALID;
+  // Action enum includes `number_deactivated` — written when deactivating a number
+  // auto-revokes its taps. Legacy deployments may already carry the constraint with the
+  // narrower 3-value enum; drop and re-add (NOT VALID) so the new value is permitted. The
+  // re-add is conditional on the current definition lacking `number_deactivated`, so a
+  // healthy schema is a true no-op.
+  `DO $$
+  DECLARE
+    cur_def text;
+  BEGIN
+    SELECT pg_get_constraintdef(c.oid) INTO cur_def
+    FROM pg_constraint c
+    WHERE c.conname = 'phone_tap_audit_log_action_check'
+      AND c.conrelid = '"phone_tap_audit_log"'::regclass;
+    IF cur_def IS NULL THEN
+      ALTER TABLE "phone_tap_audit_log" ADD CONSTRAINT "phone_tap_audit_log_action_check"
+        CHECK (action IN ('created','revoked','orphaned_target_deactivated','number_deactivated')) NOT VALID;
+    ELSIF cur_def NOT LIKE '%number_deactivated%' THEN
+      ALTER TABLE "phone_tap_audit_log" DROP CONSTRAINT "phone_tap_audit_log_action_check";
+      ALTER TABLE "phone_tap_audit_log" ADD CONSTRAINT "phone_tap_audit_log_action_check"
+        CHECK (action IN ('created','revoked','orphaned_target_deactivated','number_deactivated')) NOT VALID;
     END IF;
   END $$;`,
+  // Staff "history of this tap" inspections read every audit row for one tap in time order.
+  `CREATE INDEX IF NOT EXISTS "phone_tap_audit_log_tap_created_idx"
+    ON "phone_tap_audit_log" ("tap_id", "created_at");`,
+  // Defense-in-depth for the rogue-staff threat model: the audit log is append-only. A
+  // BEFORE UPDATE OR DELETE trigger raises so even a compromised app role (or a stray
+  // service-layer bug) cannot rewrite or erase audit history. Trigger approach chosen over
+  // REVOKE because it needs no knowledge of the deployment's app role name. Idempotent:
+  // CREATE OR REPLACE the function, drop+recreate the trigger.
+  `CREATE OR REPLACE FUNCTION "phone_tap_audit_log_immutable"()
+   RETURNS trigger AS $$
+   BEGIN
+     RAISE EXCEPTION 'phone_tap_audit_log is append-only: % is not permitted', TG_OP
+       USING ERRCODE = 'restrict_violation';
+   END;
+   $$ LANGUAGE plpgsql;`,
+  `DROP TRIGGER IF EXISTS "phone_tap_audit_log_no_mutate" ON "phone_tap_audit_log";`,
+  `CREATE TRIGGER "phone_tap_audit_log_no_mutate"
+     BEFORE UPDATE OR DELETE ON "phone_tap_audit_log"
+     FOR EACH ROW EXECUTE FUNCTION "phone_tap_audit_log_immutable"();`,
 
   // === phone_message_tap_deliveries ===
   // `error` is bounded to varchar(500) — Discord stack traces can run multiple KB and we don't

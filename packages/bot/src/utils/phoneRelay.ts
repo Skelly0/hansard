@@ -12,6 +12,7 @@ import {
   PhoneService,
   type PhoneCall,
   type PhoneMessage,
+  type PhoneMessageTapDelivery,
   type PhoneNumber,
   type PhoneTap,
 } from '@hansard/api/services/phoneService';
@@ -20,6 +21,7 @@ import { validateTapMirrorChannel } from './tapMirrorChannel.js';
 import {
   PHONE_FORCE_END_REASON_PREFIX,
   PHONE_TAP_FAILURE_THRESHOLD,
+  PHONE_DM_CHUNK_BUDGET,
   formatPhoneEndedReason,
 } from '@hansard/shared';
 
@@ -33,7 +35,7 @@ const ENDED_PALETTE = 0x9c9890;
 const TAP_PALETTE = 0xc25b4e;
 
 /** Discord DM content cap is 2000; budget for the "+number:" prefix leaves us ~1900 safe. */
-const DM_CONTENT_BUDGET = 1900;
+const DM_CONTENT_BUDGET = PHONE_DM_CHUNK_BUDGET;
 /** Embed description cap is 4096; leave room for the source prefix and footer. */
 const EMBED_DESC_BUDGET = 4000;
 
@@ -71,6 +73,16 @@ function chunkText(text: string, budget: number): string[] {
     let cut = remaining.lastIndexOf('\n', budget);
     if (cut < budget * 0.6) cut = remaining.lastIndexOf(' ', budget);
     if (cut < budget * 0.6) cut = budget;
+    // H3: `slice` operates on UTF-16 code units. A 4-byte emoji (or any astral-plane
+    // codepoint) is a surrogate pair; cutting between its halves renders both sides as `?`.
+    // If `cut` lands on a low surrogate (0xDC00–0xDFFF), the high surrogate is the unit
+    // before it — back up by one so the whole pair moves to the next chunk intact. The
+    // newline/space branches can also land here if the boundary char itself sits right
+    // after a surrogate pair, so guard unconditionally.
+    if (cut > 0 && cut < remaining.length) {
+      const code = remaining.charCodeAt(cut);
+      if (code >= 0xdc00 && code <= 0xdfff) cut -= 1;
+    }
     chunks.push(remaining.slice(0, cut).trimEnd());
     remaining = remaining.slice(cut).trimStart();
   }
@@ -104,14 +116,23 @@ async function fetchPhoneLogChannel(client: Client): Promise<TextChannel | null>
   }
 }
 
-// Per-pair mutex preventing two simultaneous first-messages from each creating a Discord thread.
-// Keyed by `${minPlayerId}:${maxPlayerId}`. Cleared after the thread is created (success or fail).
+// Per-pair in-memory mutex — a cheap same-process short-circuit so two concurrent
+// first-messages in *this* process don't both enter the create path before the DB advisory
+// lock even gets a chance. The real cross-process/cross-shard safety comes from
+// `PhoneService.findOrCreateThread`'s `pg_advisory_xact_lock`; this Map is just an
+// optimization. Keyed by `${minPlayerId}:${maxPlayerId}`.
 const threadCreateLocks = new Map<string, Promise<ThreadChannel | null>>();
 
 /**
  * Look up or create the per-pair private thread that staff use to oversee all calls
- * between the same two players. Reused across multiple calls. Per-pair in-memory mutex
- * prevents concurrent first-message races from orphaning a Discord thread.
+ * between the same two players. Reused across multiple calls.
+ *
+ * H5: thread creation goes through `PhoneService.findOrCreateThread`, which wraps
+ * find → create → persist in a transaction holding a `pg_advisory_xact_lock` on the sorted
+ * pair key. That serializes the create section cluster-wide, so a bot restart or a
+ * multi-shard deployment can't have two relays both create a Discord thread. If this relay
+ * still loses a persist race (unique violation on the pair or discord_thread_id index), the
+ * `onOrphan` hook deletes the Discord thread we just created so it isn't left dangling.
  */
 export async function ensurePhoneThread(
   client: Client,
@@ -141,7 +162,7 @@ export async function ensurePhoneThread(
   const inflight = threadCreateLocks.get(lockKey);
   if (inflight) return inflight;
 
-  const created = (async () => {
+  const created = (async (): Promise<ThreadChannel | null> => {
     const channel = await fetchPhoneLogChannel(client);
     if (!channel) {
       console.warn('[phone:relay] PHONE_LOG_CHANNEL_ID not configured — no staff mirror created');
@@ -158,23 +179,63 @@ export async function ensurePhoneThread(
     const recipientName = participants.recipientPlayer.characterName ?? 'Unknown';
     const threadName = `\u{260E} ${callerName} \u{2194} ${recipientName}`.slice(0, 95);
 
-    let thread: ThreadChannel;
-    try {
-      thread = await channel.threads.create({
-        name: threadName,
-        type: ChannelType.PrivateThread,
-        invitable: false,
-        autoArchiveDuration: 1440,
-        reason: `Phone log for ${callerName} and ${recipientName}`,
-      });
-    } catch (err) {
-      console.error('[phone:relay] failed to create phone thread:', err);
-      return null;
+    // The created thread is captured here so a lost persist race can return it (already
+    // fetched + valid) or, if we orphaned it, the `onOrphan` hook can delete it.
+    let createdThread: ThreadChannel | null = null;
+
+    const { thread: row, created: didCreate } = await svc.findOrCreateThread(
+      participants.callerPlayer.id,
+      participants.recipientPlayer.id,
+      {
+        createThread: async () => {
+          try {
+            createdThread = await channel.threads.create({
+              name: threadName,
+              type: ChannelType.PrivateThread,
+              invitable: false,
+              autoArchiveDuration: 1440,
+              reason: `Phone log for ${callerName} and ${recipientName}`,
+            });
+            return createdThread.id;
+          } catch (err) {
+            console.error('[phone:relay] failed to create phone thread:', err);
+            return null;
+          }
+        },
+        onOrphan: async (discordThreadId) => {
+          // We lost the persist race — another relay's row won. Delete the thread we just
+          // created so it isn't left as a dangling private thread nobody references.
+          try {
+            const orphan = await client.channels.fetch(discordThreadId);
+            if (orphan && 'delete' in orphan && typeof (orphan as { delete?: unknown }).delete === 'function') {
+              await (orphan as ThreadChannel).delete('Orphaned phone thread — lost persist race');
+            }
+          } catch (err) {
+            console.error('[phone:relay] failed to delete orphaned phone thread:', err);
+          }
+        },
+      },
+    );
+
+    if (!row) return null;
+
+    if (didCreate && createdThread) {
+      // We won — finish wiring up the brand-new thread.
+      await sendStaffJoinPing(createdThread, guild, callerName, recipientName);
+      return createdThread;
     }
 
-    await svc.persistThread(pair, thread.id);
-    await sendStaffJoinPing(thread, guild, callerName, recipientName);
-    return thread;
+    // Either a row already existed, or we lost the race and our thread was orphan-deleted.
+    // Resolve the winning row's Discord thread.
+    try {
+      const fetched = await client.channels.fetch(row.discordThreadId);
+      if (fetched && (fetched.type === ChannelType.PrivateThread || fetched.type === ChannelType.PublicThread)) {
+        return fetched as ThreadChannel;
+      }
+    } catch (err) {
+      console.error('[phone:relay] failed to fetch winning phone thread after race:', err);
+    }
+    return null;
   })().finally(() => {
     threadCreateLocks.delete(lockKey);
   });
@@ -257,14 +318,21 @@ interface RelayContext {
  * and fan out to active taps. Throws `RecipientDmClosedError` if the recipient's DM channel is
  * closed (50007) so the caller can end the call and surface the failure.
  *
- * `message` is the already-persisted `phone_messages` row from `recordMessage`.
+ * `recorded` is the `RecordedMessage` from `PhoneService.recordMessage` — `recorded.message`
+ * is the persisted transcript row, and `recorded.tapDeliveries` are the **placeholder**
+ * `phone_message_tap_deliveries` rows the service pre-created inside the message-insert
+ * transaction (H1). The relay does NOT discover taps itself anymore; it fills in each
+ * pre-created placeholder with the Discord send result via `completeTapDelivery`. This keeps
+ * the invariant "every tap delivery for an active tap has a row" true even if the relay
+ * crashes between the message commit and the Discord send.
  */
 export async function relayMessage(
   client: Client,
   context: RelayContext,
-  message: PhoneMessage,
+  recorded: { message: PhoneMessage; tapDeliveries: PhoneMessageTapDelivery[] },
   senderIsCaller: boolean,
 ): Promise<void> {
+  const { message, tapDeliveries } = recorded;
   const svc = new PhoneService(db);
   const sender = senderIsCaller ? context.callerPlayer : context.recipientPlayer;
   const recipient = senderIsCaller ? context.recipientPlayer : context.callerPlayer;
@@ -292,17 +360,29 @@ export async function relayMessage(
     staffMirrorMessageId: staffMirrorId,
   });
 
-  const taps = await svc.getActiveTapsForNumbers([context.callerNumber.id, context.recipientNumber.id]);
-  if (taps.length === 0) {
+  if (tapDeliveries.length === 0) {
     if (recipientDeliveryError) throw recipientDeliveryError;
     return;
   }
 
+  // Resolve the tap config for each pre-created placeholder. The placeholders were snapshotted
+  // inside `recordMessage`'s transaction; a tap revoked since then is filtered by the
+  // `isTapActive` re-check in `deliverTapCopy`.
+  const tapRows = await svc.getActiveTapsForNumbers([context.callerNumber.id, context.recipientNumber.id]);
+  const tapById = new Map(tapRows.map((t) => [t.id, t]));
+
   // Sequence tap fanout instead of Promise.all to avoid a Discord global-50-msgs/s spike
   // when a single message routes to many taps. Each tap is independent — at most one tap
   // mirror channel + one tap user DM per tap.
-  for (const tap of taps) {
-    await deliverTapCopy(client, svc, tap, context, sender, senderNumber, message);
+  for (const delivery of tapDeliveries) {
+    const tap = tapById.get(delivery.tapId);
+    if (!tap) {
+      // Tap was revoked between the recordMessage snapshot and now — mark the placeholder
+      // resolved with a note rather than leaving it pending forever.
+      await svc.completeTapDelivery(delivery.id, { error: 'tap revoked before delivery' });
+      continue;
+    }
+    await deliverTapCopy(client, svc, tap, delivery.id, context, sender, senderNumber, message);
     // Circuit breaker: if the last N attempts for this tap all errored, auto-revoke it so
     // we stop spamming Discord with re-attempts and surface the failure in the audit log.
     try {
@@ -387,16 +467,18 @@ async function deliverTapCopy(
   client: Client,
   svc: PhoneService,
   tap: PhoneTap,
+  deliveryId: string,
   context: RelayContext,
   sender: { id: string; characterName: string | null },
   senderNumber: PhoneNumber,
   message: PhoneMessage,
 ): Promise<void> {
-  // Re-check that the tap is still active right before posting. `getActiveTapsForNumbers`
-  // snapshots the active-tap list at the start of `relayMessage`; a concurrent staff revoke
-  // or circuit-breaker auto-revoke between then and now should not produce a final mirror
-  // copy. Cheap (one indexed point lookup) and the source of truth on the storage side.
+  // Re-check that the tap is still active right before posting. The placeholder delivery row
+  // was created inside `recordMessage`'s transaction; a concurrent staff revoke or
+  // circuit-breaker auto-revoke between then and now should not produce a final mirror copy.
+  // Cheap (one indexed point lookup) and the source of truth on the storage side.
   if (!(await svc.isTapActive(tap.id))) {
+    await svc.completeTapDelivery(deliveryId, { error: 'tap revoked before delivery' });
     return;
   }
   const recipient = sender.id === context.callerPlayer.id ? context.recipientPlayer : context.callerPlayer;
@@ -456,7 +538,8 @@ async function deliverTapCopy(
     }
   }
 
-  await svc.recordTapDelivery(message.id, tap.id, {
+  // Fill in the pre-created placeholder row (H1) rather than inserting a fresh delivery row.
+  await svc.completeTapDelivery(deliveryId, {
     mirrorMessageId,
     error: errors.length ? errors.join('; ') : mirrorMessageId ? null : 'no tap target configured',
   });
@@ -586,5 +669,12 @@ export async function postCallOpenedToStaffThread(
   }
 }
 
-// Internal helper exposed for testing the chunker without spinning up a Discord client.
-export const __internal = { chunkText, validateTapMirrorChannel };
+// Internal helpers exposed for testing without spinning up a full Discord client.
+export const __internal = {
+  chunkText,
+  chunkForDm,
+  chunkForEmbed,
+  isDmClosedError,
+  sendToRecipient,
+  validateTapMirrorChannel,
+};

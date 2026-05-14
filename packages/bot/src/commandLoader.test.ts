@@ -7,6 +7,12 @@ import { describe, expect, it } from 'vitest';
 import type { Command } from './client.js';
 import { collectCommandFiles, loadCommands, toCommandModuleSpecifier } from './commandLoader.js';
 
+// Exact number of top-level slash commands currently registered. Discord caps a guild at 100;
+// this must be bumped intentionally whenever a command is added or removed. We are currently
+// AT the cap (100/100) — any new top-level command must replace one or be nested under an
+// existing command namespace.
+const EXPECTED_COMMAND_COUNT = 100;
+
 describe('toCommandModuleSpecifier', () => {
   it('converts filesystem paths into ESM file URLs for dynamic import', () => {
     const commandPath = join(process.cwd(), 'src', 'commands', 'ping.ts');
@@ -50,6 +56,11 @@ describe('loadCommands', () => {
     const commands = new Collection<string, Command>();
     await loadCommands(join(process.cwd(), 'src', 'commands'), commands);
 
+    // Exact assertion, not a soft `<= 100` bound: Discord caps guild slash commands at 100,
+    // and an exact count forces anyone adding a new top-level command to consciously bump
+    // this number (and notice how close to the cap we are) rather than silently drifting.
+    // If this fails after intentionally adding/removing a command, update the literal.
+    expect(commands.size).toBe(EXPECTED_COMMAND_COUNT);
     expect(commands.size).toBeLessThanOrEqual(100);
   }, 10_000);
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 process.env.DATABASE_URL ??= 'postgres://user:pass@localhost:5432/hansard';
 
-const { __internal } = await import('./phoneRelay.js');
+const { __internal, RecipientDmClosedError } = await import('./phoneRelay.js');
 
 describe('phoneRelay.chunkText', () => {
   it('returns the input unchanged when it fits within the budget', () => {
@@ -37,6 +37,175 @@ describe('phoneRelay.chunkText', () => {
     const text = 'a'.repeat(250);
     const chunks = __internal.chunkText(text, 100);
     expect(chunks.join('').length).toBe(text.length);
+  });
+});
+
+describe('phoneRelay.chunkText — codepoint boundary safety (H3)', () => {
+  // A 4-byte emoji is a UTF-16 surrogate pair (length 2). A naive `slice` at a budget that
+  // lands between the halves splits the pair, and each half renders as `?`. The fix backs
+  // the cut up by one when it lands on a low surrogate.
+
+  it('never splits a surrogate pair across a hard-split boundary', () => {
+    // 60 emoji, no spaces/newlines → forces the hard-split branch. Each emoji is 2 UTF-16
+    // units, so a budget of 25 lands cuts inside pairs unless the fix backs them up.
+    const emoji = '\u{1F600}'; // 😀, surrogate pair
+    const text = emoji.repeat(60);
+    const chunks = __internal.chunkText(text, 25);
+    // Reassembly must be byte-identical and contain zero lone surrogates.
+    expect(chunks.join('')).toBe(text);
+    for (const chunk of chunks) {
+      for (let i = 0; i < chunk.length; i++) {
+        const code = chunk.charCodeAt(i);
+        if (code >= 0xd800 && code <= 0xdbff) {
+          // high surrogate must be followed by a low surrogate
+          const next = chunk.charCodeAt(i + 1);
+          expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+          i++;
+        } else {
+          // must not be a lone low surrogate
+          expect(code >= 0xdc00 && code <= 0xdfff).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('keeps every emoji intact when the budget is odd relative to the pair width', () => {
+    const emoji = '\u{1F4DE}'; // 📞
+    const text = `${emoji} `.repeat(40);
+    const chunks = __internal.chunkText(text, 15);
+    // No chunk should contain a lone surrogate; full content preserved (modulo trim, so
+    // compare on the surrogate-pair count).
+    const pairCount = (s: string) => Array.from(s).filter((c) => c.codePointAt(0)! > 0xffff).length;
+    expect(chunks.reduce((n, c) => n + pairCount(c), 0)).toBe(40);
+  });
+
+  it('does not corrupt content when a surrogate pair sits right at the budget edge', () => {
+    // 24 ASCII chars then an emoji, budget 25 → the cut at 25 lands on the low surrogate.
+    const text = 'a'.repeat(24) + '\u{1F600}' + 'b'.repeat(30);
+    const chunks = __internal.chunkText(text, 25);
+    expect(chunks.join('')).toBe(text);
+    expect(Array.from(chunks.join('')).filter((c) => c.codePointAt(0)! > 0xffff)).toHaveLength(1);
+  });
+
+  it('preserves a fenced code block across chunks (no fence-aware splitting, but no corruption)', () => {
+    // The chunker is not markdown-aware — it may break a fence across chunks. What it must
+    // NOT do is corrupt the content. Chunks are trimmed at split boundaries, so reassembly
+    // is content-identical once boundary whitespace is normalized; the non-whitespace
+    // payload (the actual code) is byte-for-byte preserved.
+    const fence = '```\n' + 'const x = 1;\n'.repeat(40) + '```';
+    const chunks = __internal.chunkText(fence, 80);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Non-whitespace payload is fully preserved — no characters dropped or duplicated.
+    expect(chunks.join('').replace(/\s+/g, '')).toBe(fence.replace(/\s+/g, ''));
+    // The backtick fence markers survive (count preserved).
+    const backticks = (s: string) => (s.match(/`/g) ?? []).length;
+    expect(chunks.reduce((n, c) => n + backticks(c), 0)).toBe(backticks(fence));
+  });
+});
+
+describe('phoneRelay.chunkForDm / chunkForEmbed budgets', () => {
+  it('chunkForDm keeps every chunk within the ~1900 DM budget', () => {
+    const chunks = __internal.chunkForDm('z'.repeat(5000));
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.length <= 1900)).toBe(true);
+  });
+
+  it('chunkForEmbed keeps every chunk within the 4000 embed budget', () => {
+    const chunks = __internal.chunkForEmbed('z'.repeat(12000));
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.length <= 4000)).toBe(true);
+  });
+
+  it('short content is a single chunk under both budgets', () => {
+    expect(__internal.chunkForDm('hi there')).toEqual(['hi there']);
+    expect(__internal.chunkForEmbed('hi there')).toEqual(['hi there']);
+  });
+});
+
+describe('phoneRelay.isDmClosedError (50007 matcher)', () => {
+  it('matches a numeric 50007 code', () => {
+    expect(__internal.isDmClosedError({ code: 50007 })).toBe(true);
+  });
+
+  it('matches a string "50007" code', () => {
+    expect(__internal.isDmClosedError({ code: '50007' })).toBe(true);
+  });
+
+  it('does not match other Discord error codes', () => {
+    expect(__internal.isDmClosedError({ code: 10062 })).toBe(false);
+    expect(__internal.isDmClosedError({ code: '10003' })).toBe(false);
+  });
+
+  it('does not match non-error values', () => {
+    expect(__internal.isDmClosedError(null)).toBe(false);
+    expect(__internal.isDmClosedError(undefined)).toBe(false);
+    expect(__internal.isDmClosedError('boom')).toBe(false);
+    expect(__internal.isDmClosedError(new Error('plain'))).toBe(false);
+  });
+});
+
+describe('phoneRelay.sendToRecipient', () => {
+  const senderNumber = { numberRaw: '+15550142' } as never;
+
+  it('returns the first DM message id on success', async () => {
+    const client = {
+      users: {
+        fetch: async () => ({
+          send: async () => ({ id: 'dm-1' }),
+        }),
+      },
+    } as never;
+    const id = await __internal.sendToRecipient(client, 'recipient-discord', senderNumber, 'hello');
+    expect(id).toBe('dm-1');
+  });
+
+  it('throws RecipientDmClosedError when the recipient has DMs closed (50007)', async () => {
+    const client = {
+      users: {
+        fetch: async () => ({
+          send: async () => {
+            throw Object.assign(new Error('Cannot send messages to this user'), { code: 50007 });
+          },
+        }),
+      },
+    } as never;
+    await expect(
+      __internal.sendToRecipient(client, 'recipient-discord', senderNumber, 'hello'),
+    ).rejects.toBeInstanceOf(RecipientDmClosedError);
+  });
+
+  it('rethrows non-DM-closed send failures unchanged', async () => {
+    const client = {
+      users: {
+        fetch: async () => ({
+          send: async () => {
+            throw Object.assign(new Error('rate limited'), { code: 429 });
+          },
+        }),
+      },
+    } as never;
+    await expect(
+      __internal.sendToRecipient(client, 'recipient-discord', senderNumber, 'hello'),
+    ).rejects.not.toBeInstanceOf(RecipientDmClosedError);
+  });
+
+  it('chunks long content into multiple DMs and still returns the first id', async () => {
+    const sent: string[] = [];
+    const client = {
+      users: {
+        fetch: async () => ({
+          send: async ({ content }: { content: string }) => {
+            sent.push(content);
+            return { id: `dm-${sent.length}` };
+          },
+        }),
+      },
+    } as never;
+    const id = await __internal.sendToRecipient(client, 'r', senderNumber, 'q'.repeat(5000));
+    expect(id).toBe('dm-1');
+    expect(sent.length).toBeGreaterThan(1);
+    // Multi-chunk sends carry a [i/n] progress marker.
+    expect(sent[0]).toContain('[1/');
   });
 });
 

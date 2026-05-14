@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, boolean, timestamp, uniqueIndex, index, check } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, boolean, timestamp, bigserial, uniqueIndex, index, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { players } from './players';
 
@@ -88,6 +88,11 @@ export const phoneCalls = pgTable('phone_calls', {
   // Supports the startup `sweepStrandedActiveCalls` query, which must filter by
   // `status='active' AND started_at < cutoff` without a full table scan.
   activeStartedIdx: index('phone_calls_active_started_idx').on(table.startedAt).where(sql`status = 'active'`),
+  // Supports the ring-timeout worker scan: `status='ringing' AND ring_expires_at <= now()`.
+  // Partial on `status='ringing'` so the index only carries the small live-ring working set.
+  ringTimeoutIdx: index('phone_calls_ring_timeout_idx')
+    .on(table.ringExpiresAt)
+    .where(sql`status = 'ringing'`),
 }));
 
 // === PHONE MESSAGES ===
@@ -105,6 +110,11 @@ export const phoneMessages = pgTable('phone_messages', {
   staffMirrorMessageId: varchar('staff_mirror_message_id', { length: 20 }),
 
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  // Monotonic tiebreaker for transcript ordering. `createdAt` has millisecond resolution and
+  // two messages relayed in the same millisecond would otherwise sort non-deterministically.
+  // `bigserial` is gap-tolerant and strictly increasing within a table — exactly what an
+  // append-only transcript needs. Transcript reads order by `(createdAt, sequenceNo)`.
+  sequenceNo: bigserial('sequence_no', { mode: 'number' }).notNull(),
 }, (table) => ({
   callIdx: index('phone_messages_call_idx').on(table.callId, table.createdAt),
   // Index for the reconciliation worker that retries deliveries with no recipient_message_id.
@@ -126,6 +136,9 @@ export const phoneThreads = pgTable('phone_threads', {
 }, (table) => ({
   pairUnique: uniqueIndex('phone_threads_pair_unique').on(table.playerAId, table.playerBId),
   orderedPair: check('phone_threads_ordered_pair', sql`player_a_id < player_b_id`),
+  // One DB row per Discord thread. If a find/create/persist race has two relays both create
+  // a Discord thread, the second INSERT trips this and the loser deletes its orphan thread.
+  discordThreadUnique: uniqueIndex('phone_threads_discord_thread_unique').on(table.discordThreadId),
 }));
 
 // === PHONE TAPS ===
@@ -148,6 +161,12 @@ export const phoneTaps = pgTable('phone_taps', {
   revokedById: uuid('revoked_by_id').references(() => players.id),
 }, (table) => ({
   activeNumberIdx: index('phone_taps_active_number_idx').on(table.targetNumberId).where(sql`is_active = true`),
+  // At most one *active* tap per target number. Without this, two staff tapping the same
+  // number produce two active rows and every message mirrors N× — one copy per duplicate tap.
+  // Retired rows (`is_active=false`) are excluded so a number can be re-tapped after revoke.
+  activeTargetUnique: uniqueIndex('phone_taps_active_target_unique')
+    .on(table.targetNumberId)
+    .where(sql`is_active = true`),
 }));
 
 // === PHONE TAP AUDIT LOG ===
@@ -167,7 +186,10 @@ export const phoneTapAuditLog = pgTable('phone_tap_audit_log', {
   notes: text('notes'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
-  actionCheck: check('phone_tap_audit_log_action_check', sql`action IN ('created','revoked','orphaned_target_deactivated')`),
+  actionCheck: check('phone_tap_audit_log_action_check', sql`action IN ('created','revoked','orphaned_target_deactivated','number_deactivated')`),
+  // Staff "history of this tap" inspections read every audit row for one tap in time order.
+  // Without this they seq-scan the whole audit table.
+  tapCreatedIdx: index('phone_tap_audit_log_tap_created_idx').on(table.tapId, table.createdAt),
 }));
 
 // === PHONE MESSAGE TAP DELIVERIES ===

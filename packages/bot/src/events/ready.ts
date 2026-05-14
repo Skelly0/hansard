@@ -101,12 +101,19 @@ export function registerReadyEvent(client: Client): void {
       console.log('Vote auto-close worker started');
     }
 
-    if (!phoneRingTimeoutWorker) {
+    // Leader election for the ring-timeout worker. Across a sharded deployment (or restart
+    // overlap) every shard runs this ready handler, and two timers expiring the same call
+    // would DM both parties twice. Gate the worker to shard 0 when sharded; unsharded
+    // single-process deployments have no `client.shard`, so they still start it.
+    const isWorkerLeader = !readyClient.shard || readyClient.shard.ids.includes(0);
+    if (!phoneRingTimeoutWorker && isWorkerLeader) {
       phoneRingTimeoutWorker = startPhoneRingTimeoutWorker(db, {
         client: readyClient,
         logger: console,
       });
       console.log('Phone ring-timeout worker started');
+    } else if (!isWorkerLeader) {
+      console.log('Phone ring-timeout worker skipped on non-leader shard');
     }
   });
 }

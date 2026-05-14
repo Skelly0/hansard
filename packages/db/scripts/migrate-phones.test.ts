@@ -57,6 +57,70 @@ describe('migrate-phones', () => {
     expect(script).toContain('ADD COLUMN IF NOT EXISTS "force_ended_by_id" uuid REFERENCES "players"("id")');
   });
 
+  it('keeps the force_ended_by_id FK reference to players when adding the column', () => {
+    // L13: the column must carry `REFERENCES "players"("id")` so the staff actor is a real
+    // FK, not a loose uuid. Assert the full clause so a future contributor can't silently
+    // drop the reference and leave the audit column danging.
+    expect(script).toMatch(
+      /ADD COLUMN IF NOT EXISTS "force_ended_by_id" uuid REFERENCES "players"\("id"\)/,
+    );
+  });
+
+  it('casts ended_reason with USING when narrowing to varchar(80) so legacy rows do not abort', () => {
+    // H6: an implicit ALTER COLUMN TYPE aborts if any existing row exceeds the new length.
+    // Mirror the `error`-column ALTER which already uses substr(...).
+    expect(script).toMatch(
+      /ALTER COLUMN "ended_reason" TYPE varchar\(80\) USING substr\("ended_reason", 1, 80\)/,
+    );
+  });
+
+  it('adds a monotonic sequence_no tiebreaker to phone_messages', () => {
+    // H4: created_at is millisecond-resolution; transcript ordering needs a strict tiebreaker.
+    expect(script).toContain('"sequence_no" bigserial NOT NULL');
+    // Legacy deployments get it via an idempotent ADD COLUMN guarded on information_schema.
+    expect(script).toContain('ALTER TABLE "phone_messages" ADD COLUMN "sequence_no" bigserial NOT NULL');
+    expect(script).toContain("column_name = 'sequence_no'");
+  });
+
+  it('enforces at most one active tap per target number', () => {
+    // H2: without this, two staff tapping the same number fan out every message N×.
+    expect(script).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "phone_taps_active_target_unique"');
+    expect(script).toMatch(/ON "phone_taps" \("target_number_id"\)\s*WHERE is_active = true/);
+    // Legacy duplicate active taps must be retired before the unique index can be created.
+    expect(script).toContain('UPDATE "phone_taps" t');
+  });
+
+  it('enforces one DB row per Discord thread id', () => {
+    // H5/L9: backstops the find/create/persist race so an orphaned thread is detectable.
+    expect(script).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "phone_threads_discord_thread_unique"');
+    expect(script).toMatch(/ON "phone_threads" \("discord_thread_id"\)/);
+  });
+
+  it('indexes ringing calls for the ring-timeout worker scan', () => {
+    // L3: the worker filters `status='ringing' AND ring_expires_at <= now()`.
+    expect(script).toContain('CREATE INDEX IF NOT EXISTS "phone_calls_ring_timeout_idx"');
+    expect(script).toMatch(/ON "phone_calls" \("ring_expires_at"\)\s*WHERE status = 'ringing'/);
+  });
+
+  it('indexes phone_tap_audit_log by (tap_id, created_at) for staff history reads', () => {
+    // L8: staff "history of this tap" inspections would otherwise seq-scan the audit table.
+    expect(script).toContain('CREATE INDEX IF NOT EXISTS "phone_tap_audit_log_tap_created_idx"');
+    expect(script).toMatch(/ON "phone_tap_audit_log" \("tap_id", "created_at"\)/);
+  });
+
+  it('permits the number_deactivated audit action', () => {
+    // M5: deactivating a number auto-revokes its taps with a `number_deactivated` audit row.
+    expect(script).toContain('number_deactivated');
+  });
+
+  it('makes phone_tap_audit_log append-only via a BEFORE UPDATE OR DELETE trigger', () => {
+    // M8: defense-in-depth for the rogue-staff threat model — even a compromised app role
+    // cannot rewrite or erase audit history.
+    expect(script).toContain('CREATE OR REPLACE FUNCTION "phone_tap_audit_log_immutable"()');
+    expect(script).toContain('BEFORE UPDATE OR DELETE ON "phone_tap_audit_log"');
+    expect(script).toContain('DROP TRIGGER IF EXISTS "phone_tap_audit_log_no_mutate"');
+  });
+
   it('constrains phone_calls.status to the documented enum values', () => {
     expect(script).toContain('phone_calls_status_check');
     expect(script).toContain("status IN ('ringing','active','ended','declined','missed','cancelled')");
@@ -64,7 +128,9 @@ describe('migrate-phones', () => {
 
   it('constrains phone_tap_audit_log.action to the documented enum values', () => {
     expect(script).toContain('phone_tap_audit_log_action_check');
-    expect(script).toContain("action IN ('created','revoked','orphaned_target_deactivated')");
+    expect(script).toContain(
+      "action IN ('created','revoked','orphaned_target_deactivated','number_deactivated')",
+    );
   });
 
   it('cascades phone_messages on call deletion (transcript follows the call)', () => {

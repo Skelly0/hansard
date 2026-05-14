@@ -35,6 +35,21 @@ export type PhoneCall = typeof phoneCalls.$inferSelect;
 export type PhoneMessage = typeof phoneMessages.$inferSelect;
 export type PhoneTap = typeof phoneTaps.$inferSelect;
 export type PhoneThread = typeof phoneThreads.$inferSelect;
+export type PhoneMessageTapDelivery = typeof phoneMessageTapDeliveries.$inferSelect;
+
+/**
+ * `recordMessage` returns the persisted transcript row **plus** a placeholder
+ * `phone_message_tap_deliveries` row for every tap that was active at insert time. The
+ * placeholders are written inside the same transaction as the message, so the invariant
+ * "every tap delivery for an active tap has a row" holds even if the relay crashes between
+ * the commit and the Discord send. The relay later fills each placeholder in with the send
+ * result via `completeTapDelivery`.
+ */
+export interface RecordedMessage {
+  message: PhoneMessage;
+  /** One pending delivery row per tap active at insert time — relay fills these in. */
+  tapDeliveries: PhoneMessageTapDelivery[];
+}
 
 export interface CallParticipantSummary {
   playerId: string;
@@ -110,13 +125,23 @@ export type PhoneErrorCode =
   | 'no_character'
   | 'dead'
   | 'already_on_call'
-  | 'not_in_call'
   | 'recipient_dead'
   | 'self_call'
   | 'forbidden'
   | 'not_found'
   | 'limit_reached'
   | 'invalid_state';
+
+/**
+ * Strip control + Unicode-format characters and reject anything outside the printable
+ * phone-shape ASCII whitelist. A player can otherwise smuggle zero-width joiners, bidi
+ * marks, or decoration into `numberRaw` (which is displayed verbatim in DMs and embeds);
+ * `numberNormalized` is already shape-checked by a DB CHECK, but `numberRaw` is not.
+ * Whitelist: `+`, digits, `(`, `)`, `-`, and space.
+ */
+function sanitizeNumberRaw(input: string): string {
+  return input.replace(/[^+0-9()\- ]/gu, '').trim();
+}
 
 // ============================================================
 // Service
@@ -134,6 +159,10 @@ export class PhoneService {
       throw new PhoneServiceError('invalid_number', PHONE_NUMBER_INVALID);
     }
     const normalized = normalizePhoneNumber(input.numberRaw);
+    // `numberRaw` is rendered verbatim in DMs/embeds — strip control/format characters so a
+    // player can't store zero-width joiners or bidi marks. The shape was already validated
+    // above; sanitization just removes anything outside the printable phone-shape whitelist.
+    const sanitizedRaw = sanitizeNumberRaw(input.numberRaw);
 
     return this.db.transaction(async (tx) => {
       await lockPhoneKey(tx, 'player', input.playerId);
@@ -173,7 +202,7 @@ export class PhoneService {
           .insert(phoneNumbers)
           .values({
             playerId: input.playerId,
-            numberRaw: input.numberRaw.trim(),
+            numberRaw: sanitizedRaw,
             numberNormalized: normalized,
             label: input.label ?? null,
             cachedCharacterName: player.characterName,
@@ -238,6 +267,30 @@ export class PhoneService {
         .update(phoneNumbers)
         .set({ isActive: false, deactivatedAt: new Date() })
         .where(and(eq(phoneNumbers.id, numberId), eq(phoneNumbers.isActive, true)));
+
+      // Auto-revoke any active taps on this number — a tap on a retired number silently never
+      // fires but still shows live in `tap-list`, which misleads staff. Done in the same
+      // transaction so the number + its taps flip atomically; one audit row per revoked tap
+      // with action `number_deactivated` keeps the rogue-staff audit chain reconstructible.
+      const revokedTaps = await tx
+        .update(phoneTaps)
+        .set({ isActive: false, revokedAt: new Date(), revokedById: actingPlayerId })
+        .where(and(eq(phoneTaps.targetNumberId, numberId), eq(phoneTaps.isActive, true)))
+        .returning();
+      if (revokedTaps.length) {
+        await tx.insert(phoneTapAuditLog).values(
+          revokedTaps.map((tap) => ({
+            tapId: tap.id,
+            actorId: actingPlayerId,
+            action: 'number_deactivated' as const,
+            targetNumberId: tap.targetNumberId,
+            targetNumberNormalized: row.numberNormalized,
+            mirrorChannelId: tap.mirrorChannelId,
+            mirrorDiscordUserId: tap.mirrorDiscordUserId,
+            notes: 'Tap auto-revoked: target number was deactivated.',
+          })),
+        );
+      }
     });
   }
 
@@ -383,67 +436,97 @@ export class PhoneService {
     });
   }
 
+  /**
+   * Recipient answers a ringing call. Wrapped in a transaction with `SELECT ... FOR UPDATE`
+   * on the call row: the ring-expiry check, the alive re-check, and the state UPDATE all see
+   * a consistent snapshot, so a `/time advance` death finalization cannot land between the
+   * alive check and the UPDATE and let a now-dead character answer.
+   */
   async answerCall(callId: string, actingPlayerId: string): Promise<PhoneCall> {
-    const call = await this.requireCall(callId);
-    if (call.recipientPlayerId !== actingPlayerId) {
-      throw new PhoneServiceError('forbidden', 'Only the recipient can answer this call.');
-    }
-    if (call.status !== 'ringing') {
-      throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
-    }
-    const now = new Date();
-    if (call.ringExpiresAt && call.ringExpiresAt <= now) {
-      await this.db
+    return this.db.transaction(async (tx) => {
+      const [call] = await tx
+        .select()
+        .from(phoneCalls)
+        .where(eq(phoneCalls.id, callId))
+        .for('update')
+        .limit(1);
+      if (!call) throw new PhoneServiceError('not_found', 'Call not found.');
+      if (call.recipientPlayerId !== actingPlayerId) {
+        throw new PhoneServiceError('forbidden', 'Only the recipient can answer this call.');
+      }
+      if (call.status !== 'ringing') {
+        throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
+      }
+      const now = new Date();
+      if (call.ringExpiresAt && call.ringExpiresAt <= now) {
+        await tx
+          .update(phoneCalls)
+          .set({ status: 'missed', endedAt: now, endedReason: 'ring_timeout' })
+          .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing')));
+        throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
+      }
+      // Alive re-check inside the txn — the FOR UPDATE lock above means a concurrent death
+      // finalization either committed before our snapshot (we see isAlive=false here) or is
+      // serialized after our UPDATE.
+      const [actor] = await tx
+        .select({ isAlive: players.isAlive })
+        .from(players)
+        .where(eq(players.id, actingPlayerId))
+        .limit(1);
+      if (!actor || !actor.isAlive) {
+        throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
+      }
+
+      const [updated] = await tx
         .update(phoneCalls)
-        .set({ status: 'missed', endedAt: now, endedReason: 'ring_timeout' })
-        .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing'), sql`ring_expires_at <= ${now}`));
-      throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
-    }
-    await this.assertActingPlayerAlive(actingPlayerId);
-
-    const [updated] = await this.db
-      .update(phoneCalls)
-      .set({ status: 'active', answeredAt: now })
-      .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing'), sql`(ring_expires_at IS NULL OR ring_expires_at > ${now})`))
-      .returning();
-
-    if (!updated) {
-      throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
-    }
-    return updated;
+        .set({ status: 'active', answeredAt: now })
+        .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing')))
+        .returning();
+      if (!updated) {
+        throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
+      }
+      return updated;
+    });
   }
 
+  /**
+   * Recipient declines a ringing call. Same transactional `FOR UPDATE` discipline as
+   * `answerCall` so the alive re-check and the state UPDATE cannot straddle a death.
+   */
   async declineCall(callId: string, actingPlayerId: string): Promise<PhoneCall> {
-    const call = await this.requireCall(callId);
-    if (call.recipientPlayerId !== actingPlayerId) {
-      throw new PhoneServiceError('forbidden', 'Only the recipient can decline this call.');
-    }
-    if (call.status !== 'ringing') {
-      throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
-    }
-    await this.assertActingPlayerAlive(actingPlayerId);
+    return this.db.transaction(async (tx) => {
+      const [call] = await tx
+        .select()
+        .from(phoneCalls)
+        .where(eq(phoneCalls.id, callId))
+        .for('update')
+        .limit(1);
+      if (!call) throw new PhoneServiceError('not_found', 'Call not found.');
+      if (call.recipientPlayerId !== actingPlayerId) {
+        throw new PhoneServiceError('forbidden', 'Only the recipient can decline this call.');
+      }
+      if (call.status !== 'ringing') {
+        throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
+      }
+      const [actor] = await tx
+        .select({ isAlive: players.isAlive })
+        .from(players)
+        .where(eq(players.id, actingPlayerId))
+        .limit(1);
+      if (!actor || !actor.isAlive) {
+        throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
+      }
 
-    const [updated] = await this.db
-      .update(phoneCalls)
-      .set({ status: 'declined', endedAt: new Date(), endedReason: 'declined_by_recipient' })
-      .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing')))
-      .returning();
-
-    if (!updated) {
-      throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
-    }
-    return updated;
-  }
-
-  private async assertActingPlayerAlive(playerId: string): Promise<void> {
-    const [row] = await this.db
-      .select({ isAlive: players.isAlive })
-      .from(players)
-      .where(eq(players.id, playerId))
-      .limit(1);
-    if (!row || !row.isAlive) {
-      throw new PhoneServiceError('dead', PHONE_INELIGIBLE_DEAD);
-    }
+      const [updated] = await tx
+        .update(phoneCalls)
+        .set({ status: 'declined', endedAt: new Date(), endedReason: 'declined_by_recipient' })
+        .where(and(eq(phoneCalls.id, callId), eq(phoneCalls.status, 'ringing')))
+        .returning();
+      if (!updated) {
+        throw new PhoneServiceError('invalid_state', 'Call is no longer ringing.');
+      }
+      return updated;
+    });
   }
 
   /**
@@ -517,8 +600,22 @@ export class PhoneService {
    * 59 chars — `varchar(80)` minus `'force_ended_by_staff:'` (21 chars) — so the full slash-
    * option max-length-64 input is preserved up to the column budget instead of being truncated
    * to 48 unnecessarily.
+   *
+   * Takes a `viewer: PhoneViewer` and refuses non-staff at the service boundary — `setTap` /
+   * `revokeTap` / `listTaps` already do this, and `forceEndCall` previously trusted the
+   * `actingStaffId` param with no check. `actingStaffId` is still the recorded actor (it may
+   * differ from `viewer.userId` only in tooling that acts on a staff member's behalf; the
+   * normal Discord caller passes the same id for both).
    */
-  async forceEndCall(callId: string, actingStaffId: string, reason?: string): Promise<PhoneCall> {
+  async forceEndCall(
+    callId: string,
+    actingStaffId: string,
+    viewer: PhoneViewer,
+    reason?: string,
+  ): Promise<PhoneCall> {
+    if (!viewer.isStaff) {
+      throw new PhoneServiceError('forbidden', 'Only staff can force-end calls.');
+    }
     const call = await this.requireCall(callId);
     if (call.status !== 'ringing' && call.status !== 'active') {
       throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
@@ -634,8 +731,15 @@ export class PhoneService {
    * cannot transition the call between our status check and the insert — the invariant
    * "messages exist only on calls that were active when the message arrived" must hold
    * regardless of timing.
+   *
+   * H1: also snapshots the active taps on both call numbers and writes a *placeholder*
+   * `phone_message_tap_deliveries` row per tap inside this same transaction. Previously the
+   * relay posted to Discord and then called `recordTapDelivery` per tap *after* the message
+   * commit — a crash in that window left an active tap with no delivery row, breaking the
+   * "every tap delivery for an active tap has a row" audit invariant. Now the rows exist the
+   * moment the message commits; the relay fills in the send result via `completeTapDelivery`.
    */
-  async recordMessage(input: RecordMessageInput): Promise<PhoneMessage> {
+  async recordMessage(input: RecordMessageInput): Promise<RecordedMessage> {
     return this.db.transaction(async (tx) => {
       const [call] = await tx
         .select()
@@ -668,7 +772,35 @@ export class PhoneService {
           senderDiscordMessageId: input.senderDiscordMessageId ?? null,
         })
         .returning();
-      return row;
+
+      // Snapshot the active taps on both call numbers *inside the transaction* and write a
+      // pending delivery placeholder per tap. `deliveredAt`/`mirrorMessageId`/`error` stay
+      // null until the relay reports the Discord send result.
+      const activeTaps = await tx
+        .select()
+        .from(phoneTaps)
+        .where(
+          and(
+            inArray(phoneTaps.targetNumberId, [call.callerNumberId, call.recipientNumberId]),
+            eq(phoneTaps.isActive, true),
+          ),
+        );
+      let tapDeliveries: PhoneMessageTapDelivery[] = [];
+      if (activeTaps.length) {
+        tapDeliveries = await tx
+          .insert(phoneMessageTapDeliveries)
+          .values(
+            activeTaps.map((tap) => ({
+              messageId: row.id,
+              tapId: tap.id,
+              mirrorMessageId: null,
+              deliveredAt: null,
+              error: null,
+            })),
+          )
+          .returning();
+      }
+      return { message: row, tapDeliveries };
     });
   }
 
@@ -723,6 +855,76 @@ export class PhoneService {
     }
   }
 
+  /**
+   * H5: cross-process-safe find-or-create for the per-pair staff thread.
+   *
+   * The bot's in-memory `threadCreateLocks` Map is single-process only — across a restart or
+   * a multi-shard deployment, two relays both see "no thread", both create a Discord thread,
+   * one INSERT loses the `phone_threads_pair_unique` index, and the loser's Discord thread is
+   * orphaned (a private thread nobody references).
+   *
+   * This wraps the whole find → create → persist sequence in a transaction that first takes
+   * a `pg_advisory_xact_lock` on the sorted pair key. Only one transaction at a time can be
+   * in the create section for a given pair, cluster-wide. `createThread` (the Discord call,
+   * supplied by the relay so the service stays Discord-agnostic) only runs if no row exists.
+   * If the INSERT still trips a unique violation (e.g. the discord_thread_id index, or a
+   * lock-timeout edge), `onOrphan` is invoked so the relay can delete the just-created
+   * Discord thread, and the pre-existing row is returned.
+   */
+  async findOrCreateThread(
+    callerPlayerId: string,
+    recipientPlayerId: string,
+    hooks: {
+      /** Create the Discord thread and return its id. Only called when no row exists yet. */
+      createThread: (pair: [string, string]) => Promise<string | null>;
+      /** Delete an orphaned Discord thread when this caller lost the persist race. */
+      onOrphan?: (discordThreadId: string) => Promise<void>;
+    },
+  ): Promise<{ thread: PhoneThread | null; created: boolean }> {
+    const [a, b] = [callerPlayerId, recipientPlayerId].sort() as [string, string];
+    return this.db.transaction(async (tx) => {
+      // Cluster-wide mutex for this pair: serializes the create section across processes.
+      await lockPhoneKey(tx, 'player', `thread:${a}:${b}`);
+
+      const [existing] = await tx
+        .select()
+        .from(phoneThreads)
+        .where(and(eq(phoneThreads.playerAId, a), eq(phoneThreads.playerBId, b)))
+        .limit(1);
+      if (existing) return { thread: existing, created: false };
+
+      const discordThreadId = await hooks.createThread([a, b]);
+      if (!discordThreadId) return { thread: null, created: false };
+
+      try {
+        const [row] = await tx
+          .insert(phoneThreads)
+          .values({ playerAId: a, playerBId: b, discordThreadId })
+          .returning();
+        return { thread: row, created: true };
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          // Lost the race (pair index or discord_thread_id index). Delete our orphan thread
+          // and hand back whatever row already exists for this pair.
+          if (hooks.onOrphan) {
+            try {
+              await hooks.onOrphan(discordThreadId);
+            } catch (cleanupErr) {
+              console.error('[phoneService] failed to delete orphaned phone thread:', cleanupErr);
+            }
+          }
+          const [row] = await tx
+            .select()
+            .from(phoneThreads)
+            .where(and(eq(phoneThreads.playerAId, a), eq(phoneThreads.playerBId, b)))
+            .limit(1);
+          return { thread: row ?? null, created: false };
+        }
+        throw err;
+      }
+    });
+  }
+
   // ----------------------------------------------------------
   // Taps (staff-only)
   // ----------------------------------------------------------
@@ -753,18 +955,40 @@ export class PhoneService {
     if (!target) {
       throw new PhoneServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
     }
+    // M3: a retired number id still resolves through the FK, but a tap on it would silently
+    // never fire (no call routes through an inactive number) while showing live in tap-list.
+    // Refuse it at the boundary rather than create a dead tap.
+    if (!target.isActive) {
+      throw new PhoneServiceError(
+        'invalid_state',
+        'That number has been retired — taps on inactive numbers never fire.',
+      );
+    }
 
     return this.db.transaction(async (tx) => {
-      const [row] = await tx
-        .insert(phoneTaps)
-        .values({
-          targetNumberId: input.targetNumberId,
-          createdById: input.createdById,
-          reason: input.reason ?? null,
-          mirrorChannelId: input.mirrorChannelId ?? null,
-          mirrorDiscordUserId: input.mirrorDiscordUserId ?? null,
-        })
-        .returning();
+      let row: PhoneTap;
+      try {
+        [row] = await tx
+          .insert(phoneTaps)
+          .values({
+            targetNumberId: input.targetNumberId,
+            createdById: input.createdById,
+            reason: input.reason ?? null,
+            mirrorChannelId: input.mirrorChannelId ?? null,
+            mirrorDiscordUserId: input.mirrorDiscordUserId ?? null,
+          })
+          .returning();
+      } catch (err) {
+        // H2: `phone_taps_active_target_unique` rejects a second active tap on the same
+        // number — surface it as a friendly refusal instead of a raw 23505.
+        if (isUniqueViolation(err)) {
+          throw new PhoneServiceError(
+            'invalid_state',
+            'This number is already tapped. Revoke the existing wiretap before setting a new one.',
+          );
+        }
+        throw err;
+      }
       await tx.insert(phoneTapAuditLog).values({
         tapId: row.id,
         actorId: input.createdById,
@@ -781,25 +1005,32 @@ export class PhoneService {
     });
   }
 
+  /**
+   * Revoke a tap. M4: the active-state check is folded into the UPDATE's WHERE
+   * (`is_active = true`) and runs inside the transaction with `RETURNING`. Two concurrent
+   * revokes can no longer both pass an out-of-txn `tap.isActive` read and both write a
+   * `revoked` audit row — exactly one UPDATE flips the row and only that caller audits.
+   */
   async revokeTap(tapId: string, actorId: string, viewer: PhoneViewer, notes?: string): Promise<void> {
     if (!viewer.isStaff) {
       throw new PhoneServiceError('forbidden', 'Only staff can revoke wiretaps.');
     }
-    const [tap] = await this.db.select().from(phoneTaps).where(eq(phoneTaps.id, tapId)).limit(1);
-    if (!tap || !tap.isActive) {
-      throw new PhoneServiceError('not_found', 'Wiretap not found or already revoked.');
-    }
-    const [target] = await this.db
-      .select({ numberNormalized: phoneNumbers.numberNormalized })
-      .from(phoneNumbers)
-      .where(eq(phoneNumbers.id, tap.targetNumberId))
-      .limit(1);
-
     await this.db.transaction(async (tx) => {
-      await tx
+      const [tap] = await tx
         .update(phoneTaps)
         .set({ isActive: false, revokedAt: new Date(), revokedById: actorId })
-        .where(eq(phoneTaps.id, tapId));
+        .where(and(eq(phoneTaps.id, tapId), eq(phoneTaps.isActive, true)))
+        .returning();
+      // No row updated → the tap was missing or already revoked (possibly by a concurrent
+      // revoke that won the race). Either way, this caller does not write an audit row.
+      if (!tap) {
+        throw new PhoneServiceError('not_found', 'Wiretap not found or already revoked.');
+      }
+      const [target] = await tx
+        .select({ numberNormalized: phoneNumbers.numberNormalized })
+        .from(phoneNumbers)
+        .where(eq(phoneNumbers.id, tap.targetNumberId))
+        .limit(1);
       await tx.insert(phoneTapAuditLog).values({
         tapId,
         actorId,
@@ -849,6 +1080,12 @@ export class PhoneService {
     return Boolean(row?.isActive);
   }
 
+  /**
+   * Insert a tap delivery record outright. Retained for callers that did not pre-create a
+   * placeholder (e.g. a reconciliation job). The H1 hot path uses `recordMessage` placeholders
+   * + `completeTapDelivery` instead, so the audit row exists before the Discord send is even
+   * attempted.
+   */
   async recordTapDelivery(
     messageId: string,
     tapId: string,
@@ -861,6 +1098,26 @@ export class PhoneService {
       deliveredAt: result.error ? null : new Date(),
       error: result.error ? result.error.slice(0, 500) : null,
     });
+  }
+
+  /**
+   * Fill in a placeholder `phone_message_tap_deliveries` row (created inside
+   * `recordMessage`'s transaction) with the Discord send result. Keyed on the delivery row
+   * id, so a crash-and-retry can re-run this idempotently against the same row instead of
+   * inserting a duplicate.
+   */
+  async completeTapDelivery(
+    deliveryId: string,
+    result: { mirrorMessageId?: string | null; error?: string | null },
+  ): Promise<void> {
+    await this.db
+      .update(phoneMessageTapDeliveries)
+      .set({
+        mirrorMessageId: result.mirrorMessageId ?? null,
+        deliveredAt: result.error ? null : new Date(),
+        error: result.error ? result.error.slice(0, 500) : null,
+      })
+      .where(eq(phoneMessageTapDeliveries.id, deliveryId));
   }
 
   /**
@@ -993,21 +1250,54 @@ export class PhoneService {
     return { calls, total };
   }
 
+  /**
+   * Frozen transcript of a call.
+   *
+   * M6: returns `null` *both* when the call does not exist **and** when the viewer is not a
+   * participant — the same not-found/not-yours collapse `getPlayerVotingRecord` uses. The
+   * previous behaviour (null for missing, throw `forbidden` for real-but-private) let a
+   * caller distinguish "no such call" from "exists, not yours", leaking call existence
+   * through the differential error. Staff still see every call.
+   *
+   * H4: messages are ordered by `(createdAt, sequenceNo)` — `createdAt` is millisecond
+   * resolution and two messages in the same millisecond would otherwise sort
+   * non-deterministically; `sequenceNo` is the strictly-increasing tiebreaker.
+   *
+   * L5: a `viewer.isStaff` transcript additionally carries `taps` — the per-message
+   * tap-delivery rows — so the wiretap audit trail is reconstructible from one read. The
+   * non-staff shape is unchanged (no `taps` key).
+   */
   async getCallTranscript(callId: string, viewer: PhoneViewer): Promise<{
     call: PhoneCall;
     messages: PhoneMessage[];
+    taps?: PhoneMessageTapDelivery[];
   } | null> {
     const [call] = await this.db.select().from(phoneCalls).where(eq(phoneCalls.id, callId)).limit(1);
     if (!call) return null;
     if (!viewer.isStaff && viewer.userId !== call.callerPlayerId && viewer.userId !== call.recipientPlayerId) {
-      throw new PhoneServiceError('forbidden', 'You can only view transcripts of your own calls.');
+      // Not a participant: return null rather than throwing, so a non-participant cannot
+      // tell "this call exists" from "this call does not exist".
+      return null;
     }
     const messages = await this.db
       .select()
       .from(phoneMessages)
       .where(eq(phoneMessages.callId, callId))
-      .orderBy(phoneMessages.createdAt);
-    return { call, messages };
+      .orderBy(phoneMessages.createdAt, phoneMessages.sequenceNo);
+    if (!viewer.isStaff) {
+      return { call, messages };
+    }
+    // Staff-only: attach tap deliveries for every message in this call so the audit log is
+    // reconstructible without a second query.
+    const messageIds = messages.map((m) => m.id);
+    const taps = messageIds.length
+      ? await this.db
+          .select()
+          .from(phoneMessageTapDeliveries)
+          .where(inArray(phoneMessageTapDeliveries.messageId, messageIds))
+          .orderBy(phoneMessageTapDeliveries.createdAt)
+      : [];
+    return { call, messages, taps };
   }
 
   // ----------------------------------------------------------

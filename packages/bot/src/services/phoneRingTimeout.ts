@@ -1,9 +1,8 @@
 import type { Client } from 'discord.js';
 import type { Database } from '@hansard/db';
 import { PhoneService, type PhoneCall } from '@hansard/api/services/phoneService';
+import { PHONE_RING_WORKER_INTERVAL_MS } from '@hansard/shared';
 import { hangUpAndNotify } from '../utils/phoneRelay.js';
-
-const DEFAULT_INTERVAL_MS = 30_000;
 
 export type PhoneRingWorkerOptions = {
   intervalMs?: number;
@@ -87,7 +86,7 @@ export function startPhoneRingTimeoutWorker(
   db: Database,
   options: PhoneRingWorkerOptions = {},
 ): NodeJS.Timeout {
-  const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const intervalMs = options.intervalMs ?? PHONE_RING_WORKER_INTERVAL_MS;
   const logger = options.logger ?? console;
   let running = false;
 

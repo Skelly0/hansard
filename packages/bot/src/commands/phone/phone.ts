@@ -19,28 +19,22 @@ import {
 import { buildIncomingCallActions } from '../../components/phoneButtons.js';
 import { hangUpAndNotify } from '../../utils/phoneRelay.js';
 import { resolveStaffRoleIds } from '../../utils/staffRoles.js';
+import { clearNoCallCache } from '../../events/messageCreate.js';
+import { resolvePhonePlayer } from './playerLookup.js';
 import { validateTapMirrorChannel } from '../../utils/tapMirrorChannel.js';
 import {
   formatPhoneCallStatus,
   formatPhoneEndedReason,
   isValidPhoneNumber,
   PHONE_NUMBER_INVALID,
+  PHONE_RING_TIMEOUT_MS,
 } from '@hansard/shared';
 import type { Command } from '../../client.js';
 
 const CALL_COLOUR = 0x9b7cb8;
 
-async function resolvePlayer(discordId: string): Promise<{ id: string; characterName: string | null; isAlive: boolean } | null> {
-  const [row] = await db
-    .select({ id: players.id, characterName: players.characterName, isAlive: players.isAlive })
-    .from(players)
-    .where(eq(players.discordId, discordId))
-    .limit(1);
-  return row ?? null;
-}
-
 async function requirePlayer(interaction: ChatInputCommandInteraction): Promise<{ id: string; characterName: string; isAlive: boolean } | null> {
-  const row = await resolvePlayer(interaction.user.id);
+  const row = await resolvePhonePlayer(interaction.user.id);
   if (!row || !row.characterName) {
     await interaction.editReply({
       embeds: [errorEmbed('You need an active character before you can use the phone system.')],
@@ -199,6 +193,12 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
 
+  // A ringing call now exists for both parties. Clear any stale "no open call" negative-cache
+  // entries (left over from a pre-call DM) so the messageCreate fast path doesn't drop their
+  // first in-call messages with a wrong "you're not in a call" reply.
+  clearNoCallCache(interaction.user.id);
+  clearNoCallCache(participants.recipientPlayer.discordId);
+
   // Send the ring DM. Split the try/catch so DB hiccups on the followup `setRingMessageId`
   // don't get misattributed as DM-closed (which would end an otherwise functional call).
   let ringMessageId: string | null = null;
@@ -212,7 +212,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
       .setDescription(
         `**${participants.callerNumber.numberRaw}** is calling you.\n\nMessages on this call are logged and cannot be edited or deleted. Answer to connect, or decline to send the caller a refusal.`,
       )
-      .setFooter({ text: 'This ring expires in 60 seconds.' });
+      .setFooter({ text: `This ring expires in ${Math.round(PHONE_RING_TIMEOUT_MS / 1000)} seconds.` });
     const row = buildIncomingCallActions(participants.call.id);
     const ringMessage = await recipientUser.send({
       embeds: [ringEmbed],
@@ -395,7 +395,7 @@ async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<bo
       try {
         const member = await guild.members.fetch(interaction.user.id).catch(() => null);
         if (!member) continue;
-        const staffRoleIds = await resolveStaffRoleIds(guild);
+        const staffRoleIds = await resolveStaffRoleIds(guild, 'phone:ensureStaff');
         if (staffRoleIds.length === 0) continue;
         if (member.roles.cache.some((r) => staffRoleIds.includes(r.id))) return true;
       } catch (err) {
@@ -407,21 +407,28 @@ async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<bo
   return false;
 }
 
+/**
+ * Stricter than `ensureStaff`: a wiretap mirror user must hold BOTH the DB `players.isStaff`
+ * flag AND a live configured staff role in the (configured-or-all) guild(s). The DB flag alone
+ * is not enough — a retired staffer whose flag was never cleared, or who has left the guild,
+ * must not silently keep receiving wiretap copies. Requiring live guild role membership ties
+ * the mirror trust to current standing rather than a stale row.
+ */
 async function discordUserIsStaff(interaction: ChatInputCommandInteraction, discordUserId: string): Promise<boolean> {
   const [row] = await db
     .select({ isStaff: players.isStaff })
     .from(players)
     .where(eq(players.discordId, discordUserId))
     .limit(1);
-  if (row?.isStaff) return true;
+  if (!row?.isStaff) return false;
 
-  // Same `PHONE_GUILD_ID` containment as `ensureStaff` so a tap mirror-user from a different
-  // guild does not pass the staff check.
+  // DB flag is set — now confirm a current staff role in the guild. Same `PHONE_GUILD_ID`
+  // containment as `ensureStaff` so a tap mirror-user from a different guild does not pass.
   for (const guild of guildsForStaffCheck(interaction)) {
     try {
       const member = await guild.members.fetch(discordUserId).catch(() => null);
       if (!member) continue;
-      const staffRoleIds = await resolveStaffRoleIds(guild);
+      const staffRoleIds = await resolveStaffRoleIds(guild, 'phone:discordUserIsStaff');
       if (staffRoleIds.length === 0) continue;
       if (member.roles.cache.some((r) => staffRoleIds.includes(r.id))) return true;
     } catch (err) {
@@ -460,7 +467,7 @@ async function handleAdminTapCreate(interaction: ChatInputCommandInteraction): P
     return;
   }
 
-  const staffPlayer = await resolvePlayer(interaction.user.id);
+  const staffPlayer = await resolvePhonePlayer(interaction.user.id);
   if (!staffPlayer) {
     await interaction.editReply({ embeds: [errorEmbed('Staff player record not found.')] });
     return;
@@ -505,7 +512,7 @@ async function handleAdminTapRevoke(interaction: ChatInputCommandInteraction): P
   if (!(await ensureStaff(interaction))) return;
   const tapId = interaction.options.getString('tap-id', true);
   const notes = interaction.options.getString('notes') || undefined;
-  const staffPlayer = await resolvePlayer(interaction.user.id);
+  const staffPlayer = await resolvePhonePlayer(interaction.user.id);
   if (!staffPlayer) {
     await interaction.editReply({ embeds: [errorEmbed('Staff player record not found.')] });
     return;
@@ -525,7 +532,7 @@ async function handleAdminTapRevoke(interaction: ChatInputCommandInteraction): P
 
 async function handleAdminTapList(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!(await ensureStaff(interaction))) return;
-  const staffPlayer = await resolvePlayer(interaction.user.id);
+  const staffPlayer = await resolvePhonePlayer(interaction.user.id);
   if (!staffPlayer) {
     await interaction.editReply({ embeds: [errorEmbed('Staff player record not found.')] });
     return;
@@ -588,13 +595,13 @@ async function handleAdminForceEnd(interaction: ChatInputCommandInteraction): Pr
   // Resolve the staff member's player row so the audit column receives a player UUID
   // (matching `players.id`), not a raw Discord snowflake. Without this lookup the
   // `force_ended_by_id` FK would be wrong and follow-up "who ended this?" queries broken.
-  const staffPlayer = await resolvePlayer(interaction.user.id);
+  const staffPlayer = await resolvePhonePlayer(interaction.user.id);
   if (!staffPlayer) {
     await interaction.editReply({ embeds: [errorEmbed('Staff player record not found.')] });
     return;
   }
   try {
-    await svc().forceEndCall(callId, staffPlayer.id, reason);
+    await svc().forceEndCall(callId, staffPlayer.id, { userId: staffPlayer.id, isStaff: true }, reason);
     await hangUpAndNotify(interaction.client, callId, 'force_ended_by_staff');
     await interaction.editReply({ embeds: [successEmbed('Call ended', `Call \`${callId}\` was force-ended.`)] });
   } catch (err) {

@@ -43,8 +43,15 @@ function findStaffRoleId(roles: RoleCollectionLike | null | undefined): string |
  *
  * Returns an empty array if nothing matches. Callers should treat that as
  * "no staff role configured" and degrade gracefully rather than throw.
+ *
+ * `caller` is an optional label (e.g. `'phone:ensureStaff'`) included in the error log so a
+ * failed role fetch can be traced back to the command that triggered it — this context was
+ * lost when the helper was extracted from its original ticket-specific call site.
  */
-export async function resolveStaffRoleIds(guild: Pick<Guild, 'roles'>): Promise<string[]> {
+export async function resolveStaffRoleIds(
+  guild: Pick<Guild, 'roles'>,
+  caller?: string,
+): Promise<string[]> {
   const configuredRoleIds = getConfiguredStaffRoleIds();
   if (configuredRoleIds.length > 0) return configuredRoleIds;
 
@@ -56,7 +63,10 @@ export async function resolveStaffRoleIds(guild: Pick<Guild, 'roles'>): Promise<
     const fetchedRoleId = findStaffRoleId(fetchedRoles as RoleCollectionLike);
     return fetchedRoleId ? [fetchedRoleId] : [];
   } catch (err) {
-    console.error('Failed to resolve staff role:', err);
+    console.error(
+      caller ? `Failed to resolve staff role (${caller}):` : 'Failed to resolve staff role:',
+      err,
+    );
     return [];
   }
 }

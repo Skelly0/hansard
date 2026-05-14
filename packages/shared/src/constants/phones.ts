@@ -5,6 +5,15 @@
 /** How long a ring can sit unanswered before the worker marks the call missed. */
 export const PHONE_RING_TIMEOUT_MS = 60 * 1000;
 
+/** How often the ring-timeout worker polls for `ringing` calls that have expired. */
+export const PHONE_RING_WORKER_INTERVAL_MS = 30_000;
+
+/**
+ * DM chunking budget. Relay messages longer than this are split into multiple DMs so
+ * each stays comfortably under Discord's 2000-character message limit.
+ */
+export const PHONE_DM_CHUNK_BUDGET = 1900;
+
 /** How old an `active` call must be before the startup sweep treats it as crash-stranded. */
 export const PHONE_STRANDED_CALL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
@@ -12,7 +21,7 @@ export const PHONE_STRANDED_CALL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 export const PHONE_HINT_COOLDOWN_MS = 60 * 1000;
 
 /**
- * Force-end persisted reason prefix. Service emits `${prefix}${note.slice(0,48)}` so the
+ * Force-end persisted reason prefix. Service emits `${prefix}${note.slice(0, 59)}` so the
  * note is visible in `phone_calls.ended_reason` and `/phone history`.
  */
 export const PHONE_FORCE_END_REASON_PREFIX = 'force_ended_by_staff:';

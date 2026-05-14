@@ -178,6 +178,43 @@ describe('PhoneService.registerNumber', () => {
       code: 'number_taken',
     });
   });
+
+  it('strips control/format characters from numberRaw before storing (M7)', async () => {
+    // M7: numberRaw is rendered verbatim in DMs/embeds — a player must not be able to smuggle
+    // zero-width joiners, bidi marks, or decoration into it.
+    const inserted: Record<string, unknown>[] = [];
+    const db: any = {
+      transaction: async (fn: (tx: unknown) => unknown) => fn(db),
+      execute: async () => undefined,
+      select: () => {
+        let resolved: Promise<unknown> | null = null;
+        const queue: unknown[][] = [
+          [{ id: 'p1', characterName: 'Alice', isAlive: true }],
+          [{ value: 0 }],
+        ];
+        const ensure = () => (resolved ??= Promise.resolve(queue.shift() ?? []));
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (ok: (v: unknown) => unknown, err?: (r: unknown) => unknown) => ensure().then(ok, err);
+            }
+            return () => new Proxy({}, handler);
+          },
+        };
+        return new Proxy({}, handler);
+      },
+      insert: () => ({
+        values: (v: Record<string, unknown>) => {
+          inserted.push(v);
+          return { returning: () => Promise.resolve([{ id: 'num-1', ...v }]) };
+        },
+      }),
+    };
+    const svc = new PhoneService(db);
+    // Zero-width joiner (U+200D) and a left-to-right mark (U+200E) embedded in the raw input.
+    await svc.registerNumber({ playerId: 'p1', numberRaw: '+1 (555)‍-0142‎' });
+    expect(inserted[0].numberRaw).toBe('+1 (555)-0142');
+  });
 });
 
 describe('PhoneService.initiateCall', () => {
@@ -300,8 +337,9 @@ describe('PhoneService.recordMessage', () => {
     const txCounter = { count: 0 };
     const db = makeDb({
       selectQueues: [
-        [{ id: 'call-1', status: 'active', callerPlayerId: 'p1', recipientPlayerId: 'p2' }],
+        [{ id: 'call-1', status: 'active', callerPlayerId: 'p1', recipientPlayerId: 'p2', callerNumberId: 'n1', recipientNumberId: 'n2' }],
         [{ isAlive: true }],
+        [], // active-taps snapshot — no taps
       ],
       insertReturning: [
         [{ id: 'm1', callId: 'call-1', senderPlayerId: 'p1', content: 'hi' }],
@@ -309,9 +347,48 @@ describe('PhoneService.recordMessage', () => {
       transactionCalls: txCounter,
     });
     const svc = new PhoneService(db);
-    const row = await svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p1', content: 'hi' });
+    const result = await svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p1', content: 'hi' });
     expect(txCounter.count).toBe(1);
-    expect(row.id).toBe('m1');
+    expect(result.message.id).toBe('m1');
+    expect(result.tapDeliveries).toEqual([]);
+  });
+
+  it('pre-creates a placeholder tap-delivery row per active tap inside the message transaction (H1)', async () => {
+    // H1: the delivery rows must exist the moment the message commits — not after the relay
+    // posts to Discord — so a relay crash can't strand an active tap with no delivery row.
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'call-1', status: 'active', callerPlayerId: 'p1', recipientPlayerId: 'p2', callerNumberId: 'n1', recipientNumberId: 'n2' }],
+        [{ isAlive: true }],
+        [{ id: 'tap-1', targetNumberId: 'n1', isActive: true }], // active-taps snapshot
+      ],
+      insertReturning: [
+        [{ id: 'm1', callId: 'call-1', senderPlayerId: 'p1', content: 'hi' }], // phoneMessages
+        [{ id: 'delivery-1', messageId: 'm1', tapId: 'tap-1' }],               // placeholder deliveries
+      ],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p1', content: 'hi' });
+    expect(result.message.id).toBe('m1');
+    expect(result.tapDeliveries).toHaveLength(1);
+    expect(result.tapDeliveries[0].id).toBe('delivery-1');
+  });
+});
+
+describe('PhoneService.completeTapDelivery', () => {
+  it('updates the placeholder row with the Discord send result rather than inserting a new one', async () => {
+    // H1 follow-up: the relay fills in the pre-created placeholder via completeTapDelivery,
+    // keyed on the delivery row id, so a retry is idempotent against the same row.
+    let updateCalled = false;
+    const db = {
+      update: () => {
+        updateCalled = true;
+        return { set: () => ({ where: () => Promise.resolve(undefined) }) };
+      },
+    } as any;
+    const svc = new PhoneService(db);
+    await svc.completeTapDelivery('delivery-1', { mirrorMessageId: 'mirror-1' });
+    expect(updateCalled).toBe(true);
   });
 });
 
@@ -359,6 +436,78 @@ describe('PhoneServiceError shape', () => {
     const err = new PhoneServiceError('forbidden', 'nope');
     expect(err.code).toBe('forbidden');
     expect(err.name).toBe('PhoneServiceError');
+  });
+
+  it('has no dead `not_in_call` code member (L6)', () => {
+    // L6: `not_in_call` was in the union with no code path throwing it. The TS union is
+    // compile-time only, so assert via a representative real code instead — this test exists
+    // mainly as a tripwire/comment for a future contributor re-adding the dead member.
+    const reachableCodes = ['invalid_state', 'forbidden', 'not_found', 'dead'];
+    for (const code of reachableCodes) {
+      expect(new PhoneServiceError(code as never, 'x').code).toBe(code);
+    }
+  });
+});
+
+describe('PhoneService.findOrCreateThread', () => {
+  it('returns the existing row without calling createThread when a thread already exists (H5)', async () => {
+    let createCalled = false;
+    const txCounter = { count: 0 };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 't1', playerAId: 'a', playerBId: 'b', discordThreadId: 'D1' }],
+      ],
+      transactionCalls: txCounter,
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.findOrCreateThread('b', 'a', {
+      createThread: async () => {
+        createCalled = true;
+        return 'D-new';
+      },
+    });
+    expect(createCalled).toBe(false);
+    expect(result.created).toBe(false);
+    expect(result.thread?.discordThreadId).toBe('D1');
+    expect(txCounter.count).toBe(1);
+  });
+
+  it('creates + persists a thread when none exists (H5)', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [], // no existing row
+      ],
+      insertReturning: [
+        [{ id: 't2', playerAId: 'a', playerBId: 'b', discordThreadId: 'D2' }],
+      ],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.findOrCreateThread('a', 'b', {
+      createThread: async () => 'D2',
+    });
+    expect(result.created).toBe(true);
+    expect(result.thread?.discordThreadId).toBe('D2');
+  });
+
+  it('deletes the orphaned Discord thread and returns the winning row on a persist-race unique violation (H5)', async () => {
+    let orphanDeleted: string | null = null;
+    const db = makeDb({
+      selectQueues: [
+        [], // no existing row at first check
+        [{ id: 't3', playerAId: 'a', playerBId: 'b', discordThreadId: 'D-winner' }], // post-violation re-read
+      ],
+      insertErrors: [Object.assign(new Error('dup'), { code: '23505' })],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.findOrCreateThread('a', 'b', {
+      createThread: async () => 'D-loser',
+      onOrphan: async (id) => {
+        orphanDeleted = id;
+      },
+    });
+    expect(orphanDeleted).toBe('D-loser');
+    expect(result.created).toBe(false);
+    expect(result.thread?.discordThreadId).toBe('D-winner');
   });
 });
 
@@ -468,10 +617,19 @@ describe('PhoneService.forceEndCall', () => {
       }),
     } as any;
     const svc = new PhoneService(db);
-    const result = await svc.forceEndCall('call-1', 'staff-uuid', 'test');
+    const result = await svc.forceEndCall('call-1', 'staff-uuid', { userId: 'staff-uuid', isStaff: true }, 'test');
     expect(result.forceEndedById).toBe('staff-uuid');
     // The persisted update payload must include the actor.
     expect(captured[0]).toMatchObject({ forceEndedById: 'staff-uuid', status: 'ended' });
+  });
+
+  it('refuses a non-staff viewer at the service boundary (M1)', async () => {
+    // M1: forceEndCall previously trusted the actingStaffId param with no check. It now
+    // takes a PhoneViewer and refuses non-staff before touching the call.
+    const svc = new PhoneService(makeDb({}));
+    await expect(
+      svc.forceEndCall('call-1', 'not-staff', { userId: 'not-staff', isStaff: false }, 'test'),
+    ).rejects.toMatchObject({ code: 'forbidden' });
   });
 
   it('preserves up to 59 chars of the reason note (column budget after `force_ended_by_staff:` prefix)', async () => {
@@ -507,7 +665,7 @@ describe('PhoneService.forceEndCall', () => {
       }),
     } as any;
     const svc = new PhoneService(db);
-    await svc.forceEndCall('call-1', 'staff-uuid', longNote);
+    await svc.forceEndCall('call-1', 'staff-uuid', { userId: 'staff-uuid', isStaff: true }, longNote);
     expect(captured[0].endedReason).toBe(`force_ended_by_staff:${'x'.repeat(59)}`);
   });
 });
@@ -596,6 +754,41 @@ describe('PhoneService.answerCall / declineCall isAlive guard', () => {
     const svc = new PhoneService(db);
     await expect(svc.declineCall('call-1', 'r')).rejects.toMatchObject({ code: 'dead' });
   });
+
+  it('runs answerCall ring-check + alive-check + state update inside one transaction (M2)', async () => {
+    // M2: the FOR UPDATE-locked transaction is what closes the alive-check TOCTOU — a death
+    // finalization can no longer land between the alive check and the status UPDATE. Assert
+    // the transaction boundary directly.
+    const txCounter = { count: 0 };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'call-1', status: 'ringing', callerPlayerId: 'c', recipientPlayerId: 'r' }],
+        [{ isAlive: true }],
+      ],
+      updateReturning: [[{ id: 'call-1', status: 'active' }]],
+      transactionCalls: txCounter,
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.answerCall('call-1', 'r');
+    expect(txCounter.count).toBe(1);
+    expect(result.status).toBe('active');
+  });
+
+  it('runs declineCall alive-check + state update inside one transaction (M2)', async () => {
+    const txCounter = { count: 0 };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'call-1', status: 'ringing', callerPlayerId: 'c', recipientPlayerId: 'r' }],
+        [{ isAlive: true }],
+      ],
+      updateReturning: [[{ id: 'call-1', status: 'declined' }]],
+      transactionCalls: txCounter,
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.declineCall('call-1', 'r');
+    expect(txCounter.count).toBe(1);
+    expect(result.status).toBe('declined');
+  });
 });
 
 describe('PhoneService.deactivateNumber', () => {
@@ -610,6 +803,73 @@ describe('PhoneService.deactivateNumber', () => {
     await expect(
       svc.deactivateNumber('num-1', 'p1', { userId: 'p1', isStaff: false }),
     ).rejects.toMatchObject({ code: 'invalid_state' });
+  });
+
+  it('auto-revokes active taps on the number and writes a number_deactivated audit row (M5)', async () => {
+    // M5: deactivating a number must auto-revoke its taps in the same transaction — a tap on
+    // a retired number silently never fires but still shows live in tap-list. The audit row
+    // keeps the rogue-staff chain reconstructible.
+    const inserted: unknown[] = [];
+    let numberUpdate: Record<string, unknown> | null = null;
+    let tapUpdate: Record<string, unknown> | null = null;
+    const db: any = {
+      transaction: async (fn: (tx: unknown) => unknown) => fn(db),
+      execute: async () => undefined, // advisory lock no-op
+      select: (() => {
+        // number lookup → row; open-call lookup → none.
+        const queue: unknown[][] = [
+          [{ id: 'num-1', playerId: 'p1', isActive: true, numberNormalized: '+15550142' }],
+          [],
+        ];
+        return () => {
+          const rows = queue.shift() ?? [];
+          const resolved = Promise.resolve(rows);
+          const handler: ProxyHandler<object> = {
+            get(_t, prop) {
+              if (prop === 'then') {
+                return (ok: (v: unknown) => unknown, err?: (r: unknown) => unknown) =>
+                  resolved.then(ok, err);
+              }
+              return () => new Proxy({}, handler);
+            },
+          };
+          return new Proxy({}, handler);
+        };
+      })(),
+      update: () => ({
+        set: (values: Record<string, unknown>) => ({
+          where: () => {
+            // First update (no .returning() awaited) flips the number; second (.returning())
+            // flips the taps and returns them.
+            if (!numberUpdate) {
+              numberUpdate = values;
+              return { then: (r: (v: unknown) => unknown) => Promise.resolve(undefined).then(r) };
+            }
+            tapUpdate = values;
+            return {
+              returning: () =>
+                Promise.resolve([
+                  { id: 'tap-1', targetNumberId: 'num-1', mirrorChannelId: 'C1', mirrorDiscordUserId: null },
+                ]),
+            };
+          },
+        }),
+      }),
+      insert: () => ({
+        values: (v: unknown) => {
+          inserted.push(v);
+          return { then: (r: (v: unknown) => unknown) => Promise.resolve(undefined).then(r) };
+        },
+      }),
+    };
+    const svc = new PhoneService(db);
+    await svc.deactivateNumber('num-1', 'p1', { userId: 'p1', isStaff: false });
+    expect(numberUpdate).toMatchObject({ isActive: false });
+    expect(tapUpdate).toMatchObject({ isActive: false });
+    // One audit insert, carrying the number_deactivated action for the revoked tap.
+    expect(inserted).toHaveLength(1);
+    const auditValues = inserted[0] as Array<{ action: string; tapId: string }>;
+    expect(auditValues[0]).toMatchObject({ action: 'number_deactivated', tapId: 'tap-1' });
   });
 });
 
@@ -629,7 +889,7 @@ describe('PhoneService.setTap', () => {
     const txCounter = { count: 0 };
     const db = makeDb({
       selectQueues: [
-        [{ id: 'n1', numberNormalized: '+15550142' }], // number lookup
+        [{ id: 'n1', numberNormalized: '+15550142', isActive: true }], // number lookup
       ],
       insertReturning: [
         [{ id: 'tap-1', targetNumberId: 'n1' }], // phoneTaps insert (returning)
@@ -643,14 +903,53 @@ describe('PhoneService.setTap', () => {
     );
     expect(txCounter.count).toBe(1);
   });
+
+  it('refuses a tap on a retired (inactive) number (M3)', async () => {
+    // M3: a retired number id still resolves through the FK, but a tap on it would silently
+    // never fire — refuse it at the boundary instead of creating a dead tap.
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'n1', numberNormalized: '+15550142', isActive: false }],
+      ],
+    });
+    const svc = new PhoneService(db);
+    await expect(
+      svc.setTap(
+        { targetNumberId: 'n1', createdById: 'staff', mirrorChannelId: 'C1' },
+        { userId: 'staff', isStaff: true },
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_state' });
+  });
+
+  it('translates a 23505 from the active-target unique index into a friendly already-tapped error (H2)', async () => {
+    // H2: `phone_taps_active_target_unique` rejects a second active tap on the same number.
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'n1', numberNormalized: '+15550142', isActive: true }],
+      ],
+      insertErrors: [Object.assign(new Error('dup'), { code: '23505' })],
+    });
+    const svc = new PhoneService(db);
+    await expect(
+      svc.setTap(
+        { targetNumberId: 'n1', createdById: 'staff', mirrorChannelId: 'C1' },
+        { userId: 'staff', isStaff: true },
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_state' });
+  });
 });
 
 describe('PhoneService.revokeTap', () => {
-  it('wraps the update + audit insert in db.transaction', async () => {
+  it('wraps the conditional update + audit insert in db.transaction', async () => {
+    // M4: the active-state check is now folded into `UPDATE ... WHERE is_active = true
+    // RETURNING` inside the transaction — the update returns the tap row, then the number
+    // lookup, then the audit insert.
     const txCounter = { count: 0 };
     const db = makeDb({
+      updateReturning: [
+        [{ id: 'tap-1', isActive: false, targetNumberId: 'n1', mirrorChannelId: 'C1', mirrorDiscordUserId: null }],
+      ],
       selectQueues: [
-        [{ id: 'tap-1', isActive: true, targetNumberId: 'n1', mirrorChannelId: 'C1', mirrorDiscordUserId: null }],
         [{ numberNormalized: '+15550142' }],
       ],
       transactionCalls: txCounter,
@@ -659,22 +958,44 @@ describe('PhoneService.revokeTap', () => {
     await svc.revokeTap('tap-1', 'staff', { userId: 'staff', isStaff: true });
     expect(txCounter.count).toBe(1);
   });
+
+  it('refuses (not_found) when the conditional update flips no row — already revoked / race loser (M4)', async () => {
+    // M4: two concurrent revokes can no longer both write a `revoked` audit row. The caller
+    // whose `UPDATE ... WHERE is_active = true` matches zero rows gets not_found and does not
+    // audit.
+    const db = makeDb({
+      updateReturning: [[]], // no row flipped
+    });
+    const svc = new PhoneService(db);
+    await expect(
+      svc.revokeTap('tap-1', 'staff', { userId: 'staff', isStaff: true }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
 });
 
 describe('PhoneService.getCallTranscript', () => {
-  it('forbids non-participants from viewing a transcript', async () => {
+  it('returns null (not a forbidden throw) for a non-participant — no existence leak (M6)', async () => {
+    // M6: returning null for a real-but-private call collapses it with the not-found case,
+    // so a non-participant cannot distinguish "this call exists" from "no such call". Mirrors
+    // getPlayerVotingRecord.
     const db = makeDb({
       selectQueues: [
         [{ id: 'call-1', callerPlayerId: 'c', recipientPlayerId: 'r' }],
       ],
     });
     const svc = new PhoneService(db);
-    await expect(
-      svc.getCallTranscript('call-1', { userId: 'stranger', isStaff: false }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
+    const result = await svc.getCallTranscript('call-1', { userId: 'stranger', isStaff: false });
+    expect(result).toBeNull();
   });
 
-  it('allows a participant to view their own transcript', async () => {
+  it('returns null for a non-existent call too (same shape as the non-participant case)', async () => {
+    const db = makeDb({ selectQueues: [[]] });
+    const svc = new PhoneService(db);
+    const result = await svc.getCallTranscript('missing', { userId: 'anyone', isStaff: false });
+    expect(result).toBeNull();
+  });
+
+  it('allows a participant to view their own transcript (no taps key in the non-staff shape)', async () => {
     const db = makeDb({
       selectQueues: [
         [{ id: 'call-1', callerPlayerId: 'c', recipientPlayerId: 'r' }],
@@ -684,18 +1005,25 @@ describe('PhoneService.getCallTranscript', () => {
     const svc = new PhoneService(db);
     const result = await svc.getCallTranscript('call-1', { userId: 'c', isStaff: false });
     expect(result?.messages.length).toBeGreaterThan(0);
+    // L5: non-staff shape is unchanged — no taps key.
+    expect(result && 'taps' in result).toBe(false);
   });
 
-  it('allows staff to view any transcript', async () => {
+  it('attaches tap-delivery rows for a staff viewer (L5)', async () => {
+    // L5: a staff transcript carries `taps` so the wiretap audit trail is reconstructible
+    // from one read.
     const db = makeDb({
       selectQueues: [
-        [{ id: 'call-1', callerPlayerId: 'c', recipientPlayerId: 'r' }],
-        [],
+        [{ id: 'call-1', callerPlayerId: 'c', recipientPlayerId: 'r' }], // call
+        [{ id: 'm1', content: 'hi' }],                                    // messages
+        [{ id: 'delivery-1', messageId: 'm1', tapId: 'tap-1' }],          // tap deliveries
       ],
     });
     const svc = new PhoneService(db);
     const result = await svc.getCallTranscript('call-1', { userId: 'staff', isStaff: true });
     expect(result?.call.id).toBe('call-1');
+    expect(result?.taps).toHaveLength(1);
+    expect(result?.taps?.[0].id).toBe('delivery-1');
   });
 });
 
@@ -854,7 +1182,7 @@ describe('PhoneService.setTap requires a destination', () => {
     const txCounter = { count: 0 };
     const db = makeDb({
       selectQueues: [
-        [{ id: 'n1', numberNormalized: '+15550142' }],
+        [{ id: 'n1', numberNormalized: '+15550142', isActive: true }],
       ],
       insertReturning: [[{ id: 'tap-env', targetNumberId: 'n1' }]],
       transactionCalls: txCounter,

@@ -6,14 +6,13 @@ import {
 } from 'discord.js';
 import { EmbedBuilder } from 'discord.js';
 import { db } from '../db.js';
-import { eq } from 'drizzle-orm';
-import { players } from '@hansard/db';
 import {
   PhoneService,
   PhoneServiceError,
 } from '@hansard/api/services/phoneService';
 import { hangUpAndNotify, postCallOpenedToStaffThread } from '../utils/phoneRelay.js';
 import { errorEmbed } from '../utils/embeds.js';
+import { resolvePhonePlayer } from '../commands/phone/playerLookup.js';
 
 export const PHONE_ANSWER_PREFIX = 'phone_answer:';
 export const PHONE_DECLINE_PREFIX = 'phone_decline:';
@@ -39,15 +38,6 @@ export function buildIncomingCallActions(callId: string): ActionRowBuilder<Butto
   return row;
 }
 
-async function resolvePlayerByDiscordId(discordId: string): Promise<{ id: string; characterName: string | null } | null> {
-  const [row] = await db
-    .select({ id: players.id, characterName: players.characterName })
-    .from(players)
-    .where(eq(players.discordId, discordId))
-    .limit(1);
-  return row ?? null;
-}
-
 /** Returns true if the interaction was a phone button and we handled it. */
 export async function handlePhoneButton(interaction: ButtonInteraction): Promise<boolean> {
   const customId = interaction.customId;
@@ -65,7 +55,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
 
   await interaction.deferReply({ ephemeral: true });
 
-  const player = await resolvePlayerByDiscordId(interaction.user.id);
+  const player = await resolvePhonePlayer(interaction.user.id);
   if (!player || !player.characterName) {
     await interaction.editReply({
       embeds: [errorEmbed('You need an active character to use the phone system.')],

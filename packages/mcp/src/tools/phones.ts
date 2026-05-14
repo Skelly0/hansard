@@ -6,7 +6,7 @@ export const registerPhoneTools: RegisterToolsFn = (server, ctx) => {
   server.registerTool(
     'list_my_phone_numbers',
     {
-      description: 'List the authenticated player\'s own active phone numbers.',
+      description: "List the authenticated player's own active phone numbers.",
       inputSchema: {},
     },
     safeHandler(async () => {
@@ -21,7 +21,7 @@ export const registerPhoneTools: RegisterToolsFn = (server, ctx) => {
     'get_phone_call_history',
     {
       description:
-        'Get a player\'s call history. Non-staff sessions may only request their own; staff sessions may request any player.',
+        "Get a player's call history. Non-staff sessions may only request their own; staff sessions may request any player.",
       inputSchema: {
         playerId: z.string().uuid().describe('Target player UUID.'),
         limit: z.number().int().min(1).max(100).optional(),

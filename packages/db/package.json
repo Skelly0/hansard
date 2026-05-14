@@ -13,6 +13,7 @@
     "migrate:invite-only-parties": "tsx scripts/migrate-invite-only-parties.ts",
     "migrate:npc-house-active": "tsx scripts/migrate-npc-house-active.ts",
     "migrate:aging-config": "tsx scripts/migrate-aging-config.ts",
+    "migrate:sessions-table": "tsx scripts/migrate-sessions-table.ts",
     "fix:bill-5-status": "tsx scripts/fix-bill-5-status.ts",
     "push": "drizzle-kit push",
     "studio": "drizzle-kit studio",

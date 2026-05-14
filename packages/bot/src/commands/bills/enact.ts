@@ -133,6 +133,21 @@ const command: Command = {
 
     const changedById = actor?.id ?? bill.authorId;
 
+    // Resolve the bill's author for display attribution
+    const [billAuthor] = await db
+      .select({
+        characterName: players.characterName,
+        discordId: players.discordId,
+      })
+      .from(players)
+      .where(eq(players.id, bill.authorId))
+      .limit(1);
+
+    const authorName = billAuthor?.characterName ?? 'Unknown';
+    const authorDisplay = billAuthor?.discordId
+      ? `${authorName} (<@${billAuthor.discordId}>)`
+      : authorName;
+
     try {
       const oldStatus = bill.status;
       const now = new Date();
@@ -164,7 +179,9 @@ const command: Command = {
         ? `\n\n[\u{1F4D6} Read the full text](${bill.googleDocUrl})`
         : '';
 
-      const fields: { name: string; value: string; inline?: boolean }[] = [];
+      const fields: { name: string; value: string; inline?: boolean }[] = [
+        { name: 'Author', value: authorDisplay, inline: true },
+      ];
       if (bill.tags?.length) {
         fields.push({ name: 'Tags', value: bill.tags.join(' · '), inline: true });
       }
@@ -181,7 +198,7 @@ const command: Command = {
           '',
           `*Enacted by <@${interaction.user.id}> · <t:${enactedTimestamp}:F>*`,
         ].join('\n'),
-        fields: fields.length ? fields : undefined,
+        fields,
       });
 
       await postLegislationEmbed({ client: interaction.client, embed });

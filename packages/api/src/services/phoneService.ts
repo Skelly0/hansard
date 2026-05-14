@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, sql, count, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql, count, type SQL } from 'drizzle-orm';
 import {
   phoneNumbers,
   phoneCalls,
@@ -13,6 +13,7 @@ import {
 import {
   PHONE_RING_TIMEOUT_MS,
   PHONE_STRANDED_CALL_MAX_AGE_MS,
+  PHONE_STALE_TAP_DELIVERY_MAX_AGE_MS,
   PHONE_NUMBERS_PER_PLAYER_LIMIT,
   PHONE_INELIGIBLE_DEAD,
   PHONE_INELIGIBLE_NO_CHARACTER,
@@ -1333,6 +1334,36 @@ export class PhoneService {
       .update(phoneCalls)
       .set({ status: 'ended', endedAt: now, endedReason: 'session_reset' })
       .where(and(eq(phoneCalls.status, 'active'), sql`started_at < ${cutoff}`))
+      .returning();
+    return rows;
+  }
+
+  /**
+   * Sweep crash-stranded tap-delivery placeholders. `recordMessage` pre-creates a
+   * `phone_message_tap_deliveries` row per active tap inside the message transaction, and the
+   * relay normally completes each via `completeTapDelivery`. If the relay crashes or throws
+   * before reporting the send, the placeholder is left `delivered_at IS NULL AND error IS NULL`
+   * indefinitely — on a staff transcript read that is indistinguishable from a send still in
+   * flight. This marks any such row older than `maxAgeMs` with an explicit error so the audit
+   * trail is unambiguous. The `error IS NULL` guard in the WHERE means a row a concurrent relay
+   * completes mid-sweep is left untouched. Served by `phone_message_tap_deliveries_pending_idx`.
+   */
+  async sweepStaleTapDeliveries(
+    opts: { now?: Date; maxAgeMs?: number } = {},
+  ): Promise<PhoneMessageTapDelivery[]> {
+    const now = opts.now ?? new Date();
+    const maxAgeMs = opts.maxAgeMs ?? PHONE_STALE_TAP_DELIVERY_MAX_AGE_MS;
+    const cutoff = new Date(now.getTime() - maxAgeMs);
+    const rows = await this.db
+      .update(phoneMessageTapDeliveries)
+      .set({ error: 'relay crashed before delivery' })
+      .where(
+        and(
+          isNull(phoneMessageTapDeliveries.deliveredAt),
+          isNull(phoneMessageTapDeliveries.error),
+          sql`created_at < ${cutoff}`,
+        ),
+      )
       .returning();
     return rows;
   }

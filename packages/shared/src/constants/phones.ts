@@ -17,6 +17,16 @@ export const PHONE_DM_CHUNK_BUDGET = 1900;
 /** How old an `active` call must be before the startup sweep treats it as crash-stranded. */
 export const PHONE_STRANDED_CALL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * How old a still-pending `phone_message_tap_deliveries` placeholder may be before the
+ * worker sweep treats it as crash-stranded. `recordMessage` pre-creates these rows inside
+ * the message transaction and the relay normally completes them within seconds; a row
+ * still `delivered_at IS NULL AND error IS NULL` after this window means the relay crashed
+ * or threw before reporting the send result, so the sweep marks it with an error note.
+ * 10 minutes is well over any realistic relay fan-out (sequenced, but each tap is fast).
+ */
+export const PHONE_STALE_TAP_DELIVERY_MAX_AGE_MS = 10 * 60 * 1000;
+
 /** How long to wait between "not in a call" hints to the same DM-er. */
 export const PHONE_HINT_COOLDOWN_MS = 60 * 1000;
 

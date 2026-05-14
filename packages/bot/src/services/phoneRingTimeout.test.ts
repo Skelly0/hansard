@@ -136,3 +136,33 @@ describe('sweepStrandedActiveCalls', () => {
     expect(ended).toEqual(swept);
   });
 });
+
+describe('sweepStaleTapDeliveries', () => {
+  it('returns the swept placeholder rows and marks them with an error', async () => {
+    const { sweepStaleTapDeliveries } = await import('./phoneRingTimeout.js');
+    const swept = [{ id: 'delivery-1', error: 'relay crashed before delivery' }];
+    const { db, captured } = buildDb(swept);
+    const { swept: result } = await sweepStaleTapDeliveries(db as any, { maxAgeMs: 1000 });
+    expect(result).toEqual(swept);
+    expect(captured.setArg).toEqual({ error: 'relay crashed before delivery' });
+    // The sweep must only touch placeholders that are still pending — `delivered_at` AND
+    // `error` both NULL — so a row a concurrent relay completes mid-sweep is left alone.
+    // Two `isNull(...)` clauses emit two ` is null` SQL chunks; `created_at < cutoff` bounds it.
+    const predicate = collectStrings(captured.whereArg);
+    expect(predicate.filter((s) => s.includes('is null'))).toHaveLength(2);
+    expect(predicate.join(' ')).toContain('created_at <');
+  });
+
+  it('swallows errors and returns an empty result', async () => {
+    const { sweepStaleTapDeliveries } = await import('./phoneRingTimeout.js');
+    const db = {
+      update: vi.fn(() => {
+        throw new Error('db down');
+      }),
+    };
+    const logger = { error: vi.fn(), log: vi.fn() };
+    const { swept } = await sweepStaleTapDeliveries(db as any, { logger });
+    expect(swept).toEqual([]);
+    expect(logger.error).toHaveBeenCalled();
+  });
+});

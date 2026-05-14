@@ -75,13 +75,15 @@ function chunkText(text: string, budget: number): string[] {
     if (cut < budget * 0.6) cut = budget;
     // H3: `slice` operates on UTF-16 code units. A 4-byte emoji (or any astral-plane
     // codepoint) is a surrogate pair; cutting between its halves renders both sides as `?`.
-    // If `cut` lands on a low surrogate (0xDC00–0xDFFF), the high surrogate is the unit
-    // before it — back up by one so the whole pair moves to the next chunk intact. The
-    // newline/space branches can also land here if the boundary char itself sits right
-    // after a surrogate pair, so guard unconditionally.
+    // Only the hard-split branch (`cut = budget`) can land mid-pair — the `\n`/space branches
+    // resolve to a BMP boundary char (U+000A / U+0020), never a surrogate — but guarding
+    // unconditionally is harmless and robust if the break heuristic ever changes. If `cut`
+    // lands on a low surrogate (0xDC00–0xDFFF), the high surrogate is the unit before it, so
+    // back up by one to move the whole pair to the next chunk intact. The `cut >= 1` floor
+    // keeps a pathologically small `budget` from producing an empty chunk + infinite loop.
     if (cut > 0 && cut < remaining.length) {
       const code = remaining.charCodeAt(cut);
-      if (code >= 0xdc00 && code <= 0xdfff) cut -= 1;
+      if (code >= 0xdc00 && code <= 0xdfff) cut = Math.max(1, cut - 1);
     }
     chunks.push(remaining.slice(0, cut).trimEnd());
     remaining = remaining.slice(cut).trimStart();

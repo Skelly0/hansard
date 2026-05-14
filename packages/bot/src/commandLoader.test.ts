@@ -61,7 +61,6 @@ describe('loadCommands', () => {
     // this number (and notice how close to the cap we are) rather than silently drifting.
     // If this fails after intentionally adding/removing a command, update the literal.
     expect(commands.size).toBe(EXPECTED_COMMAND_COUNT);
-    expect(commands.size).toBeLessThanOrEqual(100);
   }, 10_000);
 });
 

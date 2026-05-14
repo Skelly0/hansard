@@ -1,6 +1,10 @@
 import type { Client } from 'discord.js';
 import type { Database } from '@hansard/db';
-import { PhoneService, type PhoneCall } from '@hansard/api/services/phoneService';
+import {
+  PhoneService,
+  type PhoneCall,
+  type PhoneMessageTapDelivery,
+} from '@hansard/api/services/phoneService';
 import { PHONE_RING_WORKER_INTERVAL_MS } from '@hansard/shared';
 import { hangUpAndNotify } from '../utils/phoneRelay.js';
 
@@ -82,6 +86,33 @@ export async function sweepStrandedActiveCalls(
   return { ended };
 }
 
+/**
+ * Mark crash-stranded tap-delivery placeholders with an explicit error. `recordMessage`
+ * pre-creates a `phone_message_tap_deliveries` row per active tap; if the relay crashes or
+ * throws before completing it, the row stays pending forever. Running this on the worker tick
+ * reconciles such rows within one interval rather than letting them linger until a restart.
+ */
+export async function sweepStaleTapDeliveries(
+  db: Database,
+  options: { now?: Date; maxAgeMs?: number; logger?: Pick<Console, 'error' | 'log'> } = {},
+): Promise<{ swept: PhoneMessageTapDelivery[] }> {
+  const svc = new PhoneService(db);
+  const logger = options.logger ?? console;
+
+  let swept: PhoneMessageTapDelivery[] = [];
+  try {
+    swept = await svc.sweepStaleTapDeliveries({ now: options.now, maxAgeMs: options.maxAgeMs });
+  } catch (error) {
+    logger.error('[phone:worker] failed to sweep stale tap deliveries:', error);
+    return { swept: [] };
+  }
+
+  if (swept.length > 0) {
+    logger.log(`[phone:worker] marked ${swept.length} crash-stranded tap delivery placeholder(s) as failed`);
+  }
+  return { swept };
+}
+
 export function startPhoneRingTimeoutWorker(
   db: Database,
   options: PhoneRingWorkerOptions = {},
@@ -101,6 +132,8 @@ export function startPhoneRingTimeoutWorker(
       if (expired.length > 0) {
         logger.log(`[phone:worker] expired ${expired.length} unanswered call(s)`);
       }
+      // Reconcile any tap-delivery placeholders left pending by a crashed/throwing relay.
+      await sweepStaleTapDeliveries(db, { logger });
     } catch (error) {
       logger.error('[phone:worker] tick failed:', error);
     } finally {

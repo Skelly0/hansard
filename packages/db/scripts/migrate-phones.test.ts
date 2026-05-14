@@ -108,6 +108,14 @@ describe('migrate-phones', () => {
     expect(script).toMatch(/ON "phone_tap_audit_log" \("tap_id", "created_at"\)/);
   });
 
+  it('partial-indexes pending tap deliveries for the crash-stranded sweep', () => {
+    // The worker sweep scans `delivered_at IS NULL AND error IS NULL AND created_at < cutoff`.
+    expect(script).toContain('CREATE INDEX IF NOT EXISTS "phone_message_tap_deliveries_pending_idx"');
+    expect(script).toMatch(
+      /ON "phone_message_tap_deliveries" \("created_at"\)\s*WHERE delivered_at IS NULL AND error IS NULL/,
+    );
+  });
+
   it('permits the number_deactivated audit action', () => {
     // M5: deactivating a number auto-revokes its taps with a `number_deactivated` audit row.
     expect(script).toContain('number_deactivated');

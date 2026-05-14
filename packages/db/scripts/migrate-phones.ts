@@ -153,8 +153,10 @@ const statements: string[] = [
   // millisecond-resolution and ties sort non-deterministically. For legacy deployments that
   // predate this column, add it as bigserial: Postgres creates the owned sequence and
   // backfills every existing row with a strictly-increasing value. Idempotent — skipped if
-  // the column already exists. `bigserial` is `bigint NOT NULL DEFAULT nextval(...)`, so the
-  // ADD COLUMN is rewrite-safe (every existing row gets a value).
+  // the column already exists. NOTE: `ADD COLUMN ... bigserial NOT NULL` rewrites the whole
+  // table under an AccessExclusiveLock (every row gets a `nextval`); it won't fail, but it
+  // is not an online change. Acceptable here — `phone_messages` is a small append-only
+  // transcript table and this only runs once per legacy deployment.
   `DO $$ BEGIN
     IF NOT EXISTS (
       SELECT 1 FROM information_schema.columns
@@ -350,6 +352,12 @@ const statements: string[] = [
   END $$;`,
   `CREATE INDEX IF NOT EXISTS "phone_message_tap_deliveries_tap_created_idx"
     ON "phone_message_tap_deliveries" ("tap_id", "created_at" DESC);`,
+  // Supports the worker sweep for crash-stranded placeholder deliveries — rows still
+  // `delivered_at IS NULL AND error IS NULL` past the stale cutoff. Partial so only the
+  // small in-flight set is indexed; completed rows are excluded.
+  `CREATE INDEX IF NOT EXISTS "phone_message_tap_deliveries_pending_idx"
+    ON "phone_message_tap_deliveries" ("created_at")
+    WHERE delivered_at IS NULL AND error IS NULL;`,
 ];
 
 const validateStatements: string[] = [

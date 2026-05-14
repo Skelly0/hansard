@@ -206,4 +206,10 @@ export const phoneMessageTapDeliveries = pgTable('phone_message_tap_deliveries',
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   tapCreatedIdx: index('phone_message_tap_deliveries_tap_created_idx').on(table.tapId, table.createdAt.desc()),
+  // Supports the worker sweep for crash-stranded placeholders: `delivered_at IS NULL AND
+  // error IS NULL AND created_at < cutoff`. Partial so the index only carries the small set
+  // of in-flight deliveries — completed rows (the overwhelming majority) are excluded.
+  pendingIdx: index('phone_message_tap_deliveries_pending_idx')
+    .on(table.createdAt)
+    .where(sql`delivered_at IS NULL AND error IS NULL`),
 }));

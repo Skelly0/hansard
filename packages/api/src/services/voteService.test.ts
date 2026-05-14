@@ -446,6 +446,154 @@ describe('VoteService.tallyVotes status guard', () => {
   });
 });
 
+function makeCertifyDb(election: any, opts: { officeRow?: any; playerRow?: any; existingHolders?: any[] } = {}) {
+  const officeRow = opts.officeRow ?? {
+    id: 'office-1',
+    name: 'Chancellor',
+    isActive: true,
+    maxHolders: 1,
+    discordRoleId: null,
+  };
+  const playerRow = opts.playerRow ?? {
+    id: 'winner-player',
+    isAlive: true,
+    characterName: 'Ada Vance',
+    discordUsername: 'ada',
+  };
+  const existingHolders = opts.existingHolders ?? [];
+
+  // Top-level db select: only used to fetch the election in certifyElection
+  const electionLimit = vi.fn().mockResolvedValue(election ? [election] : []);
+  const electionWhere = vi.fn().mockReturnValue({ limit: electionLimit });
+  const electionFrom = vi.fn().mockReturnValue({ where: electionWhere });
+  const topSelect = vi.fn().mockReturnValue({ from: electionFrom });
+
+  // Inside the transaction, calls happen in order:
+  //   1. update(elections).set().where().returning() -> certify row
+  //   2. select(office).from(offices).where().limit()
+  //   3. select(player).from(players).where().limit()
+  //   4. select(existingHolding).from(officeHolders).where().limit()
+  //   5. select(currentHolders).from(officeHolders).where()
+  //   6. insert(officeHolders).values().returning() -> holder row
+  //   7. insert(playerEventLog).values()
+  const certifyReturning = vi.fn().mockResolvedValue([{ ...election, status: 'certified' }]);
+  const certifyWhere = vi.fn().mockReturnValue({ returning: certifyReturning });
+  const certifySet = vi.fn().mockReturnValue({ where: certifyWhere });
+  const txUpdate = vi.fn().mockReturnValue({ set: certifySet });
+
+  const officeLimit = vi.fn().mockResolvedValue([officeRow]);
+  const officeWhere = vi.fn().mockReturnValue({ limit: officeLimit });
+  const officeFrom = vi.fn().mockReturnValue({ where: officeWhere });
+
+  const playerLimit = vi.fn().mockResolvedValue([playerRow]);
+  const playerWhere = vi.fn().mockReturnValue({ limit: playerLimit });
+  const playerFrom = vi.fn().mockReturnValue({ where: playerWhere });
+
+  const existingHoldingLimit = vi.fn().mockResolvedValue([]);
+  const existingHoldingWhere = vi.fn().mockReturnValue({ limit: existingHoldingLimit });
+  const existingHoldingFrom = vi.fn().mockReturnValue({ where: existingHoldingWhere });
+
+  const currentHoldersWhere = vi.fn().mockResolvedValue(existingHolders);
+  const currentHoldersFrom = vi.fn().mockReturnValue({ where: currentHoldersWhere });
+
+  const txSelect = vi.fn()
+    .mockReturnValueOnce({ from: officeFrom })
+    .mockReturnValueOnce({ from: playerFrom })
+    .mockReturnValueOnce({ from: existingHoldingFrom })
+    .mockReturnValueOnce({ from: currentHoldersFrom });
+
+  const holderReturning = vi.fn().mockResolvedValue([{
+    id: 'holder-1',
+    officeId: 'office-1',
+    playerId: 'winner-player',
+    startDate: new Date('2026-05-13T00:00:00Z'),
+    endDate: null,
+    appointedBy: 'creator-player',
+    appointmentMethod: 'appointed',
+    electionId: null,
+    removalReason: null,
+    removedById: null,
+    simTick: null,
+    simDate: null,
+  }]);
+  const insertedHolders: any[] = [];
+  const holderValues = vi.fn((value) => {
+    insertedHolders.push(value);
+    return { returning: holderReturning };
+  });
+
+  const insertedEvents: any[] = [];
+  const eventValues = vi.fn((value) => {
+    insertedEvents.push(value);
+    return {};
+  });
+
+  const txInsert = vi.fn()
+    .mockReturnValueOnce({ values: holderValues })
+    .mockReturnValueOnce({ values: eventValues });
+
+  const tx = { update: txUpdate, select: txSelect, insert: txInsert };
+  const transaction = vi.fn(async (cb: any) => cb(tx));
+
+  return {
+    db: { select: topSelect, transaction },
+    insertedHolders,
+    insertedEvents,
+    certifyReturning,
+    transaction,
+  };
+}
+
+describe('VoteService.certifyElection position auto-appointment', () => {
+  it('appoints the winner to the office in a single transaction', async () => {
+    const election = {
+      id: 'election-1',
+      type: 'position_election',
+      status: 'tallied',
+      forOfficeId: 'office-1',
+      relatedBillId: null,
+      createdById: 'creator-player',
+      config: {},
+      results: { winners: ['winner-player'], finalTallies: { 'winner-player': 5 } },
+    };
+    const { db, insertedHolders, insertedEvents, transaction } = makeCertifyDb(election);
+
+    const updated = await new VoteService(db as any).certifyElection('election-1');
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(updated).toMatchObject({ id: 'election-1', status: 'certified' });
+    expect(insertedHolders[0]).toMatchObject({
+      officeId: 'office-1',
+      playerId: 'winner-player',
+      appointedBy: 'creator-player',
+      appointmentMethod: 'appointed',
+    });
+    expect(insertedEvents[0]).toMatchObject({
+      playerId: 'winner-player',
+      eventType: 'office_appointed',
+    });
+  });
+
+  it('refuses to certify a position election with no winner', async () => {
+    const election = {
+      id: 'election-1',
+      type: 'position_election',
+      status: 'tallied',
+      forOfficeId: 'office-1',
+      relatedBillId: null,
+      createdById: 'creator-player',
+      config: {},
+      results: { winners: [], finalTallies: {} },
+    };
+    const { db, transaction } = makeCertifyDb(election);
+
+    await expect(new VoteService(db as any).certifyElection('election-1')).rejects.toThrow(
+      /no winner/i,
+    );
+    expect(transaction).not.toHaveBeenCalled();
+  });
+});
+
 describe('VoteService.tallyVotes transactional safety', () => {
   it('rolls back the election status update if the bill_status_log insert fails', async () => {
     const castAt = new Date('2026-05-01T12:00:00.000Z');

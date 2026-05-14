@@ -62,9 +62,13 @@ export function advanceDateByTicks(
 ): string {
   const parsed = parseSimDate(dateStr);
   if (!parsed) {
-    // Can't parse — return a labelled fallback. Callers should ideally not
-    // hit this path; the simulation clock should always hold a parseable date.
-    return `${dateStr} +${ticks} ${tickUnit}s`;
+    // Throw rather than silently corrupting the simulation clock with a
+    // labelled fallback like "garbage +5 months". Callers should catch this
+    // and surface a useful staff-facing error.
+    throw new Error(
+      `Cannot advance unparseable sim date "${dateStr}" — expected ISO (YYYY-MM-DD) ` +
+      `or freeform ("Year X, Month Y"). The simulation clock must hold a parseable date.`,
+    );
   }
 
   if (parsed.format === 'freeform' && (tickUnit === 'day' || tickUnit === 'week')) {
@@ -131,7 +135,10 @@ export function calculateAge(birthDate: string | null, currentDate: string | nul
 
 /**
  * Build a birthDate string anchored to the simulation clock's currentDate.
- * Birthday defaults to month 1 / day 1 of the resulting birth year.
+ * For ISO clocks the birthday is anchored to the clock's current month/day
+ * so that `calculateAge(birthDateForAge(clock, N), clock) === N` at any
+ * month/day. Freeform clocks have month resolution only and so anchor to
+ * month=1, day=1 of the resulting birth year.
  */
 export function birthDateForAge(currentDate: string, ageYears: number): string {
   const parsed = parseSimDate(currentDate);
@@ -143,7 +150,12 @@ export function birthDateForAge(currentDate: string, ageYears: number): string {
 
   const birthYear = parsed.year - ageYears;
   if (parsed.format === 'iso') {
-    return formatSimDate({ format: 'iso', year: birthYear, month: 1, day: 1 });
+    return formatSimDate({
+      format: 'iso',
+      year: birthYear,
+      month: parsed.month,
+      day: parsed.day,
+    });
   }
   return formatSimDate({ format: 'freeform', year: birthYear, month: 1, day: 1 });
 }

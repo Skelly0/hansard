@@ -17,6 +17,14 @@ export function createDb(connectionString: string): Database {
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 
 /**
+ * The transaction handle passed to a `db.transaction(async (tx) => ...)` callback.
+ * Helpers that need to run inside a caller-supplied transaction should accept
+ * `Database | Transaction` so they work both standalone and as part of a larger unit
+ * of work. Extracted from `Database['transaction']` so it stays in sync automatically.
+ */
+export type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/**
  * Close the underlying connection pool for a Database created via createDb.
  * No-op if the db wasn't created here. Safe to await on shutdown.
  */

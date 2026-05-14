@@ -31,6 +31,7 @@ import { BillStatus, DEFAULT_VOTE_DURATION_MS, hasVotingCloseTimePassed } from '
 import { getStrategy } from './tallying/index.js';
 import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
 import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
+import { appointToOffice } from './officeService.js';
 
 // ============================================================
 // Types for service inputs
@@ -327,8 +328,8 @@ export class VoteService {
     return row?.slug ?? null;
   }
 
-  private async isNpcHouseActive(): Promise<boolean> {
-    const [clock] = await this.db
+  private async isNpcHouseActive(executor: Pick<Database, 'select'> = this.db): Promise<boolean> {
+    const [clock] = await executor
       .select({ npcHouseActive: simulationClock.npcHouseActive })
       .from(simulationClock)
       .limit(1);
@@ -337,6 +338,7 @@ export class VoteService {
   }
 
   private async updateRelatedBillAfterTally(
+    tx: Pick<Database, 'select' | 'update' | 'insert'>,
     election: typeof elections.$inferSelect,
     result: TallyResult,
     talliedAt: Date,
@@ -350,13 +352,13 @@ export class VoteService {
       return;
     }
 
-    const npcHouseActive = result.passed ? await this.isNpcHouseActive() : false;
+    const npcHouseActive = result.passed ? await this.isNpcHouseActive(tx) : false;
     const playerVoteResult = result.passed ? 'passed' : 'rejected';
     const toStatus = result.passed
       ? npcHouseActive ? BillStatus.NPC_PENDING : BillStatus.PLAYER_PASSED
       : BillStatus.PLAYER_REJECTED;
 
-    await this.db
+    await tx
       .update(bills)
       .set({
         status: toStatus,
@@ -368,7 +370,7 @@ export class VoteService {
       })
       .where(eq(bills.id, election.relatedBillId));
 
-    await this.db.insert(billStatusLog).values({
+    await tx.insert(billStatusLog).values({
       billId: election.relatedBillId,
       fromStatus: BillStatus.VOTING,
       toStatus,
@@ -808,8 +810,14 @@ export class VoteService {
       throw new Error('Election not found');
     }
 
-    if (!['voting_closed', 'voting_open'].includes(election.status)) {
-      throw new Error('Election must be in voting_closed or voting_open status to tally');
+    // Tally must come after the voting window has closed; the bot auto-close
+    // worker handles the open -> closed transition. Tallying a still-open
+    // election would flip status to `tallied`/`npc_pending`, expose results
+    // through the sealed-results gate, and silently halt further ballots.
+    if (election.status !== 'voting_closed') {
+      throw new Error(
+        `Election must be in voting_closed status to tally (currently ${election.status}). Close the vote first.`,
+      );
     }
 
     // Fetch all ballots
@@ -873,17 +881,21 @@ export class VoteService {
 
     const talliedAt = new Date();
 
-    // Save results and update status
-    await this.db
-      .update(elections)
-      .set({
-        results: electionResults,
-        status: newStatus,
-        updatedAt: talliedAt,
-      })
-      .where(eq(elections.id, electionId));
+    // Save results, update status, and propagate to any linked legislative
+    // bill atomically so we never end up with an election marked tallied
+    // while the linked bill is stranded in `voting`.
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(elections)
+        .set({
+          results: electionResults,
+          status: newStatus,
+          updatedAt: talliedAt,
+        })
+        .where(eq(elections.id, electionId));
 
-    await this.updateRelatedBillAfterTally(election, result, talliedAt);
+      await this.updateRelatedBillAfterTally(tx, election, result, talliedAt);
+    });
 
     return electionResults;
   }
@@ -1094,16 +1106,39 @@ export class VoteService {
       }
     }
 
-    const [updated] = await this.db
-      .update(elections)
-      .set({ status: 'certified', updatedAt: new Date() })
-      .where(eq(elections.id, electionId))
-      .returning();
+    // Position elections require a winner before certification — otherwise
+    // we'd flip status to `certified` and silently skip the appointment,
+    // leaving the office vacant with no way to recover via the normal flow.
+    const isAppointingPositionElection =
+      election.type === 'position_election' && !!election.forOfficeId;
+    const results = election.results as ElectionResults | null;
+    if (isAppointingPositionElection) {
+      const winners = results?.winners ?? [];
+      if (winners.length === 0) {
+        throw new Error(
+          'Cannot certify a position election with no winner — re-run the tally or cancel the election.',
+        );
+      }
+    }
 
-    // TODO: If this is a position_election with forOfficeId,
-    // auto-appoint the winner to the office (officeService.appoint)
-    // and sync the Discord role.
+    const updated = await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(elections)
+        .set({ status: 'certified', updatedAt: new Date() })
+        .where(eq(elections.id, electionId))
+        .returning();
 
-    return updated ?? null;
+      if (row && isAppointingPositionElection && election.forOfficeId) {
+        const winners = results?.winners ?? [];
+        const winnerId = winners[0];
+        if (winnerId) {
+          await appointToOffice(tx, election.forOfficeId, winnerId, election.createdById);
+        }
+      }
+
+      return row ?? null;
+    });
+
+    return updated;
   }
 }

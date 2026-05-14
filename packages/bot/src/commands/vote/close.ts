@@ -4,7 +4,7 @@ import {
   type GuildMember,
   type Message,
 } from 'discord.js';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { ballots, candidates, elections, players } from '@hansard/db';
 import { meetsVoteThreshold, SUPERMAJORITY_PASS_THRESHOLD } from '@hansard/shared';
 import { VoteService } from '@hansard/api/services/voteService';
@@ -205,11 +205,17 @@ const command: Command = {
 export async function renderReactionResult(election: typeof elections.$inferSelect): Promise<void> {
   if (!election.discordMessageId || !election.discordChannelId) return;
 
-  // Fetch ballots
+  // Fetch ballots — mirror VoteService.tallyVotes by joining players and
+  // dropping ballots from dead voters so the inline reaction-mode tally
+  // matches the API tally (CLAUDE.md: dead characters do not cast counted votes).
   const allBallots = await db
-    .select()
+    .select({ vote: ballots.vote })
     .from(ballots)
-    .where(eq(ballots.electionId, election.id));
+    .innerJoin(players, eq(players.id, ballots.voterId))
+    .where(and(
+      eq(ballots.electionId, election.id),
+      eq(players.isAlive, true),
+    ));
 
   // Compute tally + result text per method
   let resultLines: string[];
@@ -259,11 +265,16 @@ export async function renderReactionResult(election: typeof elections.$inferSele
       `Abstain: **${abstain}**`,
     ];
   } else if (election.method === 'fptp') {
-    // Resolve candidate names + counts
+    // Resolve candidate names + counts. Mirror the reaction-cast path
+    // (messageReactionAdd.ts) by excluding withdrawn candidates so the
+    // result list only includes candidates voters could actually pick.
     const cRows = await db
       .select()
       .from(candidates)
-      .where(eq(candidates.electionId, election.id))
+      .where(and(
+        eq(candidates.electionId, election.id),
+        eq(candidates.isWithdrawn, false),
+      ))
       .orderBy(candidates.registeredAt);
 
     const tally = new Map<string, number>();

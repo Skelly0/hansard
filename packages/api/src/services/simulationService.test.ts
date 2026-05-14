@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { desc } from 'drizzle-orm';
 import { simulationClock, timeAdvanceLog, players, playerEventLog, officeHolders } from '@hansard/db';
-import { advanceTime, DEFAULT_AGING_CONFIG, sanitizeTimeAdvanceLog } from './simulationService';
+import { advanceTime, DEFAULT_AGING_CONFIG, getHistory, sanitizeTimeAdvanceLog } from './simulationService';
 
 function makePlayer(overrides: Record<string, unknown> = {}): any {
   return {
@@ -243,5 +244,71 @@ describe('simulation history privacy', () => {
     };
 
     expect(sanitizeTimeAdvanceLog(row, { isStaff: true })).toBe(row);
+  });
+});
+
+describe('getHistory ordering', () => {
+  it('returns the most recent time advances first', async () => {
+    // Three rows seeded with strictly increasing createdAt timestamps;
+    // newest-first means the row with the latest createdAt comes first.
+    const oldest = {
+      id: 'advance-old',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      summary: { aged: 1 },
+      notes: null,
+    };
+    const middle = {
+      id: 'advance-mid',
+      createdAt: new Date('2026-02-01T00:00:00Z'),
+      summary: { aged: 2 },
+      notes: null,
+    };
+    const newest = {
+      id: 'advance-new',
+      createdAt: new Date('2026-03-01T00:00:00Z'),
+      summary: { aged: 3 },
+      notes: null,
+    };
+
+    const storedRows = [oldest, middle, newest];
+    const limitSpy = vi.fn();
+    const orderBySpy = vi.fn();
+
+    const db: any = {
+      select: vi.fn(() => ({
+        from: vi.fn((table) => {
+          if (table !== timeAdvanceLog) {
+            throw new Error('Unexpected table in getHistory test');
+          }
+          return {
+            orderBy: (orderArg: unknown) => {
+              orderBySpy(orderArg);
+              return {
+                limit: (n: number) => {
+                  limitSpy(n);
+                  const sortedDesc = [...storedRows].sort(
+                    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+                  );
+                  return Promise.resolve(sortedDesc.slice(0, n));
+                },
+              };
+            },
+          };
+        }),
+      })),
+    };
+
+    const result = await getHistory(db, 20, { isStaff: true });
+
+    expect(limitSpy).toHaveBeenCalledWith(20);
+    // If the service regresses to `orderBy(timeAdvanceLog.createdAt)` (asc),
+    // the orderArg would be the bare column reference — assert it isn't.
+    expect(orderBySpy.mock.calls[0][0]).not.toBe(timeAdvanceLog.createdAt);
+    expect(orderBySpy.mock.calls[0][0]).toEqual(desc(timeAdvanceLog.createdAt));
+    expect(result.map((row: any) => row.id)).toEqual([
+      'advance-new',
+      'advance-mid',
+      'advance-old',
+    ]);
   });
 });

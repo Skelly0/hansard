@@ -13,6 +13,8 @@ import {
   useNpcConfirm,
   useWithdrawCandidate,
   useRegisterCandidate,
+  hasTalliedResults,
+  isSealedOpenResults,
 } from '../api/hooks/useVoting';
 import { useAuth } from '../api/hooks/useAuth';
 import { useSearchPlayers } from '../api/hooks/usePlayers';
@@ -101,7 +103,12 @@ export function ElectionDetail() {
 
   const stageIndex = getElectionStageIndex(election.status);
   const isYeaNay = election.method === 'yea_nay_abstain';
-  const hasMultipleRounds = results?.rounds && results.rounds.length > 1;
+  // Narrow the API response: only the "tallied" shape carries finalTallies /
+  // winners / passed / rounds. Sealed-open and unsealed-pending shapes have
+  // `results: null` and must NOT be treated as tallied output.
+  const tally = hasTalliedResults(results) ? results : null;
+  const sealedOpen = isSealedOpenResults(results);
+  const hasMultipleRounds = !!tally?.rounds && tally.rounds.length > 1;
 
   // Build candidate name map
   const candidateNames: Record<string, string> = {};
@@ -221,7 +228,7 @@ export function ElectionDetail() {
         {/* Results area */}
         <div className="lg:col-span-2">
           {/* Cancelled note even if no results were ever tallied */}
-          {!results && election.status === 'cancelled' && (
+          {!tally && election.status === 'cancelled' && (
             <div className="card border-l-status-rejected mb-4">
               <p className="text-label-ui text-text-tertiary mb-1">Vote Cancelled</p>
               <p className="text-body-sm text-text-secondary">
@@ -230,19 +237,32 @@ export function ElectionDetail() {
             </div>
           )}
 
-          {/* Results visualization */}
-          {results && (
+          {/* Sealed-open notice: voting is still live and results are hidden
+              until close, so we cannot render tallies yet. */}
+          {sealedOpen && (
+            <div className="card border-l-accent-voting mb-4">
+              <p className="text-label-ui text-text-tertiary mb-1">Results Sealed</p>
+              <p className="text-body-sm text-text-secondary">
+                Results are sealed until close. Tallies will appear here once
+                voting ends.
+              </p>
+            </div>
+          )}
+
+          {/* Results visualization — only when the API actually returned an
+              inline ElectionResults payload. */}
+          {tally && (
             <div className="mb-6">
               <h2 className="text-heading-1 mb-4">Results</h2>
 
               {/* Winner announcement */}
-              {results.winners && results.winners.length > 0 && (
+              {tally.winners && tally.winners.length > 0 && (
                 <div className="card border-l-accent-primary mb-4">
                   <p className="text-label-ui text-text-tertiary mb-1">
-                    {results.winners.length > 1 ? 'Winners' : 'Winner'}
+                    {tally.winners.length > 1 ? 'Winners' : 'Winner'}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    {results.winners.map((winnerId) => (
+                    {tally.winners.map((winnerId) => (
                       <span key={winnerId} className="text-display text-accent-primary">
                         {isYeaNay
                           ? winnerId.charAt(0).toUpperCase() + winnerId.slice(1)
@@ -250,9 +270,9 @@ export function ElectionDetail() {
                       </span>
                     ))}
                   </div>
-                  {results.passed !== undefined && (
-                    <Tag color={results.passed ? 'passed' : 'rejected'} className="mt-2">
-                      {results.passed ? 'Motion Passed' : 'Motion Failed'}
+                  {tally.passed !== undefined && (
+                    <Tag color={tally.passed ? 'passed' : 'rejected'} className="mt-2">
+                      {tally.passed ? 'Motion Passed' : 'Motion Failed'}
                     </Tag>
                   )}
                 </div>
@@ -260,12 +280,12 @@ export function ElectionDetail() {
 
               {/* Pass/fail callout for yea/nay motions where no "winner" list
                   is built (e.g. tallied with passed=false and no candidates). */}
-              {(!results.winners || results.winners.length === 0) &&
-                results.passed !== undefined && (
+              {(!tally.winners || tally.winners.length === 0) &&
+                tally.passed !== undefined && (
                 <div className="card border-l-accent-primary mb-4">
                   <p className="text-label-ui text-text-tertiary mb-1">Final Outcome</p>
-                  <Tag color={results.passed ? 'passed' : 'rejected'}>
-                    {results.passed ? 'Motion Passed' : 'Motion Failed'}
+                  <Tag color={tally.passed ? 'passed' : 'rejected'}>
+                    {tally.passed ? 'Motion Passed' : 'Motion Failed'}
                   </Tag>
                 </div>
               )}
@@ -281,17 +301,17 @@ export function ElectionDetail() {
               )}
 
               {/* Yea/Nay bars */}
-              {isYeaNay && results.finalTallies && (
+              {isYeaNay && tally.finalTallies && (
                 <div className="card border-l-accent-voting">
                   <ResultsBars
-                    yea={results.finalTallies['yea'] || 0}
-                    nay={results.finalTallies['nay'] || 0}
-                    abstain={results.finalTallies['abstain'] || 0}
+                    yea={tally.finalTallies['yea'] || 0}
+                    nay={tally.finalTallies['nay'] || 0}
+                    abstain={tally.finalTallies['abstain'] || 0}
                   />
                   {/* Margin */}
                   <div className="mt-3 text-center">
                     <span className="font-mono text-lg text-text-primary">
-                      Margin: {Math.abs((results.finalTallies['yea'] || 0) - (results.finalTallies['nay'] || 0))}
+                      Margin: {Math.abs((tally.finalTallies['yea'] || 0) - (tally.finalTallies['nay'] || 0))}
                     </span>
                   </div>
                 </div>
@@ -301,21 +321,22 @@ export function ElectionDetail() {
               {hasMultipleRounds && !isYeaNay && (
                 <div className="card border-l-accent-voting">
                   <MultiRoundBars
-                    rounds={results.rounds!}
+                    rounds={tally.rounds!}
                     candidateNames={candidateNames}
                   />
                 </div>
               )}
 
               {/* Single-round candidate results (bar per candidate) */}
-              {!isYeaNay && !hasMultipleRounds && results.finalTallies && (
+              {!isYeaNay && !hasMultipleRounds && tally.finalTallies && (
                 <div className="card border-l-accent-voting space-y-3">
-                  {Object.entries(results.finalTallies)
+                  {Object.entries(tally.finalTallies)
                     .sort(([, a], [, b]) => b - a)
                     .map(([candidateId, votes]) => {
-                      const maxVotes = Math.max(...Object.values(results.finalTallies));
+                      const tallyValues = Object.values(tally.finalTallies);
+                      const maxVotes = tallyValues.length > 0 ? Math.max(...tallyValues) : 0;
                       const pct = maxVotes > 0 ? (votes / maxVotes) * 100 : 0;
-                      const isWinner = results.winners?.includes(candidateId);
+                      const isWinner = tally.winners?.includes(candidateId);
 
                       return (
                         <div key={candidateId}>
@@ -422,10 +443,10 @@ export function ElectionDetail() {
                         {candidate.statement}
                       </p>
                     )}
-                    {results?.finalTallies && results.finalTallies[candidate.playerId] !== undefined && (
+                    {tally?.finalTallies && tally.finalTallies[candidate.playerId] !== undefined && (
                       <div className="mt-2 font-mono text-sm text-text-primary">
-                        {results.finalTallies[candidate.playerId]} votes
-                        {results.winners?.includes(candidate.playerId) && (
+                        {tally.finalTallies[candidate.playerId]} votes
+                        {tally.winners?.includes(candidate.playerId) && (
                           <span className="text-accent-primary ml-1">&bull; elected</span>
                         )}
                       </div>

@@ -10,7 +10,18 @@ const auth = vi.hoisted(() => ({
 const serviceMocks = vi.hoisted(() => ({
   getTicket: vi.fn(),
   updateTicket: vi.fn(),
+  assignTicket: vi.fn(),
 }));
+
+const errorStubs = vi.hoisted(() => {
+  class TicketAssigneeNotStaffErrorStub extends Error {
+    constructor(message = 'Assignee must be staff') {
+      super(message);
+      this.name = 'TicketAssigneeNotStaffError';
+    }
+  }
+  return { TicketAssigneeNotStaffErrorStub };
+});
 
 vi.mock('../middleware/requireAuth.js', () => ({
   requireAuth: async (request: any) => {
@@ -27,7 +38,9 @@ vi.mock('../services/ticketService.js', () => ({
   TicketService: class {
     getTicket = serviceMocks.getTicket;
     updateTicket = serviceMocks.updateTicket;
+    assignTicket = serviceMocks.assignTicket;
   },
+  TicketAssigneeNotStaffError: errorStubs.TicketAssigneeNotStaffErrorStub,
 }));
 
 async function appWithDb() {
@@ -66,5 +79,52 @@ describe('ticket routes', () => {
 
     expect(res.statusCode).toBe(403);
     expect(serviceMocks.updateTicket).not.toHaveBeenCalled();
+  });
+
+  it('refuses to assign a ticket to a non-staff player and returns 400', async () => {
+    auth.isStaff = true;
+    serviceMocks.assignTicket.mockRejectedValue(new errorStubs.TicketAssigneeNotStaffErrorStub());
+
+    const app = await appWithDb();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tickets/ticket-1/assign',
+      payload: { assigneeId: 'non-staff-player' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(serviceMocks.assignTicket).toHaveBeenCalledWith(
+      'ticket-1',
+      'non-staff-player',
+      'creator-player',
+    );
+  });
+
+  it('rejects PATCH with assignedToId targeting a non-staff player as 400 from staff caller', async () => {
+    auth.userId = 'staff-player';
+    auth.isStaff = true;
+    serviceMocks.getTicket.mockResolvedValue({
+      id: 'ticket-1',
+      createdById: 'creator-player',
+      assignedToId: null,
+    });
+    serviceMocks.updateTicket.mockRejectedValue(
+      new errorStubs.TicketAssigneeNotStaffErrorStub('Cannot assign ticket to a non-staff player'),
+    );
+
+    const app = await appWithDb();
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/tickets/ticket-1',
+      payload: {
+        assignedToId: 'non-staff-uuid',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toContain('non-staff');
   });
 });

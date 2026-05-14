@@ -4,11 +4,12 @@ import {
 } from 'discord.js';
 import { eq, ilike } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { bills, billStatusLog, elections, players } from '@hansard/db';
+import { bills, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
-import { BillStatus, DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
+import { BillStatus } from '@hansard/shared';
+import { createLegislativeVoteForBill } from './createVoteFlow.js';
 
 /**
  * Resolve a bill by either bill number (e.g. "B-001", "1") or title.
@@ -122,47 +123,15 @@ const command: Command = {
 
     try {
       const now = new Date();
-      const votingCloses = new Date(now.getTime() + DEFAULT_VOTE_DURATION_MS);
 
-      // Create the linked election (mirrors createVoteOnBill in billService)
-      const [election] = await db
-        .insert(elections)
-        .values({
-          title: `Vote on B-${String(bill.billNumber).padStart(3, '0')}: ${bill.title}`,
-          description: bill.summary ?? `Legislative vote on Bill #${bill.billNumber}: ${bill.title}`,
-          type: 'legislative_vote',
-          method: 'yea_nay_abstain',
-          requiredPermission: 'legislative_leader',
-          config: {
-            majorityType: 'simple',
-            passThreshold: 0.5,
-            anonymousBallots: false,
-            sealedResults: false,
-          },
-          relatedBillId: bill.id,
-          createdById: actor.id,
-          status: 'voting_open',
-          votingOpensAt: now,
-          votingClosesAt: votingCloses,
-        })
-        .returning();
-
-      const oldStatus = bill.status;
-      await db
-        .update(bills)
-        .set({
-          status: BillStatus.VOTING,
-          playerVoteId: election.id,
-          updatedAt: now,
-        })
-        .where(eq(bills.id, bill.id));
-
-      await db.insert(billStatusLog).values({
+      const { election } = await createLegislativeVoteForBill(db, {
         billId: bill.id,
-        fromStatus: oldStatus,
-        toStatus: BillStatus.VOTING,
-        changedById: actor.id,
-        notes: `Legislature vote created (election ${election.id})`,
+        billTitle: bill.title,
+        billNumber: bill.billNumber,
+        billSummary: bill.summary,
+        expectedStatus: bill.status,
+        createdById: actor.id,
+        now,
       });
 
       const padded = String(bill.billNumber).padStart(3, '0');
@@ -176,8 +145,8 @@ const command: Command = {
           `\u{1F5F3}\u{FE0F} A yea / nay / abstain vote has been opened.`,
           '',
           `**Election ID:** \`${election.id}\``,
-          `**Opens:** <t:${Math.floor(now.getTime() / 1000)}:F>`,
-          `**Closes:** <t:${Math.floor(votingCloses.getTime() / 1000)}:F>`,
+          `**Opens:** <t:${Math.floor(election.votingOpensAt.getTime() / 1000)}:F>`,
+          `**Closes:** <t:${Math.floor(election.votingClosesAt.getTime() / 1000)}:F>`,
           `**Called by:** <@${interaction.user.id}>`,
         ].join('\n'),
       });

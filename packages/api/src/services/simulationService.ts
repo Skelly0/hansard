@@ -1,4 +1,4 @@
-import { eq, and, isNull } from 'drizzle-orm';
+import { eq, and, desc, isNull } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import {
   simulationClock,
@@ -982,7 +982,7 @@ export async function getHistory(db: Database, limit = 20, viewer?: SimulationPr
   const rows = await db
     .select()
     .from(timeAdvanceLog)
-    .orderBy(timeAdvanceLog.createdAt)
+    .orderBy(desc(timeAdvanceLog.createdAt))
     .limit(limit);
   return rows.map((row) => sanitizeTimeAdvanceLog(row, viewer));
 }

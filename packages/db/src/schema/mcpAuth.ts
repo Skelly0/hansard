@@ -13,11 +13,11 @@ export const deviceCodes = pgTable('device_codes', {
   userCode: varchar('user_code', { length: 16 }).notNull().unique(),
   // Polling interval the CLI should use, in seconds.
   interval: integer('interval').default(5).notNull(),
-  expiresAt: timestamp('expires_at').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
   // Set when the user approves in the browser. Null = pending.
   playerId: uuid('player_id').references(() => players.id),
   approved: boolean('approved').default(false).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
 // === LONG-LIVED MCP TOKENS ===
@@ -35,10 +35,10 @@ export const mcpTokens = pgTable(
   {
     tokenHash: varchar('token_hash', { length: 64 }).primaryKey(),
     playerId: uuid('player_id').references(() => players.id).notNull(),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    lastUsedAt: timestamp('last_used_at').defaultNow().notNull(),
-    expiresAt: timestamp('expires_at').notNull(),
-    absoluteExpiresAt: timestamp('absolute_expires_at').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    absoluteExpiresAt: timestamp('absolute_expires_at', { withTimezone: true, mode: 'date' }).notNull(),
     // Optional human-readable label so users can identify a token in a
     // future revocation UI (e.g. "Claude Desktop on laptop").
     label: varchar('label', { length: 128 }),

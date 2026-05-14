@@ -29,6 +29,40 @@ export interface ElectionResults {
   runoffElectionId?: string;
 }
 
+/**
+ * The actual shape returned by `GET /elections/:id/results`.
+ *
+ * The API returns one of three discriminated shapes:
+ *  - sealed-open: results still hidden because `config.sealedResults` is true
+ *    and the election is still `voting_open`. `results: null`, `sealed: true`.
+ *  - unsealed-pending: visible but no tally has been written yet
+ *    (e.g. `voting_closed` before tally, or a freshly cancelled vote).
+ *    `results: null`, `sealed: false`.
+ *  - tallied: full `ElectionResults` fields are present inline, with
+ *    `sealed: false` and the current election `status` for context.
+ *
+ * Consumers MUST discriminate before reading `finalTallies`, `winners`,
+ * `passed`, or `rounds` — those fields are only present on the tallied shape.
+ */
+export type ElectionResultsResponse =
+  | { sealed: true; status: string; results: null }
+  | { sealed: false; status: string; results: null }
+  | (ElectionResults & { sealed: false; status: string });
+
+/** True when the response carries the inline ElectionResults fields. */
+export function hasTalliedResults(
+  res: ElectionResultsResponse | null | undefined,
+): res is ElectionResults & { sealed: false; status: string } {
+  return !!res && 'finalTallies' in res && res.finalTallies !== undefined;
+}
+
+/** True when the response is sealed-open (results hidden until close). */
+export function isSealedOpenResults(
+  res: ElectionResultsResponse | null | undefined,
+): res is { sealed: true; status: string; results: null } {
+  return !!res && res.sealed === true;
+}
+
 export interface Election {
   id: string;
   title: string;
@@ -106,7 +140,7 @@ export function useElection(id?: string) {
 export function useElectionResults(id?: string) {
   return useQuery({
     queryKey: ['elections', id, 'results'],
-    queryFn: () => api.get<ElectionResults>(`/elections/${id}/results`),
+    queryFn: () => api.get<ElectionResultsResponse>(`/elections/${id}/results`),
     enabled: !!id,
   });
 }

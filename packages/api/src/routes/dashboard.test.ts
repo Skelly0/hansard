@@ -203,4 +203,88 @@ describe('dashboard routes', () => {
       },
     ]);
   });
+
+  it('hides ailment and health player events from non-staff activity feed', async () => {
+    // Even if a row leaks through the DB filter (or filtering regresses),
+    // the route must not surface ailment/health event descriptions to non-staff
+    // viewers — those strings contain specific condition + severity data that
+    // /api/players/:id/health gates behind canViewPrivatePlayerData.
+    const responses: TableResponses = new Map<object, unknown[][]>([
+      [ticketMessages, [[]]],
+      [billStatusLog, [[]]],
+      [playerEventLog, [[
+        {
+          eventType: 'ailment_acquired',
+          description: 'Acquired major ailment: cancer',
+          createdAt: now,
+          playerId: 'ada-player',
+          triggeredById: null,
+        },
+        {
+          eventType: 'health_changed',
+          description: 'Health changed: severity worsened to critical',
+          createdAt: now,
+          playerId: 'ada-player',
+          triggeredById: null,
+        },
+        {
+          eventType: 'ailment_recovered',
+          description: 'Recovered from major ailment: pneumonia',
+          createdAt: now,
+          playerId: 'ada-player',
+          triggeredById: null,
+        },
+        {
+          eventType: 'death',
+          description: 'Ada died',
+          createdAt: now,
+          playerId: 'ada-player',
+          triggeredById: null,
+        },
+      ]]],
+      [modActions, [[]]],
+      [players, [[
+        { id: 'ada-player', characterName: 'Ada', discordUsername: 'ada' },
+      ]]],
+    ]);
+    const app = await appWithDb(responses);
+
+    const res = await app.inject('/api/dashboard/activity');
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ type: string; description: string }>;
+    const descriptions = body.map((item) => item.description);
+    expect(descriptions).not.toContain('Acquired major ailment: cancer');
+    expect(descriptions).not.toContain('Health changed: severity worsened to critical');
+    expect(descriptions).not.toContain('Recovered from major ailment: pneumonia');
+    expect(descriptions).toContain('Ada died');
+  });
+
+  it('shows ailment and health player events to staff in the activity feed', async () => {
+    auth.isStaff = true;
+    const responses: TableResponses = new Map<object, unknown[][]>([
+      [ticketMessages, [[]]],
+      [billStatusLog, [[]]],
+      [playerEventLog, [[
+        {
+          eventType: 'ailment_acquired',
+          description: 'Acquired major ailment: cancer',
+          createdAt: now,
+          playerId: 'ada-player',
+          triggeredById: null,
+        },
+      ]]],
+      [modActions, [[]]],
+      [players, [[
+        { id: 'ada-player', characterName: 'Ada', discordUsername: 'ada' },
+      ]]],
+    ]);
+    const app = await appWithDb(responses);
+
+    const res = await app.inject('/api/dashboard/activity');
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ type: string; description: string }>;
+    expect(body.map((item) => item.description)).toContain('Acquired major ailment: cancer');
+  });
 });

@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useBillVoters, useBills } from './useBills';
+import { useBillVoters, useBills, useSearchBills } from './useBills';
 import { useDocuments } from './useDocuments';
 import { useFavourHistory } from './useFavours';
 import { useModActions } from './useModeration';
@@ -159,6 +159,22 @@ describe('list hook API contracts', () => {
     await waitFor(() => expect(result.current.data).toEqual([
       { playerId: 'p1', characterName: 'Ada', choice: 'yea', castAt: '2026-01-01T00:00:00.000Z' },
     ]));
+  });
+
+  it('returns an array of bills from the { data, total } envelope of /bills/search', async () => {
+    (api.get as any).mockResolvedValueOnce({
+      data: [
+        { id: 'b1', title: 'Transit Reform Act', slug: 'transit-reform-act' },
+      ],
+      total: 1,
+    });
+
+    const { result } = renderHook(() => useSearchBills('transit'), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toEqual([
+      { id: 'b1', title: 'Transit Reform Act', slug: 'transit-reform-act' },
+    ]));
+    expect(api.get).toHaveBeenCalledWith('/bills/search?q=transit');
   });
 
   it('normalizes legacy bill voter ids so BillDetail links do not go undefined', async () => {

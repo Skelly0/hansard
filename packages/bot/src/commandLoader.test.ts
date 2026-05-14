@@ -9,9 +9,9 @@ import { collectCommandFiles, loadCommands, toCommandModuleSpecifier } from './c
 
 // Exact number of top-level slash commands currently registered. Discord caps a guild at 100;
 // this must be bumped intentionally whenever a command is added or removed. We are currently
-// AT the cap (100/100) — any new top-level command must replace one or be nested under an
-// existing command namespace.
-const EXPECTED_COMMAND_COUNT = 100;
+// at 98/100 — very close to the cap, so a new top-level command should normally replace one
+// or be nested under an existing command namespace rather than added standalone.
+const EXPECTED_COMMAND_COUNT = 98;
 
 describe('toCommandModuleSpecifier', () => {
   it('converts filesystem paths into ESM file URLs for dynamic import', () => {

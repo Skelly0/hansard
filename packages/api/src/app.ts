@@ -3,6 +3,7 @@ import cookie from '@fastify/cookie';
 import session from '@fastify/session';
 
 import './types.js';
+import { DrizzleSessionStore } from './sessionStore.js';
 import corsPlugin from './plugins/cors.js';
 import rateLimitPlugin from './plugins/rateLimit.js';
 import dbPlugin from './plugins/db.js';
@@ -71,10 +72,19 @@ export async function buildApp() {
   // Cookie (required before session)
   await fastify.register(cookie);
 
-  // Session — cross-site cookies (web ↔ api on different subdomains) require
+  // Database — registered before the session plugin so the Postgres-backed
+  // session store can read/write through `fastify.db`.
+  await fastify.register(dbPlugin);
+
+  // Session — uses a Postgres-backed store so sessions survive API
+  // restarts/redeploys. The default in-memory store drops every session
+  // whenever the process recycles (frequent on Railway), which logged web
+  // users out every few minutes.
+  // Cross-site cookies (web ↔ api on different subdomains) require
   // sameSite: 'none' + secure: true. Lax is fine when same-site or proxied (dev).
   await fastify.register(session, {
     secret: process.env.SESSION_SECRET || DEV_SESSION_SECRET,
+    store: new DrizzleSessionStore(fastify.db),
     cookie: {
       secure: isProd,
       httpOnly: true,
@@ -83,9 +93,6 @@ export async function buildApp() {
     },
     saveUninitialized: false,
   });
-
-  // Database
-  await fastify.register(dbPlugin);
 
   // --- Health check ---
   fastify.get('/api/health', async () => ({

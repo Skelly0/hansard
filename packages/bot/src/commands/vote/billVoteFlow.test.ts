@@ -196,6 +196,42 @@ describe('createLegislativeBillVote', () => {
     })).rejects.toThrow("Bill is not in 'submitted' status");
     expect(db.transaction).not.toHaveBeenCalled();
   });
+
+  it('rejects when the bill status drifts between the pre-check and the transaction', async () => {
+    const bill = submittedBill();
+    const actor = { id: 'player-1' };
+    const insertedElection = { id: 'election-1' };
+
+    const billSelect = makeSelectChain([bill]);
+    const actorSelect = makeSelectChain([actor]);
+    const insertValues: unknown[] = [];
+    const updateValues: unknown[] = [];
+    const txInsert = makeInsertChain([insertedElection], insertValues);
+    // Empty returning rows => the status-guard WHERE matched nothing (bill drifted).
+    const txUpdate = makeUpdateChain([], updateValues);
+
+    const db: any = {
+      select: vi.fn()
+        .mockReturnValueOnce({ from: billSelect.from })
+        .mockReturnValueOnce({ from: actorSelect.from }),
+      transaction: vi.fn(async (callback) => callback({
+        insert: txInsert.insert,
+        update: txUpdate.update,
+      })),
+    };
+
+    await expect(createLegislativeBillVote(db, {
+      billId: bill.id,
+      creatorDiscordId: 'discord-1',
+      title: 'Vote on: Transit Reform Act',
+      description: null,
+      method: 'yea_nay_abstain',
+      majority: 'simple',
+      durationHours: 48,
+      useReactions: false,
+      now: baseDate,
+    })).rejects.toThrow(/may have changed/);
+  });
 });
 
 describe('createStandaloneLegislativeVote', () => {

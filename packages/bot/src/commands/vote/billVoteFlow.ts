@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import { bills, billStatusLog, elections, players } from '@hansard/db';
 import {
@@ -223,7 +223,7 @@ export async function createLegislativeBillVote(
         playerVoteId: election.id,
         updatedAt: now,
       })
-      .where(eq(bills.id, bill.id))
+      .where(and(eq(bills.id, bill.id), eq(bills.status, BillStatus.SUBMITTED)))
       .returning({
         id: bills.id,
         status: bills.status,
@@ -231,7 +231,7 @@ export async function createLegislativeBillVote(
       });
 
     if (!updatedBill) {
-      throw new Error('Failed to update bill status');
+      throw new Error('Failed to update bill status. It may have changed.');
     }
 
     await tx.insert(billStatusLog).values({

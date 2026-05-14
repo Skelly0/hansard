@@ -34,8 +34,16 @@ export function UserMenu({ collapsed }: UserMenuProps) {
 
   const handleLogout = async () => {
     setOpen(false);
-    await logout();
-    navigate({ to: '/login' });
+    try {
+      await logout();
+    } catch {
+      // POST /auth/logout is best-effort server-side cookie cleanup. If it
+      // rejects (network blip / 5xx / dead-session 401), the mutation's
+      // onSettled has already cleared the client cache; we still want to
+      // land on /login so the user isn't stranded on a protected page.
+    } finally {
+      navigate({ to: '/login' });
+    }
   };
 
   return (

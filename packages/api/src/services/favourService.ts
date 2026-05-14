@@ -1,4 +1,4 @@
-import { eq, and, desc, asc, sql, type SQL } from 'drizzle-orm';
+import { eq, and, desc, asc, gte, sql, type SQL } from 'drizzle-orm';
 import {
   favourCategories,
   favourBalances,
@@ -316,6 +316,15 @@ export async function grantStartingFactionFavours(
 /**
  * Internal helper: ensure a balance row exists, then apply a delta.
  * Returns the new balance after the transaction.
+ *
+ * The entire balance mutation + transaction-log insert runs inside a single
+ * `db.transaction` so concurrent spenders cannot race. For deductions
+ * (`amount < 0`) we use a conditional UPDATE that requires the existing
+ * balance to be >= the deduction; if no row matches we fall back to a SELECT
+ * to build a clear "insufficient funds" error. This mirrors the bot's
+ * `commands/favours/spend.ts` pattern documented in CLAUDE.md:
+ * "Spend uses a conditional UPDATE (`gte(balance, amount)`) to enforce
+ * sufficient funds in a single statement."
  */
 async function applyTransaction(
   db: Database,
@@ -352,53 +361,85 @@ async function applyTransaction(
     throw new Error(`Favour category "${category.name}" is not active`);
   }
 
-  // Atomic insert-or-update on (playerId, categoryId).
-  // Relies on UNIQUE(player_id, category_id) being present.
-  const [updatedRow] = await db
-    .insert(favourBalances)
-    .values({
+  return db.transaction(async (tx) => {
+    let newBalance: number;
+
+    if (amount < 0) {
+      // Spend / remove — atomic conditional decrement.
+      const deduction = -amount;
+      const [updated] = await tx
+        .update(favourBalances)
+        .set({
+          balance: sql`${favourBalances.balance} - ${deduction}`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(favourBalances.playerId, playerId),
+            eq(favourBalances.categoryId, categoryId),
+            gte(favourBalances.balance, deduction),
+          ),
+        )
+        .returning({ balance: favourBalances.balance });
+
+      if (!updated) {
+        // Either no balance row at all or insufficient funds — read current
+        // balance for a clear error message. Throwing inside the transaction
+        // callback rolls back any work, but since the conditional UPDATE
+        // matched zero rows there is nothing to roll back here anyway.
+        const [existing] = await tx
+          .select({ balance: favourBalances.balance })
+          .from(favourBalances)
+          .where(
+            and(
+              eq(favourBalances.playerId, playerId),
+              eq(favourBalances.categoryId, categoryId),
+            ),
+          )
+          .limit(1);
+        const currentBalance = existing?.balance ?? 0;
+        throw new Error(
+          `Insufficient favours: ${player.characterName ?? player.discordUsername} has ${currentBalance} in ${category.name}, cannot deduct ${deduction}`,
+        );
+      }
+
+      newBalance = updated.balance;
+    } else {
+      // Grant — atomic insert-or-update on (playerId, categoryId).
+      // Relies on UNIQUE(player_id, category_id) being present.
+      const [updatedRow] = await tx
+        .insert(favourBalances)
+        .values({
+          playerId,
+          categoryId,
+          balance: amount,
+        })
+        .onConflictDoUpdate({
+          target: [favourBalances.playerId, favourBalances.categoryId],
+          set: {
+            balance: sql`${favourBalances.balance} + ${amount}`,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+
+      newBalance = updatedRow.balance;
+    }
+
+    // Log the transaction in the same db.transaction so a partial state can
+    // never strand a balance change without its audit row, and vice versa.
+    const [transaction] = await tx.insert(favourTransactions).values({
       playerId,
       categoryId,
-      balance: amount,
-    })
-    .onConflictDoUpdate({
-      target: [favourBalances.playerId, favourBalances.categoryId],
-      set: {
-        balance: sql`${favourBalances.balance} + ${amount}`,
-        updatedAt: new Date(),
-      },
-    })
-    .returning();
+      amount,
+      balanceAfter: newBalance,
+      type,
+      reason,
+      grantedById,
+    }).returning();
 
-  const newBalance = updatedRow.balance;
-
-  // For spend/remove, the atomic UPDATE may have driven the balance negative.
-  // Roll the change back and surface a clear error.
-  if (amount < 0 && newBalance < 0) {
-    await db
-      .update(favourBalances)
-      .set({
-        balance: sql`${favourBalances.balance} - ${amount}`,
-        updatedAt: new Date(),
-      })
-      .where(eq(favourBalances.id, updatedRow.id));
-    throw new Error(
-      `Insufficient favours: ${player.characterName ?? player.discordUsername} has ${newBalance - amount} in ${category.name}, cannot deduct ${Math.abs(amount)}`,
-    );
-  }
-
-  // Log the transaction
-  const [transaction] = await db.insert(favourTransactions).values({
-    playerId,
-    categoryId,
-    amount,
-    balanceAfter: newBalance,
-    type,
-    reason,
-    grantedById,
-  }).returning();
-
-  return toTransaction(transaction);
+    return toTransaction(transaction);
+  });
 }
 
 /**

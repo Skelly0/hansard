@@ -7,10 +7,13 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest",
+    "test:run": "vitest run"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "vitest": "^4.1.5"
   }
 }

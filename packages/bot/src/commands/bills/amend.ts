@@ -184,33 +184,38 @@ const command: Command = {
         counter++;
       }
 
-      // Insert the amendment bill
-      const [bill] = await db
-        .insert(bills)
-        .values({
-          title,
-          slug: finalSlug,
-          googleDocUrl: url,
-          googleDocId: docId,
-          summary,
-          authorId: player.id,
-          submittedById: player.id,
-          status: 'submitted',
-          amendsBillId: amendsBillId || null,
-          amendsDocumentId: amendsDocumentId || null,
-          tags: [],
-          policyAreas: [],
-          coSponsorIds: [],
-        })
-        .returning();
+      // Insert the amendment bill and its initial status-log entry inside
+      // a single transaction so we never end up with a bill row that has
+      // no corresponding bill_status_log audit history.
+      const bill = await db.transaction(async (tx) => {
+        const [created] = await tx
+          .insert(bills)
+          .values({
+            title,
+            slug: finalSlug,
+            googleDocUrl: url,
+            googleDocId: docId,
+            summary,
+            authorId: player.id,
+            submittedById: player.id,
+            status: 'submitted',
+            amendsBillId: amendsBillId || null,
+            amendsDocumentId: amendsDocumentId || null,
+            tags: [],
+            policyAreas: [],
+            coSponsorIds: [],
+          })
+          .returning();
 
-      // Log status
-      await db.insert(billStatusLog).values({
-        billId: bill.id,
-        fromStatus: null,
-        toStatus: 'submitted',
-        changedById: player.id,
-        notes: `Amendment to ${resolved.type === 'bill' ? `Bill #${resolved.billNumber}` : resolved.title}`,
+        await tx.insert(billStatusLog).values({
+          billId: created.id,
+          fromStatus: null,
+          toStatus: 'submitted',
+          changedById: player.id,
+          notes: `Amendment to ${resolved.type === 'bill' ? `Bill #${resolved.billNumber}` : resolved.title}`,
+        });
+
+        return created;
       });
 
       // Build notification embed

@@ -4,11 +4,12 @@ import {
 } from 'discord.js';
 import { eq, ilike } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { bills, billStatusLog, players } from '@hansard/db';
+import { bills, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 import { BillStatus } from '@hansard/shared';
+import { repealBill } from './repealFlow.js';
 
 /**
  * Resolve a bill by either bill number (e.g. "B-001", "1") or title.
@@ -136,21 +137,15 @@ const command: Command = {
       const oldStatus = bill.status;
       const now = new Date();
 
-      await db
-        .update(bills)
-        .set({
-          status: BillStatus.REPEALED,
-          repealedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(bills.id, bill.id));
-
-      await db.insert(billStatusLog).values({
+      // Wrap the status flip + audit log in a transaction with a WHERE
+      // status = oldStatus guard so concurrent status drift cannot silently
+      // overwrite the bill.
+      await repealBill(db, {
         billId: bill.id,
-        fromStatus: oldStatus,
-        toStatus: BillStatus.REPEALED,
+        expectedStatus: oldStatus,
         changedById,
-        notes: `Repealed by <@${interaction.user.id}>`,
+        actorDiscordId: interaction.user.id,
+        now,
       });
 
       const padded = String(bill.billNumber).padStart(3, '0');

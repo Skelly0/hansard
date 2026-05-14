@@ -59,12 +59,14 @@ const command: Command = {
       return;
     }
 
-    // Mirror VoteService.tallyVotes guard
-    if (!['voting_closed', 'voting_open'].includes(election.status)) {
+    // Mirror VoteService.tallyVotes guard — tallying a still-open vote would
+    // short-circuit the voting window and expose results through the sealed
+    // gate, so callers must close the vote first.
+    if (election.status !== 'voting_closed') {
       await interaction.editReply({
         embeds: [
           errorEmbed(
-            `Election must be in \`voting_closed\` or \`voting_open\` status to tally (currently \`${election.status}\`).`,
+            `Election must be in \`voting_closed\` status to tally (currently \`${election.status}\`). Run \`/vote-close\` first.`,
           ),
         ],
       });

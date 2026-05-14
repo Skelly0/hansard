@@ -21,14 +21,16 @@ const PUBLIC_UPCOMING_VOTE_STATUSES = [
   'voting_open',
 ];
 
+// Public dashboard activity feed must not leak per-player ailment data:
+// /api/players/:id/health is gated behind canViewPrivatePlayerData, and
+// PUBLIC_PLAYER_EVENT_TYPES in playerService.ts deliberately omits
+// AILMENT_ACQUIRED / AILMENT_RECOVERED / HEALTH_CHANGED for the same reason.
+// DEATH stays public — the existing obituary surface is already broadcast.
 const PUBLIC_DASHBOARD_EVENT_TYPES = [
   PlayerEventType.PARTY_CHANGE,
   PlayerEventType.FACTION_CHANGE,
   PlayerEventType.OFFICE_APPOINTED,
   PlayerEventType.OFFICE_LEFT,
-  PlayerEventType.AILMENT_ACQUIRED,
-  PlayerEventType.AILMENT_RECOVERED,
-  PlayerEventType.HEALTH_CHANGED,
   PlayerEventType.DEATH,
   PlayerEventType.REGISTRATION,
   PlayerEventType.NAME_CHANGE,
@@ -287,7 +289,13 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
       }
 
       // --- Recent player events ---
-      const recentEvents = isStaffViewer
+      // Non-staff viewers must never see AILMENT_* or HEALTH_CHANGED rows because
+      // those descriptions embed condition + severity (matching what
+      // /api/players/:id/health gates behind canViewPrivatePlayerData). The DB
+      // filter handles this for normal queries, but we also re-filter the
+      // returned rows so that any test fake or future loosening of the WHERE
+      // clause still cannot leak those rows to non-staff dashboard consumers.
+      const rawRecentEvents = isStaffViewer
         ? await db
           .select({
             eventType: playerEventLog.eventType,
@@ -311,6 +319,12 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
           .where(inArray(playerEventLog.eventType, PUBLIC_DASHBOARD_EVENT_TYPES))
           .orderBy(desc(playerEventLog.createdAt))
           .limit(20);
+
+      const recentEvents = isStaffViewer
+        ? rawRecentEvents
+        : rawRecentEvents.filter((event) =>
+          (PUBLIC_DASHBOARD_EVENT_TYPES as string[]).includes(event.eventType),
+        );
 
       for (const event of recentEvents) {
         playerIds.add(event.playerId);

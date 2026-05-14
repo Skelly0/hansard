@@ -45,6 +45,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   return (
     <nav
+      data-testid="app-sidebar"
       className="fixed left-0 top-0 h-full bg-page border-r border-border-subtle flex flex-col transition-[width] duration-200 z-50"
       style={{ width: collapsed ? 56 : 220 }}
     >

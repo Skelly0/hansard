@@ -179,33 +179,39 @@ const command: Command = {
         counter++;
       }
 
-      // Insert bill with separate author and submitter
-      const [bill] = await db
-        .insert(bills)
-        .values({
-          title,
-          slug: finalSlug,
-          googleDocUrl,
-          googleDocId: docId,
-          summary,
-          authorId: author.id,
-          submittedById: submitter.id,
-          status: 'submitted',
-          tags,
-          policyAreas,
-          coSponsorIds: [],
-        })
-        .returning({
-          id: bills.id,
-          billNumber: bills.billNumber,
+      // Insert the bill and its initial status-log entry inside a single
+      // transaction so we never end up with a bill row that has no
+      // corresponding bill_status_log audit history.
+      const bill = await db.transaction(async (tx) => {
+        const [created] = await tx
+          .insert(bills)
+          .values({
+            title,
+            slug: finalSlug,
+            googleDocUrl,
+            googleDocId: docId,
+            summary,
+            authorId: author.id,
+            submittedById: submitter.id,
+            status: 'submitted',
+            tags,
+            policyAreas,
+            coSponsorIds: [],
+          })
+          .returning({
+            id: bills.id,
+            billNumber: bills.billNumber,
+          });
+
+        await tx.insert(billStatusLog).values({
+          billId: created.id,
+          fromStatus: null,
+          toStatus: 'submitted',
+          changedById: submitter.id,
+          notes: `Submitted on behalf of ${author.characterName ?? targetUser.displayName}`,
         });
 
-      await db.insert(billStatusLog).values({
-        billId: bill.id,
-        fromStatus: null,
-        toStatus: 'submitted',
-        changedById: submitter.id,
-        notes: `Submitted on behalf of ${author.characterName ?? targetUser.displayName}`,
+        return created;
       });
 
       const embed = successEmbed(

@@ -57,12 +57,13 @@ export default async function billRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'Query parameter "q" is required' });
       }
 
-      return searchBills(
+      const result = await searchBills(
         db,
         q,
         limit ? parseInt(limit, 10) : undefined,
         offset ? parseInt(offset, 10) : undefined,
       );
+      return { data: result.bills, total: result.total };
     },
   );
 

@@ -4,11 +4,12 @@ import {
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { bills, billStatusLog, players } from '@hansard/db';
+import { bills, players } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 import type { NpcVote } from '@hansard/shared';
+import { recordNpcVote } from './npcVoteFlow.js';
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -116,20 +117,15 @@ const command: Command = {
       const oldStatus = bill.status;
       const newStatus = passed ? 'npc_passed' : 'npc_rejected';
 
-      await db
-        .update(bills)
-        .set({
-          npcVote,
-          status: newStatus,
-          updatedAt: new Date(),
-        })
-        .where(eq(bills.id, bill.id));
-
-      await db.insert(billStatusLog).values({
+      // Wrap the bill status flip + audit log in a transaction with a
+      // WHERE status = oldStatus guard so concurrent status drift cannot
+      // silently overwrite the bill.
+      await recordNpcVote(db, {
         billId: bill.id,
-        fromStatus: oldStatus,
-        toStatus: newStatus,
-        changedById: enteredById,
+        expectedStatus: oldStatus,
+        newStatus,
+        npcVote,
+        enteredById,
         notes: `NPC house vote: ${yea} yea / ${nay} nay / ${abstain} abstain${notes ? ` \u2014 ${notes}` : ''}`,
       });
 

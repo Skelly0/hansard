@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireStaff } from '../middleware/requireStaff.js';
-import { TicketService } from '../services/ticketService.js';
+import { TicketService, TicketAssigneeNotStaffError } from '../services/ticketService.js';
 import '../plugins/db.js'; // augments FastifyInstance with .db
 import type { TicketStatus, TicketPriority } from '@hansard/shared';
 import type { TicketAccessContext, UpdateTicketData } from '../services/ticketService.js';
@@ -242,11 +242,19 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       if (body.description !== undefined) updates.description = body.description;
       if (wantsDiscordThreadEdit) updates.discordThreadId = body.discordThreadId ?? null;
 
-      const updated = await ticketService.updateTicket(
-        request.params.id,
-        updates,
-        user.id,
-      );
+      let updated;
+      try {
+        updated = await ticketService.updateTicket(
+          request.params.id,
+          updates,
+          user.id,
+        );
+      } catch (err) {
+        if (err instanceof TicketAssigneeNotStaffError) {
+          return reply.status(400).send({ error: err.message });
+        }
+        throw err;
+      }
 
       if (!updated) {
         return reply.status(404).send({ error: 'Ticket not found' });
@@ -322,11 +330,19 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'assigneeId is required' });
       }
 
-      const updated = await ticketService.assignTicket(
-        request.params.id,
-        target,
-        user.id,
-      );
+      let updated;
+      try {
+        updated = await ticketService.assignTicket(
+          request.params.id,
+          target,
+          user.id,
+        );
+      } catch (err) {
+        if (err instanceof TicketAssigneeNotStaffError) {
+          return reply.status(400).send({ error: 'Assignee must be a staff member' });
+        }
+        throw err;
+      }
 
       if (!updated) {
         return reply.status(404).send({ error: 'Ticket not found' });

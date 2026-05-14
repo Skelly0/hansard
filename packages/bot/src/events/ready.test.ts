@@ -55,7 +55,7 @@ async function runReady(readyClient: Record<string, unknown>) {
 }
 
 describe('ready command registration', () => {
-  it('registers only /phone globally while sweeping every guild command set', async () => {
+  it('registers /phone globally and excludes it from the guild command sweep', async () => {
     stopBackgroundWorkers();
     vi.mocked(startPhoneRingTimeoutWorker).mockClear();
     commands.clear();
@@ -69,10 +69,15 @@ describe('ready command registration', () => {
       expect.objectContaining({ name: 'phone' }),
     ]);
     expect(globalSet.mock.calls[0][0]).toHaveLength(1);
-    expect(guildSet).toHaveBeenCalledWith(expect.arrayContaining([
-      expect.objectContaining({ name: 'phone' }),
+
+    // /phone must NOT be in the guild set — it is registered globally above, and including
+    // it here too would make it appear twice in every guild's command picker.
+    expect(guildSet).toHaveBeenCalledWith([
       expect.objectContaining({ name: 'time' }),
-    ]));
+    ]);
+    const guildNames = (guildSet.mock.calls[0][0] as Array<{ name: string }>).map((c) => c.name);
+    expect(guildNames).toContain('time');
+    expect(guildNames).not.toContain('phone');
   });
 });
 

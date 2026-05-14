@@ -32,6 +32,7 @@ export function registerReadyEvent(client: Client): void {
 
     const commandData = [...commands.values()].map((c) => c.data.toJSON());
     const globalCommandData = commandData.filter((command) => command.name === 'phone');
+    const guildCommandData = commandData.filter((command) => command.name !== 'phone');
 
     // Only /phone needs a global command because BotDM contexts are ignored for guild-scoped
     // registrations. Keep every other command guild-scoped so guild-only permission metadata
@@ -43,12 +44,14 @@ export function registerReadyEvent(client: Client): void {
       console.error('Failed to register global commands:', err);
     }
 
-    // Preserve the old production behavior of sweeping guild command sets. This both keeps
-    // non-phone commands guild-scoped and deletes stale guild commands such as /time-history.
+    // Preserve the old production behavior of sweeping guild command sets. Excludes /phone
+    // (registered globally above) — including it here too would register it twice, so it
+    // shows up duplicated in every guild's command picker. The sweep also deletes stale
+    // guild commands such as /time-history and any previously guild-scoped /phone.
     for (const guild of readyClient.guilds.cache.values()) {
       try {
-        await guild.commands.set(commandData);
-        console.log(`Registered ${commandData.length} guild commands in ${guild.name}`);
+        await guild.commands.set(guildCommandData);
+        console.log(`Registered ${guildCommandData.length} guild commands in ${guild.name}`);
       } catch (err) {
         console.error(`Failed to register guild commands in ${guild.name}:`, err);
       }

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 // touch the DB; we just need a parsable connection string for the module to evaluate.
 process.env.DATABASE_URL ??= 'postgres://user:pass@localhost:5432/hansard';
 
-const { default: phone, validateTapMirrorChannel } = await import('./phone.js');
+const { default: phone, validateTapMirrorChannel, __testables } = await import('./phone.js');
 
 describe('/phone command metadata', () => {
   const json = phone.data.toJSON();
@@ -189,5 +189,33 @@ describe('validateTapMirrorChannel', () => {
     // through.
     const channel = makeGuildChannel({ type: ChannelTypeEnum.GuildText, everyoneCanView: false });
     expect(validateTapMirrorChannel(channel)).toBeNull();
+  });
+});
+
+// =====================================================================================
+// isPhoneSchemaMissing — turns an opaque catch-all into an actionable "run the migration"
+// message when the phone_* tables were never created (migrate:phones not run).
+// =====================================================================================
+
+describe('isPhoneSchemaMissing', () => {
+  const { isPhoneSchemaMissing } = __testables;
+
+  it('detects undefined_table (42P01) — phone_numbers does not exist', () => {
+    expect(isPhoneSchemaMissing({ code: '42P01' })).toBe(true);
+  });
+
+  it('detects undefined_column (42703) — partially-applied migration', () => {
+    expect(isPhoneSchemaMissing({ code: '42703' })).toBe(true);
+  });
+
+  it('ignores unrelated Postgres errors like unique violations (23505)', () => {
+    expect(isPhoneSchemaMissing({ code: '23505' })).toBe(false);
+  });
+
+  it('ignores plain errors and non-error values without a code', () => {
+    expect(isPhoneSchemaMissing(new Error('boom'))).toBe(false);
+    expect(isPhoneSchemaMissing(null)).toBe(false);
+    expect(isPhoneSchemaMissing(undefined)).toBe(false);
+    expect(isPhoneSchemaMissing('42P01')).toBe(false);
   });
 });

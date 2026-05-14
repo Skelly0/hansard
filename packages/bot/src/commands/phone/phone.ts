@@ -3,6 +3,7 @@ import {
   EmbedBuilder,
   InteractionContextType,
   SlashCommandBuilder,
+  escapeMarkdown,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   type Guild,
@@ -14,6 +15,7 @@ import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import {
   PhoneService,
   PhoneServiceError,
+  type PhoneDirectoryEntry,
 } from '@hansard/api/services/phoneService';
 import { buildIncomingCallActions } from '../../components/phoneButtons.js';
 import { hangUpAndNotify } from '../../utils/phoneRelay.js';
@@ -31,6 +33,7 @@ import {
 import type { Command } from '../../client.js';
 
 const CALL_COLOUR = 0x9b7cb8;
+const DIRECTORY_PAGE_SIZE = 20;
 
 async function requirePlayer(interaction: ChatInputCommandInteraction): Promise<{ id: string; characterName: string; isAlive: boolean } | null> {
   const row = await resolvePhonePlayer(interaction.user.id);
@@ -45,6 +48,25 @@ async function requirePlayer(interaction: ChatInputCommandInteraction): Promise<
 
 function svc(): PhoneService {
   return new PhoneService(db);
+}
+
+function formatInlineCode(value: string): string {
+  return `\`${value.replace(/`/g, "'")}\``;
+}
+
+function directoryMatches(entry: PhoneDirectoryEntry, search: string): boolean {
+  const needle = search.toLowerCase();
+  return entry.characterName.toLowerCase().includes(needle)
+    || entry.discordUsername.toLowerCase().includes(needle)
+    || entry.numberRaw.toLowerCase().includes(needle)
+    || entry.numberNormalized.toLowerCase().includes(needle)
+    || (entry.label?.toLowerCase().includes(needle) ?? false);
+}
+
+function formatDirectoryLine(entry: PhoneDirectoryEntry): string {
+  const name = escapeMarkdown(entry.characterName);
+  const label = entry.label ? ` *(${escapeMarkdown(entry.label)})*` : '';
+  return `• **${name}** — ${formatInlineCode(entry.numberRaw)}${label}`;
 }
 
 // -----------------------------------------------------------------------------
@@ -76,6 +98,7 @@ async function handleRegister(interaction: ChatInputCommandInteraction): Promise
             '',
             'Next steps:',
             '• `/phone dial <number>` to start a call',
+            '• `/phone directory` to find other registered lines',
             '• `/phone numbers` to list your lines',
             '• `/phone history` to review your recent calls',
             '• `/phone delete` to retire this number',
@@ -114,6 +137,53 @@ async function handleNumbers(interaction: ChatInputCommandInteraction): Promise<
       new EmbedBuilder().setTitle('Your phone lines').setColor(CALL_COLOUR).setDescription(lines),
     ],
   });
+}
+
+async function handleDirectory(interaction: ChatInputCommandInteraction): Promise<void> {
+  const rows = await svc().listDirectory();
+  const search = interaction.options.getString('search')?.trim() || null;
+  const page = Math.max(1, interaction.options.getInteger('page') ?? 1);
+  const filtered = search ? rows.filter((row) => directoryMatches(row, search)) : rows;
+
+  if (!filtered.length) {
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Phone directory')
+          .setColor(CALL_COLOUR)
+          .setDescription(search ? 'No active phone numbers match that search.' : 'No active phone numbers are registered yet.'),
+      ],
+      allowedMentions: { parse: [] },
+    });
+    return;
+  }
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / DIRECTORY_PAGE_SIZE));
+  if (page > totalPages) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`No page ${page} — only ${totalPages} page${totalPages === 1 ? '' : 's'} of phone numbers.`)],
+      allowedMentions: { parse: [] },
+    });
+    return;
+  }
+
+  const start = (page - 1) * DIRECTORY_PAGE_SIZE;
+  const lines = filtered.slice(start, start + DIRECTORY_PAGE_SIZE).map(formatDirectoryLine);
+  const embed = new EmbedBuilder()
+    .setTitle('Phone directory')
+    .setColor(CALL_COLOUR)
+    .setDescription(lines.join('\n'))
+    .setFooter({
+      text: totalPages > 1
+        ? `Page ${page} of ${totalPages} • ${filtered.length} numbers`
+        : `${filtered.length} number${filtered.length === 1 ? '' : 's'}`,
+    });
+
+  if (search) {
+    embed.addFields({ name: 'Search', value: formatInlineCode(search), inline: true });
+  }
+
+  await interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
 }
 
 async function handleDelete(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -613,6 +683,26 @@ const command: Command = {
     .addSubcommand((sub) => sub.setName('numbers').setDescription('List your active phone numbers'))
     .addSubcommand((sub) =>
       sub
+        .setName('directory')
+        .setDescription('List active phone numbers you can dial')
+        .addStringOption((opt) =>
+          opt
+            .setName('search')
+            .setDescription('Filter by character, number, username, or label')
+            .setRequired(false)
+            .setMaxLength(128),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('page')
+            .setDescription('Page number (20 numbers per page; defaults to 1)')
+            .setMinValue(1)
+            .setMaxValue(999)
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName('delete')
         .setDescription('Retire one of your phone numbers')
         .addStringOption((opt) =>
@@ -793,6 +883,9 @@ const command: Command = {
           break;
         case 'numbers':
           await handleNumbers(interaction);
+          break;
+        case 'directory':
+          await handleDirectory(interaction);
           break;
         case 'delete':
           await handleDelete(interaction);

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, or, sql, count, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql, count, type SQL } from 'drizzle-orm';
 import {
   phoneNumbers,
   phoneCalls,
@@ -62,6 +62,16 @@ export interface CallParticipantSummary {
 export interface EnrichedPhoneCall extends PhoneCall {
   caller: CallParticipantSummary;
   recipient: CallParticipantSummary;
+}
+
+export interface PhoneDirectoryEntry {
+  id: string;
+  playerId: string;
+  numberRaw: string;
+  numberNormalized: string;
+  label: string | null;
+  characterName: string;
+  discordUsername: string;
 }
 
 export interface PhoneViewer {
@@ -225,6 +235,36 @@ export class PhoneService {
       .from(phoneNumbers)
       .where(and(eq(phoneNumbers.playerId, playerId), eq(phoneNumbers.isActive, true)))
       .orderBy(desc(phoneNumbers.createdAt));
+  }
+
+  async listDirectory(): Promise<PhoneDirectoryEntry[]> {
+    const rows = await this.db
+      .select({
+        id: phoneNumbers.id,
+        playerId: phoneNumbers.playerId,
+        numberRaw: phoneNumbers.numberRaw,
+        numberNormalized: phoneNumbers.numberNormalized,
+        label: phoneNumbers.label,
+        characterName: players.characterName,
+        discordUsername: players.discordUsername,
+      })
+      .from(phoneNumbers)
+      .innerJoin(players, eq(phoneNumbers.playerId, players.id))
+      .where(and(
+        eq(phoneNumbers.isActive, true),
+        eq(players.isAlive, true),
+        isNotNull(players.characterName),
+      ))
+      .orderBy(asc(players.characterName), asc(phoneNumbers.numberRaw));
+
+    return rows.flatMap((row) =>
+      row.characterName
+        ? [{
+            ...row,
+            characterName: row.characterName,
+          }]
+        : [],
+    );
   }
 
   async deactivateNumber(numberId: string, actingPlayerId: string, viewer: PhoneViewer): Promise<void> {

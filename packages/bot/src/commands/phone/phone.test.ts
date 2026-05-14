@@ -18,7 +18,7 @@ describe('/phone command metadata', () => {
       ?.filter((o) => o.type === 1) // SUB_COMMAND
       .map((o) => o.name) ?? [];
     expect(subNames).toEqual(expect.arrayContaining([
-      'register', 'numbers', 'delete', 'dial', 'hangup', 'history',
+      'register', 'numbers', 'directory', 'delete', 'dial', 'hangup', 'history',
     ]));
   });
 

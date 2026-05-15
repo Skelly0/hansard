@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql, count, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, or, sql, count, type SQL } from 'drizzle-orm';
 import {
   phoneNumbers,
   phoneCalls,
@@ -1383,7 +1383,13 @@ export class PhoneService {
     const rows = await this.db
       .update(phoneCalls)
       .set({ status: 'missed', endedAt: now, endedReason: 'ring_timeout' })
-      .where(and(eq(phoneCalls.status, 'ringing'), sql`ring_expires_at IS NOT NULL AND ring_expires_at < ${now}`))
+      .where(
+        and(
+          eq(phoneCalls.status, 'ringing'),
+          isNotNull(phoneCalls.ringExpiresAt),
+          lt(phoneCalls.ringExpiresAt, now),
+        ),
+      )
       .returning();
     return rows;
   }
@@ -1406,7 +1412,7 @@ export class PhoneService {
     const rows = await this.db
       .update(phoneCalls)
       .set({ status: 'ended', endedAt: now, endedReason: 'session_reset' })
-      .where(and(eq(phoneCalls.status, 'active'), sql`started_at < ${cutoff}`))
+      .where(and(eq(phoneCalls.status, 'active'), lt(phoneCalls.startedAt, cutoff)))
       .returning();
     return rows;
   }
@@ -1434,7 +1440,7 @@ export class PhoneService {
         and(
           isNull(phoneMessageTapDeliveries.deliveredAt),
           isNull(phoneMessageTapDeliveries.error),
-          sql`created_at < ${cutoff}`,
+          lt(phoneMessageTapDeliveries.createdAt, cutoff),
         ),
       )
       .returning();

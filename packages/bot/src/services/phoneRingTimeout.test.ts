@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, lt } from 'drizzle-orm';
 
 // phoneRingTimeout pulls in phoneRelay which pulls in `../db.js`, which throws at
 // import without DATABASE_URL set. Tests don't actually touch the DB.
@@ -86,16 +86,19 @@ describe('expireRingingCalls', () => {
     await expireRingingCalls(db as any, { now });
 
     // PhoneService.expireRingingCalls filters on:
-    //   and(eq(phoneCalls.status, 'ringing'), sql`ring_expires_at IS NOT NULL AND ring_expires_at < ${now}`)
+    //   and(eq(phoneCalls.status, 'ringing'), isNotNull(phoneCalls.ringExpiresAt), lt(phoneCalls.ringExpiresAt, now))
+    // Typed helpers (lt/isNotNull) emit pg-typed parameters; the previous raw `sql\`...\${now}\``
+    // template handed the Date to postgres-js without a type cast and crashed every worker tick.
     const expectedWhere = and(
       eq(phoneCalls.status, 'ringing'),
-      sql`ring_expires_at IS NOT NULL AND ring_expires_at < ${now}`,
+      isNotNull(phoneCalls.ringExpiresAt),
+      lt(phoneCalls.ringExpiresAt, now),
     );
     expect(captured.whereArg).toEqual(expectedWhere);
 
     // Belt-and-braces: walk the predicate's chunks (cycle-safe — Drizzle column objects
     // self-reference their table) and confirm it literally carries the 'ringing' value and
-    // the ring_expires_at SQL, and was NOT broadened to also sweep 'active' calls.
+    // the ring_expires_at column, and was NOT broadened to also sweep 'active' calls.
     const strings = collectStrings(captured.whereArg);
     expect(strings).toContain('ringing');
     expect(strings.some((s) => s.includes('ring_expires_at'))).toBe(true);
@@ -150,7 +153,12 @@ describe('sweepStaleTapDeliveries', () => {
     // Two `isNull(...)` clauses emit two ` is null` SQL chunks; `created_at < cutoff` bounds it.
     const predicate = collectStrings(captured.whereArg);
     expect(predicate.filter((s) => s.includes('is null'))).toHaveLength(2);
-    expect(predicate.join(' ')).toContain('created_at <');
+    // lt(phoneMessageTapDeliveries.createdAt, cutoff) puts the column reference and a ` < `
+    // operator chunk into the predicate. With typed helpers Drizzle dumps all column
+    // metadata into the collected strings, so the column name and operator chunk aren't
+    // adjacent — just assert both are present.
+    expect(predicate).toContain('created_at');
+    expect(predicate.some((s) => s.includes('<'))).toBe(true);
   });
 
   it('swallows errors and returns an empty result', async () => {

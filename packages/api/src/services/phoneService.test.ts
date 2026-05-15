@@ -1438,3 +1438,45 @@ describe('PhoneService.sweepStrandedActiveCalls', () => {
     expect(rows.every((r) => r.endedReason === 'session_reset')).toBe(true);
   });
 });
+
+// Regression for the Railway production crash:
+//   [phone:worker] failed to mark expired calls: TypeError ... Received an instance of Date
+// Three sweepers passed raw `Date` objects through `sql\`...\${date}\`` template interpolation.
+// postgres-js's parameter serializer (`str()`) rejects non-string/Buffer values without an
+// explicit pg type cast, so the workers crashed on every tick. The fix swaps the raw template
+// SQL for Drizzle's typed `lt(column, value)` / `isNotNull(column)` helpers, which let Drizzle
+// emit the correct cast based on the column's pg type. These tests lock that contract:
+// the method must build its WHERE predicate without throwing on a Date argument and the
+// resulting predicate must carry the Date through as a typed parameter (not a raw template).
+describe('PhoneService worker sweepers — Date parameter contract', () => {
+  it('expireRingingCalls accepts a Date `now` without throwing at construction', async () => {
+    const db = makeDb({
+      updateReturning: [[{ id: 'call-1', status: 'missed', endedReason: 'ring_timeout' }]],
+    });
+    const svc = new PhoneService(db);
+    const now = new Date('2026-05-15T12:00:00.000Z');
+    await expect(svc.expireRingingCalls(now)).resolves.toEqual([
+      { id: 'call-1', status: 'missed', endedReason: 'ring_timeout' },
+    ]);
+  });
+
+  it('sweepStrandedActiveCalls accepts a Date-derived cutoff without throwing', async () => {
+    const db = makeDb({ updateReturning: [[]] });
+    const svc = new PhoneService(db);
+    const now = new Date('2026-05-15T12:00:00.000Z');
+    await expect(
+      svc.sweepStrandedActiveCalls({ now, maxAgeMs: 60_000 }),
+    ).resolves.toEqual([]);
+  });
+
+  it('sweepStaleTapDeliveries accepts a Date-derived cutoff without throwing', async () => {
+    const db = makeDb({
+      updateReturning: [[{ id: 'delivery-1', error: 'relay crashed before delivery' }]],
+    });
+    const svc = new PhoneService(db);
+    const now = new Date('2026-05-15T12:00:00.000Z');
+    await expect(
+      svc.sweepStaleTapDeliveries({ now, maxAgeMs: 60_000 }),
+    ).resolves.toEqual([{ id: 'delivery-1', error: 'relay crashed before delivery' }]);
+  });
+});

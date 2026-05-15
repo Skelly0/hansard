@@ -36,7 +36,7 @@ vi.mock('../../utils/partyJoinMessage.js', () => ({
   refreshPartyJoinMessage: mocks.refreshPartyJoinMessage,
 }));
 
-import createPartyCommand from './create';
+import { execute as createPartyExecute } from './create';
 
 class InsertQuery {
   values(values: Record<string, unknown>) {
@@ -72,7 +72,7 @@ function fakeInteraction(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-describe('/party-create', () => {
+describe('/party create', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.insertedValues = null;
@@ -84,7 +84,7 @@ describe('/party-create', () => {
   it('refreshes the public party join board after creating an open party', async () => {
     const interaction = fakeInteraction();
 
-    await createPartyCommand.execute(interaction);
+    await createPartyExecute(interaction);
 
     expect(mocks.insertedValues).toMatchObject({
       name: 'New Horizon',
@@ -103,7 +103,7 @@ describe('/party-create', () => {
     const interaction = fakeInteraction();
     mocks.refreshPartyJoinMessage.mockRejectedValueOnce(new Error('missing channel'));
 
-    await createPartyCommand.execute(interaction);
+    await createPartyExecute(interaction);
 
     expect(mocks.refreshPartyJoinMessage).toHaveBeenCalledWith(interaction.client);
     const replyPayload = interaction.editReply.mock.calls[0]?.[0];

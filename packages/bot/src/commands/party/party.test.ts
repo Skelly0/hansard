@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import partyCommand from './party.js';
+import partyCommand from './party';
 
 const mocks = vi.hoisted(() => ({
   rows: [] as Array<{ id: string; name: string; shortName: string | null }>,
@@ -109,6 +109,7 @@ function fakeAssignInteraction() {
     },
     options: {
       getSubcommand: vi.fn(() => 'assign'),
+      getSubcommandGroup: vi.fn(() => null),
       getUser: vi.fn(() => ({
         id: 'target-discord',
         username: 'TargetUser',
@@ -154,6 +155,8 @@ describe('/party', () => {
     const interaction = {
       options: {
         getFocused: vi.fn(() => ({ name: 'party', value: 'ref' })),
+        getSubcommand: vi.fn(() => 'join'),
+        getSubcommandGroup: vi.fn(() => null),
       },
       respond: vi.fn().mockResolvedValue(undefined),
     };
@@ -209,6 +212,7 @@ describe('/party', () => {
       },
       options: {
         getSubcommand: vi.fn(() => 'leave'),
+        getSubcommandGroup: vi.fn(() => null),
       },
     } as any;
 

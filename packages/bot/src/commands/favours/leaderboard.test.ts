@@ -1,19 +1,20 @@
-import { PermissionFlagsBits } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../db.js', () => ({
   db: {},
 }));
 
-import leaderboardCommand from './leaderboard.js';
+import favourCommand from './favour.js';
 
-describe('/favour-leaderboard', () => {
-  it('is restricted to staff-capable members by default', () => {
-    const json = leaderboardCommand.data.toJSON();
+describe('/favour leaderboard', () => {
+  it('is registered as a subcommand under /favour with staff-only description', () => {
+    const json = favourCommand.data.toJSON();
 
-    expect(json.description).toContain('staff only');
-    expect(json.default_member_permissions).toBe(
-      PermissionFlagsBits.ManageGuild.toString(),
-    );
+    const leaderboardSub = (json.options ?? []).find(
+      (opt: any) => opt.name === 'leaderboard',
+    ) as { description?: string } | undefined;
+
+    expect(leaderboardSub).toBeDefined();
+    expect(leaderboardSub?.description).toContain('staff only');
   });
 });

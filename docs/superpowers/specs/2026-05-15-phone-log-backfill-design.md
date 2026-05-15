@@ -1,7 +1,7 @@
 # Phone log channel rollout + backfill
 
-**Date:** 2026-05-15
-**Status:** Spec — awaiting user review
+**Date:** 2026-05-15 (r3 — finalized after two code-review passes)
+**Status:** Spec — final, awaiting user approval before implementation
 **Owner:** skelly9912
 
 ## Problem
@@ -18,15 +18,17 @@ Staff need an oversight thread for every call. We're designating Discord channel
 
 - Make `PHONE_LOG_CHANNEL_ID=1504812456042561587` the active value in both local dev and production.
 - For every historic call without a staff thread, create the appropriate per-pair private thread under the new channel and post a faithful, chronological transcript replay.
-- Make the backfill idempotent, resumable, dry-runnable, and rate-limit-safe.
-- No schema changes. No new persistence semantics. Reuse `phone_calls.staff_thread_id` as the "this call has a thread" marker, same as the live relay.
+- Make the backfill idempotent, resumable, dry-runnable, and rate-limit-safe per Discord's actual per-thread limit.
+- Use `phone_calls.staff_thread_id` as the "thread exists" pointer (set immediately on thread resolution, matching live-relay semantics) and a new `phone_calls.backfilled_at` column as the "transcript fully replayed" idempotency marker.
 
 ## Non-goals
 
 - Migrating threads from any previously-configured `PHONE_LOG_CHANNEL_ID`. (Answered: there isn't one.)
 - Replaying live calls (`status IN ('ringing', 'active')`). Those belong to the live relay; touching them would race with `recordMessage`.
-- Re-running tap fan-out for historic messages. Taps are forward-looking surveillance, not a retroactive feed. Backfilled embeds go to the staff thread only.
-- Adding a periodic / scheduled backfill. This is a one-shot. Future calls go through the live relay.
+- Re-running tap fan-out for historic messages. Taps are forward-looking surveillance, not a retroactive feed. Backfilled embeds go to the staff thread only — the script reads `getCallTranscript`'s `messages` field and explicitly ignores its `taps` field.
+- Writing to `phone_messages.recipient_discord_message_id`, `phone_messages.staff_mirror_message_id`, or `phone_messages.sender_discord_message_id`. **Those columns reflect the live relay only.** Backfilled embeds exist solely in Discord; the persisted ledger row remains the unchanged source of truth. A future contributor must not "helpfully" write the backfilled embed ids back onto the row — a crash-and-rerun cycle would then overwrite the originals with duplicate ids and lose the audit pointer.
+- Adding a periodic / scheduled backfill. This is a one-shot.
+- Locking out live phone traffic for the duration of the backfill. (See **Live-traffic interleave** below.)
 
 ## Rollout: setting the env var
 
@@ -34,10 +36,11 @@ Staff need an oversight thread for every call. We're designating Discord channel
 
 Append/upsert `PHONE_LOG_CHANNEL_ID=1504812456042561587` in the root `.env`. Because Read on `.env` is blocked, the upsert runs in PowerShell:
 
-1. `Select-String -Path .env -Pattern '^PHONE_LOG_CHANNEL_ID='` — emits only the matching line (no full-file dump). If present:
-2. Rewrite the file by `Get-Content` → replace the matching line → `Set-Content`. The whole pipeline reads via Select-String and rewrites without us seeing values — but to keep this clean, we'll use a more surgical approach: a one-line PowerShell script that builds the new content with `-replace` and writes only when the match exists, otherwise `Add-Content` an appended line.
+1. `Select-String -Path .env -Pattern '^PHONE_LOG_CHANNEL_ID='` — emits only the matching line (no full-file dump).
+2. If a match exists, rewrite the file by `Get-Content` → `-replace '^PHONE_LOG_CHANNEL_ID=.*', 'PHONE_LOG_CHANNEL_ID=1504812456042561587'` → `Set-Content`.
+3. If no match, single `Add-Content` of `PHONE_LOG_CHANNEL_ID=1504812456042561587` to the end of `.env`.
 
-If the key is absent: a single `Add-Content` of `PHONE_LOG_CHANNEL_ID=1504812456042561587` to the end of `.env`.
+The PowerShell pipeline only reads the file to perform the replace; we never display its contents.
 
 ### Railway
 
@@ -52,6 +55,45 @@ Railway's auto-deploy redeploys the bot service.
 
 `tsx watch` does not re-read `.env` on change. If a local bot is running, the operator restarts it.
 
+## Schema change
+
+A small schema addition is required to make the backfill resumable without dup-posting.
+
+### New column
+
+`phone_calls.backfilled_at TIMESTAMPTZ NULL` — `NULL` for never-backfilled or in-flight; `NOW()` when the transcript replay completes successfully.
+
+### Drizzle schema delta
+
+`packages/db/src/schema/phones.ts` adds:
+
+```ts
+backfilledAt: timestamp('backfilled_at', { withTimezone: true, mode: 'date' }),
+```
+
+### Migration
+
+`packages/db/scripts/migrate-phone-backfill-marker.ts` mirrors `migrate-phones.ts` in shape:
+
+- Wrapped in a single `sql.begin(...)` transaction.
+- `ALTER TABLE phone_calls ADD COLUMN IF NOT EXISTS backfilled_at TIMESTAMPTZ NULL;`
+- Supports `--dry-run` (prints the SQL without executing) and `--validate` (asserts the column exists post-migration), matching the flag set on `migrate-phones.ts`.
+- No index needed (single scan against `staff_thread_id IS NULL` / `backfilled_at IS NULL` once).
+- pnpm wiring: `"migrate:phone-backfill-marker": "tsx scripts/migrate-phone-backfill-marker.ts"` in `packages/db/package.json`.
+- Must run before `pnpm --filter @hansard/bot backfill:phone-threads`.
+
+### Migration test
+
+`packages/db/scripts/migrate-phone-backfill-marker.test.ts` follows the `migrate-phones.test.ts` string-grep style (the existing `packages/db` test convention — no full Vitest schema-introspection runner). Asserts the migration script source text contains:
+
+- A `sql.begin(...)` wrapper.
+- `ADD COLUMN IF NOT EXISTS backfilled_at`.
+- The column type `TIMESTAMPTZ` (not `TIMESTAMP WITHOUT TIME ZONE`) and is nullable (no `NOT NULL`).
+- A `--dry-run` flag handler.
+- A `--validate` flag handler that queries `information_schema.columns` for the new column.
+
+This places the schema check inside the migration test file rather than spinning up a fresh Vitest suite under `packages/db`.
+
 ## Backfill script
 
 ### Location and invocation
@@ -59,29 +101,94 @@ Railway's auto-deploy redeploys the bot service.
 - File: `packages/bot/scripts/backfillPhoneThreads.ts`
 - pnpm wiring (`packages/bot/package.json`): `"backfill:phone-threads": "tsx scripts/backfillPhoneThreads.ts"`
 - Invocation: `pnpm --filter @hansard/bot backfill:phone-threads [--dry-run] [--limit N] [--verbose]`
-- Mirrors the existing `close:due-votes` script shape (same patterns for arg parsing, optional Discord render, graceful shutdown).
+- Mirrors the existing `close:due-votes` script shape.
 
-### Architecture
+### Discord client config
 
-The script spins up a minimal `discord.js` Client (`GatewayIntentBits.Guilds` only — DMs / reactions not needed for backfill), logs in with `DISCORD_BOT_TOKEN`, runs the pipeline, then exits.
+- **Intents:** `GatewayIntentBits.Guilds | GatewayIntentBits.GuildMembers`. `GuildMembers` is privileged but already enabled on the live bot; required for `backgroundStaffAdd` to populate the member cache.
+- **Partials:** none.
+- Startup warning: after the first `guild.members.fetch()` call, if `guild.members.cache.size <= 1`, log `Warning: GuildMembers intent appears disabled — staff will not be auto-added to backfilled threads.`
+- Graceful shutdown on SIGINT/SIGTERM: finish the current call's in-flight sends, then `client.destroy()` and release the advisory lock.
 
-Top-level flow:
+### Exported helpers
+
+`packages/bot/src/utils/phoneRelay.ts` currently keeps `sendStaffJoinPing` and `backgroundStaffAdd` as module-private functions. This spec exports both as part of the implementation PR so the backfill script can `import { sendStaffJoinPing, backgroundStaffAdd } from '../src/utils/phoneRelay.js'` and use the exact live behavior. Duplicating them inline in the script would create a drift hazard.
+
+The export change is purely additive — no callers change — so it does not affect the live relay's behavior.
+
+### Pipeline (per call, ordered by `started_at` ASC)
 
 ```
-acquire pg_advisory_lock (BACKFILL_LOCK_KEY)
-  load every phone_call where staff_thread_id IS NULL
-    AND status NOT IN ('ringing', 'active')
-    ORDER BY started_at ASC
-  for each call:
-    ensure thread (pair-keyed) under PHONE_LOG_CHANNEL_ID
-    post "Call connected (backfilled)" embed
-    stream phone_messages for the call (ORDER BY created_at, sequence_no)
-      post each as a CALL_COLOR embed with backfill footer
-    post "Call ended" embed (mirrors hangUpAndNotify)
-    PhoneService.setStaffThread(callId, threadId)
+acquire pg_advisory_lock(BACKFILL_LOCK_KEY) — bail if held
+preflight: fetch PHONE_LOG_CHANNEL_ID, verify perms
+  Required perms in the channel:
+    - ViewChannel
+    - SendMessages
+    - CreatePrivateThreads
+    - SendMessagesInThreads
+
+load every phone_calls row where:
+  backfilled_at IS NULL
+  AND status NOT IN ('ringing', 'active')
+  ORDER BY started_at ASC
+
+for each call:
+  participants = PhoneService.getCallParticipants(callId)
+  thread, didCreateThread = ensureBackfillThread(client, participants)
+    # findOrCreateThread inherits the same onOrphan hook used by the live relay
+    # — see "Reused primitives" below
+  if didCreateThread:
+    await sendStaffJoinPing(thread, guild, callerName, recipientName)
+    void backgroundStaffAdd(thread, guild, staffRoleIds)
+  PhoneService.setStaffThread(callId, thread.id)
+    # write thread pointer immediately so live calls on this pair reuse it
+  post "Call connected (backfilled)" embed
+  for message in getCallTranscript(callId, syntheticStaffViewer).messages:
+    post message embed
+    await perThreadPace(thread.id)            # ≥1100ms gap per thread
+  post "Call ended" embed
+  update phone_calls SET backfilled_at = NOW() WHERE id = callId
+
 release pg_advisory_lock
 client.destroy()
 ```
+
+The `didCreateThread` boolean is the single first-call-per-pair gate: both `sendStaffJoinPing` AND `backgroundStaffAdd` fire only when a brand-new `phone_threads` row was created during this call's iteration. Subsequent calls for the same pair (whether discovered later in the same run or already persisted from a live call) reuse the thread without re-pinging staff or re-fetching the full guild member list.
+
+The synthetic staff viewer:
+
+```ts
+// userId is unused for the staff branch of getCallTranscript (phoneService.ts:getCallTranscript
+// short-circuits on isStaff = true), but we use the nil UUID so the script can never collide
+// with a real player row if a future branch in that method starts reading userId for staff.
+const SYNTHETIC_BACKFILL_VIEWER: PhoneViewer = {
+  userId: '00000000-0000-0000-0000-000000000000',
+  isStaff: true,
+};
+```
+
+The script reads only `transcript.messages`. The `transcript.taps` field is documented as ignored in Non-goals and asserted in a unit test.
+
+### Idempotency contract
+
+Two markers, two roles:
+
+| Field | Set when | Meaning |
+|---|---|---|
+| `phone_calls.staff_thread_id` | Immediately on thread resolution | "A staff thread exists for this call's pair." Identical semantics to the live relay's first message. Live calls on the same pair will discover and reuse this thread. |
+| `phone_calls.backfilled_at` | After "Call ended" embed posts | "This call's historic transcript was fully replayed." The skip-filter on rerun. |
+
+Mid-call crash leaves `staff_thread_id IS NOT NULL` and `backfilled_at IS NULL`. The rerun re-replays that call's transcript end-to-end. That produces **at most one duplicate transcript block for the single crashed call**, never more, regardless of how many later calls were queued. The runbook calls this out.
+
+**Crucially, the per-message embed-post loop must NEVER write to `phone_messages.recipient_discord_message_id`, `phone_messages.staff_mirror_message_id`, or `phone_messages.sender_discord_message_id`.** Those columns reflect the live relay's send results. A rerun-after-crash would otherwise overwrite the originals with the duplicate's ids, destroying the audit trail. The unit test `crash recovery` asserts these columns remain unchanged.
+
+The cross-process `pg_advisory_lock` ensures only one operator runs the script at a time. Acquisition failure aborts with `Another backfill is in progress.`
+
+### Live-traffic interleave (accepted constraint)
+
+If a live phone call lands on a pair while the backfill is replaying that pair's transcript, the live messages will interleave with the historic embeds in the staff thread. Backfilled embeds carry a `backfilled • <originalTimestamp>` footer **as plain text** (footers don't render Discord `<t:>` time tokens) and have their `setTimestamp(originalDate)` set, so the embed's relative-time chip displays correctly. Staff can reconstruct chronological order visually using the `setTimestamp` chip.
+
+The operator runbook directs running the backfill during low-traffic hours to minimize the chance of interleave. A proper temporal lock would require modifying `phoneRelay.relayMessage` to acquire the same `pg_advisory_xact_lock` per pair during message recording — out of scope.
 
 ### Reused primitives
 
@@ -89,21 +196,16 @@ The script must reuse existing `PhoneService` primitives — it is NOT permitted
 
 | Need | Reused primitive |
 |---|---|
-| Per-pair thread reserve | `PhoneService.findOrReserveThread(playerA, playerB)` |
 | Per-pair thread create with race-safe persist | `PhoneService.findOrCreateThread(playerA, playerB, { createThread, onOrphan })` |
-| Marking a call as having a thread | `PhoneService.setStaffThread(callId, threadId)` |
+| Marking a call's thread pointer | `PhoneService.setStaffThread(callId, threadId)` |
 | Loading caller/recipient/numbers/players | `PhoneService.getCallParticipants(callId)` |
-| Listing transcript rows | `PhoneService.getCallTranscript(callId, staffViewer)` |
-| Embed shapes | Copy the structure from `postToStaffThread` and `hangUpAndNotify` in `phoneRelay.ts`, parameterized to accept the original timestamp. |
+| Listing transcript rows | `PhoneService.getCallTranscript(callId, syntheticStaffViewer)` — read `messages`, ignore `taps` |
+| Embed shapes | Copy structure from `postToStaffThread` and `hangUpAndNotify` in `phoneRelay.ts`, parameterized to accept the original timestamp. |
+| Staff role ping + add | `sendStaffJoinPing` and `backgroundStaffAdd` from `phoneRelay.ts` (exported as part of this change). |
 
-If `getCallTranscript` proves too coupled to its `PhoneViewer` access rules for a script context, an alternative is a narrow new service method `listMessagesForBackfill(callId)` returning rows ordered by `(createdAt, sequenceNo)` — but the first attempt should go through the existing transcript path with a synthetic staff viewer.
+The script's `createThread` callback for `findOrCreateThread` MUST also pass through the live relay's `onOrphan` hook (which deletes the just-created Discord thread on a lost persist race). This is dead code under normal operation (the advisory lock ensures single-operator), but defense-in-depth against a future race condition. The simplest path: factor the `createThread + onOrphan` pair into a small shared helper exported from `phoneRelay.ts` and used by both `ensurePhoneThread` (live) and `ensureBackfillThread` (script).
 
-### Idempotency contract
-
-- A call with `staff_thread_id IS NOT NULL` is never touched. Step 1 of the loop skips it.
-- `staff_thread_id` is written **after** the call's full transcript + ended embed have been posted. A mid-call crash leaves the call un-backfilled and a rerun retries it from scratch (which means up to one partial duplicate thread block could happen for the call that crashed — acceptable for a one-shot, and rare given the lock + bounded run time).
-- Thread creation goes through `findOrCreateThread`, which already handles persist-race orphan cleanup via its `onOrphan` hook.
-- A `pg_advisory_lock(BACKFILL_LOCK_KEY)` on a fixed app-defined key prevents two operators racing the script. If acquisition fails, the script aborts with a clear message: "Another backfill is in progress."
+Marking `backfilled_at` is a new operation specific to this script — implement as a thin `markBackfilled(callId)` helper in the script file (single `UPDATE phone_calls SET backfilled_at = NOW() WHERE id = ?`). No new exported `PhoneService` method needed.
 
 ### Filtering rules
 
@@ -116,9 +218,19 @@ If `getCallTranscript` proves too coupled to its `PhoneViewer` access rules for 
 | `ringing` | ❌ Live — leave for relay |
 | `active` | ❌ Live — leave for relay |
 
-No date cutoff. This is a full one-time replay.
+No date cutoff. Full one-time replay.
+
+### Per-thread pacing
+
+Discord's per-channel rate limit is 5 messages / 5 seconds (~1 msg/sec sustained), **separate from** the 50/sec global limit. A long replay into a single thread will trip the per-channel limit without pacing; discord.js auto-retries with backoff but it's slow and noisy.
+
+The script maintains an in-memory `Map<threadId, lastSendAt>` and awaits a `setTimeout` so each per-thread send is ≥1100 ms after the previous send to that same thread. The outer loop is serial (`for ... await`), so at any moment exactly one send is in flight — cross-thread "parallelism" is nominal, not real. The per-thread `Map` matters in exactly one realistic case: pair-sharing, where the same thread reappears on a later call and the pacing prevents back-to-back hits on the same thread's bucket. Different threads are paced in isolation because they have independent rate-limit buckets.
+
+Realistic throughput: ~50 messages/minute per thread. A pair with 200 historic messages takes ~4 minutes for its transcript section.
 
 ### Embed shapes
+
+In all three, `setTimestamp(originalDate)` is what surfaces the original time in the embed's top-right chip. Footers are plain text — Discord's `<t:unix:f>` time-format tokens are NOT parsed inside `setFooter` content. The footer text is therefore the original timestamp as an ISO 8601 string.
 
 **Call connected (backfilled):**
 
@@ -126,10 +238,10 @@ No date cutoff. This is a full one-time replay.
 Title: 📞 Call connected
 Color: STAFF_PALETTE (0x788c5d)
 Fields:
-  - Caller   { callerCharacterName } ({ callerNumber.numberRaw })
+  - Caller    { callerCharacterName } ({ callerNumber.numberRaw })
   - Recipient { recipientCharacterName } ({ recipientNumber.numberRaw })
-Footer: backfilled • <original startedAt as Discord <t:unix:f>>
-Timestamp: call.startedAt
+Footer: backfilled • <call.startedAt.toISOString()>
+setTimestamp: call.startedAt
 ```
 
 **Message (per phone_messages row):**
@@ -137,10 +249,10 @@ Timestamp: call.startedAt
 ```
 Color: CALL_COLOR (0x9b7cb8)
 Author: { senderCharacterName } ({ senderNumber.numberRaw })
-       (or "[i/n]" suffix when content chunked > 4000 chars)
+       (or "[i/n]" suffix when content chunked > 4000 chars via chunkForEmbed)
 Description: chunk via chunkForEmbed (existing helper)
-Footer: to { recipientCharacterName } • backfilled • <original createdAt as Discord <t:unix:f>>
-Timestamp: message.createdAt
+Footer: to { recipientCharacterName } • backfilled • <message.createdAt.toISOString()>
+setTimestamp: message.createdAt
 allowedMentions: { parse: [] }
 ```
 
@@ -150,78 +262,107 @@ allowedMentions: { parse: [] }
 Title: ☎ Call ended
 Color: ENDED_PALETTE (0x9c9890)
 Description: formatPhoneEndedReason(endedReason) from @hansard/shared
-Footer: backfilled • <original endedAt as Discord <t:unix:f>>
-Timestamp: call.endedAt
+Footer: backfilled • <call.endedAt.toISOString()>
+setTimestamp: call.endedAt
 ```
 
 ### Pair-sharing semantics
 
-When call N+1 in the iteration shares the unordered player pair with a call already processed in this run, `findOrCreateThread` returns the existing `phone_threads` row and we append directly to that thread. The script holds an in-memory `Map<pairKey, ThreadChannel>` cache to avoid re-fetching the thread each time.
+When call N+1 in the iteration shares the unordered player pair with a call already processed in this run, `findOrCreateThread` returns the existing `phone_threads` row and we append to that thread. The script holds an in-memory `Map<pairKey, ThreadChannel>` cache to avoid re-fetching the thread each time.
 
-The first call for a pair triggers the standard `sendStaffJoinPing` + background `thread.members.add(...)` — same as live, code reused from `phoneRelay.ts` (extracted to a shared helper if needed, but a copy is fine for a one-shot script).
+A `phone_threads` row may also already exist from prior live calls. In that case `findOrCreateThread` likewise returns it and the script appends without re-pinging staff.
 
-### Rate-limit pacing
+### Snowflake handling
 
-- Hard pace: 150 ms `setTimeout` between Discord sends. At <7 sends/sec we're comfortably below Discord's 50 msg/s global cap with headroom.
-- Per-thread sends are already serialized by the outer `for ... await` loop. No `Promise.all` over messages.
-- Estimated runtime: 5000 historic messages ≈ 12.5 min. Acceptable for a one-shot. Verbose mode logs every 50 sends so operators see progress.
+All Discord IDs (thread, message, channel) flow through the script as raw snowflake strings — no formatting, no trimming, no prefixing. `phone_calls.staff_thread_id` is `varchar(20)` and silently truncates if anything is prepended. Test asserts the persisted `staff_thread_id` exactly equals the Discord-returned `thread.id`.
 
 ### Dry-run mode
 
 `--dry-run`:
 
 - Skips Discord login (no token consumed).
-- Reports counts: total calls, calls to backfill, estimated message-embed count, distinct pairs, estimated runtime.
-- Does NOT acquire the advisory lock. Pure read-only DB query.
-- Output:
+- Attempts `pg_try_advisory_lock(BACKFILL_LOCK_KEY)` non-blockingly. If unavailable (a real backfill is running), prints `Warning: real backfill in progress; counts may shift mid-query.` and continues without holding the lock.
+- Reports counts: total calls, calls needing backfill (after `backfilled_at IS NULL` filter), estimated message-embed count, distinct pairs, estimated runtime (using the corrected ~50 msg/min-per-thread figure for the worst-pair).
+- Does NOT write Discord or any DB column.
+- Example output:
   ```
   Found 23 calls needing backfill across 11 pairs.
-  Would post 1 + 47 + 1 = ... embeds (52 sends total).
-  Estimated runtime: ~8s (at 150ms/send).
+  Would post 52 embeds (1 connected + 47 messages + 4 ended across 11 threads).
+  Worst-pair estimate: 5 calls × avg 12 messages = 78 sends @ 1.1s = ~86s.
+  Total estimated runtime: ~4 minutes.
   ```
 
 ### `--limit N`
 
-Smoke-test mode: stop after backfilling N calls. Lets the operator inspect one or two threads before unleashing the full sweep. The advisory lock is still acquired so concurrent runs don't race.
+Smoke-test mode: stop after backfilling N calls. Lets the operator inspect one or two threads before unleashing the full sweep. The advisory lock IS acquired (so concurrent runs are blocked even in limit mode).
 
 ## Testing
 
+### Migration test (`packages/db/scripts/migrate-phone-backfill-marker.test.ts`)
+
+Follows the `migrate-phones.test.ts` string-grep convention:
+
+- Asserts source contains a `sql.begin(...)` wrapper.
+- Asserts source contains `ADD COLUMN IF NOT EXISTS backfilled_at`.
+- Asserts source contains `TIMESTAMPTZ` and does NOT contain `NOT NULL` adjacent to the new column.
+- Asserts source contains a `--dry-run` flag handler.
+- Asserts source contains a `--validate` flag handler.
+
 ### Unit tests (`packages/bot/scripts/backfillPhoneThreads.test.ts`)
 
-Vitest with a mock `discord.js` Client (stubbed `channels.fetch`, `thread.send`, `thread.members.add`, `client.users.fetch`) against a Vitest-seeded DB containing:
+Vitest with a mock `discord.js` Client (stubbed `channels.fetch`, `thread.send`, `thread.members.add`, `client.users.fetch`, `guild.members.fetch`, `channel.permissionsFor`) against a Vitest-seeded DB.
 
-1. **Clean call** — one ended call, three messages. Asserts: one thread created, 5 embeds posted (connected + 3 messages + ended), `staff_thread_id` set.
-2. **Zero-message call** — declined call with no messages. Asserts: connected + ended embeds only, `staff_thread_id` set.
-3. **Pair sharing** — two calls between the same player pair. Asserts: one thread, both calls' embed blocks present in chronological order.
-4. **Already backfilled** — call with `staff_thread_id` set. Asserts: skipped, no Discord sends.
-5. **Idempotency** — run twice over the same seed. Asserts: second run is a no-op.
-6. **Live call** — `status='active'`. Asserts: skipped, no Discord sends.
-7. **Dry-run** — `--dry-run` flag. Asserts: no Discord sends, no `staff_thread_id` writes, exit code 0, output contains "Would post".
+| # | Case | Asserts |
+|---|---|---|
+| 1 | **Clean call** — one ended call, three messages. | One thread created, 5 embeds posted (connected + 3 messages + ended), `staff_thread_id` set immediately after thread resolution, `backfilled_at` set after ended embed. |
+| 2 | **Zero-message call** — declined call, no messages. | Connected + ended embeds only, both markers set. |
+| 3 | **Pair sharing (both fresh)** — two ended calls between same pair, neither pre-backfilled. | One thread, both calls' embed blocks present in chronological order, ping fires exactly once. |
+| 4 | **Pair sharing with one pre-backfilled call** — call A already has `backfilled_at`, call B is fresh, same pair. | Call B reuses the existing `phone_threads` row + `staff_thread_id`, no re-ping. Cache-from-DB path exercised. |
+| 5 | **Pair sharing with a live call** — pair P has an `active` call (`phone_threads` row exists from the live relay) and a historic `ended` call. | Historic call finds and reuses the existing thread, no re-ping. This is the most likely real-world configuration. |
+| 6 | **Already backfilled** — call with `backfilled_at` set. | Skipped, no Discord sends. |
+| 7 | **Idempotency** — run twice over the same seed. | Second run is a no-op end-to-end. |
+| 8 | **Crash recovery** — call with `staff_thread_id` set but `backfilled_at` NULL (simulating mid-call crash). | Rerun re-replays this call's transcript end-to-end, sets `backfilled_at`. **Asserts `phone_messages.*_mirror_message_id` columns remain unchanged.** |
+| 9 | **Live call skipped** — `status='active'`. | No Discord sends. |
+| 10 | **`--limit N`** — 5 callbackfill-eligible, `--limit 2`. | First 2 backfilled (`backfilled_at` set); remaining 3 untouched (`backfilled_at` still NULL); advisory lock was held during the run. |
+| 11 | **Dry-run** — `--dry-run` flag. | No Discord sends, no DB column writes, exit code 0, output contains "Would post". |
+| 12 | **Dry-run with lock held** — `pg_try_advisory_lock` returns false. | Warning printed, exit code 0, counts still printed. |
+| 13 | **Tap field ignored** — `getCallTranscript` returns messages + taps. | No Discord sends correspond to tap-derived data; embed sends match `messages.length`. |
+| 14 | **Per-thread pacing** — two messages in the same thread back-to-back. | ≥1100ms gap between sends to that thread (mock timers / fake clock). |
+| 15 | **Preflight permission failure** — channel exists but bot lacks `CreatePrivateThreads`. | Script aborts before any DB writes with a clear error. |
 
 ### Manual verification
 
-1. Set `PHONE_LOG_CHANNEL_ID` locally, restart bot.
-2. `pnpm --filter @hansard/bot backfill:phone-threads --dry-run` — verify counts match expectations.
-3. `pnpm --filter @hansard/bot backfill:phone-threads --limit 1` — pick one call, eyeball the resulting thread structure (connected + transcript + ended embeds, footer says "backfilled", staff role pinged once).
-4. Inspect: thread reuse — does a second small `--limit` run on a pair-shared call append rather than create new?
-5. Full sweep against prod: `pnpm --filter @hansard/bot backfill:phone-threads --verbose`.
+1. Run `pnpm --filter @hansard/db migrate:phone-backfill-marker --dry-run` to inspect SQL, then without the flag to apply against local DB. Verify the column exists via `migrate:phone-backfill-marker --validate`.
+2. Set `PHONE_LOG_CHANNEL_ID` locally, restart bot.
+3. `pnpm --filter @hansard/bot backfill:phone-threads --dry-run` — verify counts.
+4. `pnpm --filter @hansard/bot backfill:phone-threads --limit 1` — eyeball one thread.
+5. Verify thread reuse — pick a pair-shared `--limit 2`.
+6. Full sweep against prod after the migration is rolled out there: `pnpm --filter @hansard/bot backfill:phone-threads --verbose`.
 
 ## Failure modes + mitigations
 
 | Failure | Mitigation |
 |---|---|
-| Discord rate limit hit | 150ms pacing + retry-after honored by discord.js; if a single send still 429s, log and continue (a 429-blocked embed is a missing audit entry but not a corruption). |
-| Bot lacks ViewChannel/SendMessages in the new log channel | Fail fast at startup: fetch the channel, attempt a permission check via `channel.permissionsFor(client.user)`. Abort with a clear "bot needs Manage Threads + Send Messages in #channel-name" message. |
+| Discord per-channel rate limit hit | 1100ms per-thread pacing; discord.js auto-retries `429` with backoff as a fallback. |
+| Discord global rate limit hit | Serial outer loop caps real concurrency at 1 send in flight; global limit unreachable in practice. |
+| Bot lacks required perms in the new log channel | Preflight checks `ViewChannel + SendMessages + CreatePrivateThreads + SendMessagesInThreads`; aborts with a clear "bot needs X in #channel-name" message before any DB writes. |
+| Bot lacks `GuildMembers` intent | Script explicitly enables it. If still disabled at runtime (e.g., bot config drift), startup warning logs and `backgroundStaffAdd` no-ops. Script completes; staff must be added manually. |
 | Concurrent backfill run | `pg_advisory_lock` ensures only one runs at a time. Second invocation aborts loudly. |
-| Process killed mid-run | Last in-flight call may have a partial thread block (no "Call ended" embed, `staff_thread_id` not set yet). Operator reruns; that call will get a fresh full block appended. Acceptable for a one-shot. |
+| Process killed mid-call | Crashed call has `staff_thread_id` set, `backfilled_at NULL`, and zero writes to `phone_messages.*_mirror_message_id`. Rerun re-replays that one call's transcript end-to-end. Runbook says: "If you see two transcript blocks for the same call between two 'Call connected (backfilled)' embeds without a 'Call ended' in between, delete the older block." |
 | DB connection drops | tsx + drizzle bubbles up; script exits non-zero. Operator reruns; lock cleanup is automatic on session close. |
-| One call's player no longer exists | `getCallParticipants` throws on missing FKs. Catch + log + skip that call. (Player rows are soft-deleted via `isAlive=false`, not hard-deleted, so this should be unreachable in practice — but defensive.) |
+| One call's player no longer exists | `getCallParticipants` throws on missing FKs. Catch + log + skip that call. Players are soft-deleted (`isAlive=false`), not hard-deleted, so unreachable in practice. |
 | `PHONE_LOG_CHANNEL_ID` unset at script-start | Bail early with `process.exit(1)` and a clear message. |
+| Live call on the same pair during replay | Documented as accepted operational constraint; embed `setTimestamp` allows visual reordering. Run during quiet hours. |
 
 ## Operator runbook
 
 ```sh
-# 1. Make sure local env has the new channel id.
+# 0. Roll out the schema column.
+pnpm --filter @hansard/db migrate:phone-backfill-marker --dry-run   # inspect SQL
+pnpm --filter @hansard/db migrate:phone-backfill-marker             # apply
+pnpm --filter @hansard/db migrate:phone-backfill-marker --validate  # confirm
+
+# 1. Make sure local env has the new channel id and bot is restarted.
 pnpm --filter @hansard/bot backfill:phone-threads --dry-run
 # Read the counts. If they look wrong, stop and investigate.
 
@@ -231,18 +372,35 @@ pnpm --filter @hansard/bot backfill:phone-threads --limit 1
 
 # 3. Full sweep.
 pnpm --filter @hansard/bot backfill:phone-threads --verbose
+# Run during low phone-traffic hours to minimize live/historic interleave.
+# If you see two transcript blocks for the same call (back-to-back "Call connected
+# (backfilled)" embeds without a "Call ended" in between), the earlier was a crashed
+# partial — delete that earlier block.
 ```
 
 ## Open questions
 
-None. Sub-questions raised at design-review:
-
-- **Backfill missed/declined/cancelled?** Yes, with a connected + ended pair only (audit completeness).
-- **Date cutoff?** No, full history.
-- **Append to existing per-pair thread?** Yes, matches live semantics.
+None.
 
 ## Out-of-scope follow-ups
 
-- A `--since YYYY-MM-DD` flag if a future operator wants a partial replay. Current spec doesn't need it.
-- A web-side ops button to trigger the backfill. CLI is sufficient.
-- Backfilling tap deliveries. Out of scope per Non-goals.
+- A `--since YYYY-MM-DD` flag if a future operator wants a partial replay.
+- A web-side ops button to trigger the backfill.
+- Backfilling tap deliveries.
+- A temporal lock between live `relayMessage` and backfill replay on the same pair — would require touching the live relay's hot path.
+
+## Changelog
+
+- **2026-05-15 r1** — initial draft.
+- **2026-05-15 r2** — code-review revisions: added `phone_calls.backfilled_at`, split marker semantics, `GuildMembers` intent, synthetic staff viewer + tap ignore, per-thread pacing, preflight perms, dry-run lock, snowflake pass-through, live-traffic interleave constraint.
+- **2026-05-15 r3** — second-pass review revisions:
+  - Idempotency contract now explicitly forbids writing `phone_messages.*_mirror_message_id` from the backfill.
+  - Parallelism claim softened — outer loop is serial; per-thread pacing matters chiefly for pair-sharing.
+  - Schema test rolled into the migration test file (string-grep style), no new `packages/db` Vitest suite.
+  - First-call-per-pair gate explicit for both `sendStaffJoinPing` AND `backgroundStaffAdd`.
+  - Migration script gains `--dry-run` and `--validate` flags; test asserts both.
+  - Footer text is now ISO 8601, not `<t:unix:f>` (footers don't render time tokens). `setTimestamp` carries the relative-time chip.
+  - `sendStaffJoinPing` + `backgroundStaffAdd` will be exported from `phoneRelay.ts` as part of this PR.
+  - `onOrphan` hook explicitly inherited via a shared `createThread + onOrphan` helper.
+  - Synthetic viewer uses nil UUID with an explanatory comment.
+  - Test plan expanded to 15 cases: added pair-sharing with one-pre-backfilled, pair-sharing with a live call, `--limit N`. Crash-recovery test now asserts `phone_messages.*_mirror_message_id` columns remain unchanged.

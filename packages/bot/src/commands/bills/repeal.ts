@@ -4,8 +4,17 @@ import { db } from '../../db.js';
 import { bills, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
+import {
+  editLegislationEmbed,
+  postLegislationEmbed,
+} from '../../utils/legislationChannel.js';
 import { BillStatus } from '@hansard/shared';
 import { repealBill } from './repealFlow.js';
+import {
+  buildRepealEditEmbed,
+  buildRepealFallbackEmbed,
+  type RepealEmbedInput,
+} from './repealEmbeds.js';
 
 /**
  * Resolve a bill by either bill number (e.g. "B-001", "1") or title.
@@ -118,6 +127,21 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   const changedById = actor?.id ?? bill.authorId;
 
+  // Resolve the bill's author for display attribution
+  const [billAuthor] = await db
+    .select({
+      characterName: players.characterName,
+      discordId: players.discordId,
+    })
+    .from(players)
+    .where(eq(players.id, bill.authorId))
+    .limit(1);
+
+  const authorName = billAuthor?.characterName ?? 'Unknown';
+  const authorDisplay = billAuthor?.discordId
+    ? `${authorName} (<@${billAuthor.discordId}>)`
+    : authorName;
+
   try {
     const oldStatus = bill.status;
     const now = new Date();
@@ -133,9 +157,43 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       now,
     });
 
-    const padded = String(bill.billNumber).padStart(3, '0');
+    const embedInput: RepealEmbedInput = {
+      bill,
+      authorDisplay,
+      previousStatus: oldStatus,
+      actorDiscordId: interaction.user.id,
+      now,
+    };
 
-    const embed = createEmbed({
+    // Prefer editing the original /bill enact post in place so the legislation
+    // channel reads as a continuous historical record. Fall back to posting a
+    // fresh notice when the bill predates message-id capture or when the edit
+    // fails (channel deleted, message purged, permissions missing, etc.).
+    const editResult = await editLegislationEmbed({
+      client: interaction.client,
+      embed: buildRepealEditEmbed(embedInput),
+      channelId: bill.legislationChannelId,
+      messageId: bill.legislationMessageId,
+    });
+
+    let postedFresh = false;
+    if (editResult.status !== 'edited') {
+      await postLegislationEmbed({
+        client: interaction.client,
+        embed: buildRepealFallbackEmbed(embedInput),
+      });
+      postedFresh = true;
+    }
+
+    const padded = String(bill.billNumber).padStart(3, '0');
+    const repealedTimestamp = Math.floor(now.getTime() / 1000);
+    const channelOutcome = editResult.status === 'edited'
+      ? `Edited the original enactment post in the legislation channel.`
+      : postedFresh
+        ? `No stored enactment post; posted a fresh repeal notice in the legislation channel.`
+        : `Skipped legislation channel update.`;
+
+    const replyEmbed = createEmbed({
       title: 'Bill Repealed',
       system: 'bills',
       description: [
@@ -145,11 +203,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         '',
         `**Previous status:** ${oldStatus}`,
         `**Repealed by:** <@${interaction.user.id}>`,
-        `**Repealed at:** <t:${Math.floor(now.getTime() / 1000)}:F>`,
+        `**Repealed at:** <t:${repealedTimestamp}:F>`,
+        '',
+        `_${channelOutcome}_`,
       ].join('\n'),
     });
 
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [replyEmbed] });
   } catch (error) {
     console.error('Failed to repeal bill:', error);
     await interaction.editReply({

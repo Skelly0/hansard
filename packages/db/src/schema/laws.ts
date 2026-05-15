@@ -111,6 +111,12 @@ export const bills = pgTable('bills', {
   repealedAt: timestamp('repealed_at', { withTimezone: true, mode: 'date' }),
   repealedByBillId: uuid('repealed_by_bill_id').references((): AnyPgColumn => bills.id),
 
+  // === LEGISLATION CHANNEL POST ===
+  // Discord message + channel of the original /bill enact post, captured so /bill repeal
+  // can edit the original embed in place rather than spamming a new message.
+  legislationChannelId: varchar('legislation_channel_id', { length: 32 }),
+  legislationMessageId: varchar('legislation_message_id', { length: 32 }),
+
   // === COLLECTION & HIERARCHY ===
   collectionId: uuid('collection_id').references(() => documentCollections.id),
   parentDocumentId: uuid('parent_document_id').references(() => documents.id),

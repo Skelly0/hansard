@@ -176,7 +176,25 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       fields,
     });
 
-    await postLegislationEmbed({ client: interaction.client, embed });
+    const postResult = await postLegislationEmbed({ client: interaction.client, embed });
+
+    // Persist the legislation message id so /bill repeal can edit the original
+    // embed in place. Best-effort: a missing or failed post leaves the columns
+    // null, which the repeal flow falls back from to a fresh notice.
+    if (postResult.status === 'sent' && postResult.messageId && postResult.channelId) {
+      try {
+        await db
+          .update(bills)
+          .set({
+            legislationChannelId: postResult.channelId,
+            legislationMessageId: postResult.messageId,
+            updatedAt: new Date(),
+          })
+          .where(eq(bills.id, bill.id));
+      } catch (persistError) {
+        console.error('Failed to persist legislation message id for bill', bill.id, persistError);
+      }
+    }
 
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {

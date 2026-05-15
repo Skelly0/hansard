@@ -58,6 +58,7 @@ export const PHONE_NUMBERS_PER_PLAYER_LIMIT = 5;
 export const PHONE_INELIGIBLE_DEAD = 'A deceased character cannot place or receive calls.';
 export const PHONE_INELIGIBLE_NO_CHARACTER = 'You need an active character before you can register a phone number.';
 export const PHONE_ALREADY_ON_CALL = 'You are already on a call. Hang up first with `/phone hangup`.';
+export const PHONE_RECIPIENT_BUSY = 'That line is busy on another call. Try again later.';
 export const PHONE_NUMBER_TAKEN = 'That number is already registered to another line.';
 export const PHONE_NUMBER_INVALID = 'Phone numbers must be 3-20 digits, optionally prefixed with `+`.';
 export const PHONE_NUMBER_NOT_FOUND = 'No active line found with that number.';

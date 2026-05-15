@@ -18,6 +18,7 @@ import {
   PHONE_INELIGIBLE_DEAD,
   PHONE_INELIGIBLE_NO_CHARACTER,
   PHONE_ALREADY_ON_CALL,
+  PHONE_RECIPIENT_BUSY,
   PHONE_NUMBER_TAKEN,
   PHONE_NUMBER_INVALID,
   PHONE_NUMBER_NOT_FOUND,
@@ -136,6 +137,7 @@ export type PhoneErrorCode =
   | 'no_character'
   | 'dead'
   | 'already_on_call'
+  | 'recipient_busy'
   | 'recipient_dead'
   | 'self_call'
   | 'forbidden'
@@ -424,7 +426,11 @@ export class PhoneService {
         throw new PhoneServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
       }
 
-      const [openCall] = await tx
+      // Check caller and recipient separately so the error message matches reality: telling a
+      // dialer to "hang up first" when the *recipient* is the one already on a call sends them
+      // chasing a `/phone hangup` that legitimately reports "you are not currently in a call",
+      // a frustrating no-op loop.
+      const [callerOpenCall] = await tx
         .select({ id: phoneCalls.id })
         .from(phoneCalls)
         .where(
@@ -433,14 +439,28 @@ export class PhoneService {
             or(
               eq(phoneCalls.callerPlayerId, callerPlayer.id),
               eq(phoneCalls.recipientPlayerId, callerPlayer.id),
+            ),
+          ),
+        )
+        .limit(1);
+      if (callerOpenCall) {
+        throw new PhoneServiceError('already_on_call', PHONE_ALREADY_ON_CALL);
+      }
+      const [recipientOpenCall] = await tx
+        .select({ id: phoneCalls.id })
+        .from(phoneCalls)
+        .where(
+          and(
+            inArray(phoneCalls.status, ['ringing', 'active']),
+            or(
               eq(phoneCalls.callerPlayerId, recipientPlayer.id),
               eq(phoneCalls.recipientPlayerId, recipientPlayer.id),
             ),
           ),
         )
         .limit(1);
-      if (openCall) {
-        throw new PhoneServiceError('already_on_call', PHONE_ALREADY_ON_CALL);
+      if (recipientOpenCall) {
+        throw new PhoneServiceError('recipient_busy', PHONE_RECIPIENT_BUSY);
       }
 
       const ringExpiresAt = new Date(Date.now() + PHONE_RING_TIMEOUT_MS);

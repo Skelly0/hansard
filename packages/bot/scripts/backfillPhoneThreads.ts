@@ -191,13 +191,14 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     });
 
     // Message embeds.
-    // IMPORTANT: this loop reads `phone_messages` via getCallTranscript but must NEVER
-    // write back to `phone_messages.recipient_discord_message_id`,
-    // `phone_messages.staff_mirror_message_id`, or `phone_messages.sender_discord_message_id`.
-    // Those columns reflect the live relay's send results; overwriting them on a rerun
-    // after a crash destroys the audit trail.
     const transcript = await svc.getCallTranscript(call.id, SYNTHETIC_BACKFILL_VIEWER);
     if (transcript) {
+        // INVARIANT: this loop must NEVER write to
+        // phone_messages.recipient_discord_message_id / staff_mirror_message_id /
+        // sender_discord_message_id. Those columns reflect the live relay's send
+        // results; a backfill rerun-after-crash that overwrote them would destroy
+        // the original audit pointer. See spec 2026-05-15-phone-log-backfill-design.md
+        // (Non-goals + Idempotency contract).
       for (const message of transcript.messages) {
         const senderIsCaller = message.senderPlayerId === participants.callerPlayer.id;
         const senderName = senderIsCaller ? callerName : recipientName;

@@ -408,6 +408,46 @@ integrationDescribe('backfillPhoneThreads — core loop', () => {
     expect(row.backfilledAt).toBeInstanceOf(Date);
   });
 
+  it('test 8 — re-replay after crash never overwrites phone_messages.*_mirror_message_id', async () => {
+    const { callId } = await seedCall({
+      callerName: 'A8',
+      recipientName: 'B8',
+      callerNumberRaw: '+15554001',
+      recipientNumberRaw: '+15554002',
+      status: 'ended',
+      messages: [{ senderIsCaller: true, content: 'hello' }],
+      // Simulate mid-call crash: thread pointer set, backfill not yet complete.
+      staffThreadId: '900000000000000401',
+    });
+    // Seed an original mirror-id on the message (live-relay artifact).
+    const ORIGINAL_MIRROR_ID = '700000000000000007';
+    await db.update(phoneMessages)
+      .set({ staffMirrorMessageId: ORIGINAL_MIRROR_ID })
+      .where(eq(phoneMessages.callId, callId));
+
+    const channel = makeOkChannel();
+    const thread = {
+      id: '900000000000000401',
+      type: 12,
+      send: vi.fn().mockResolvedValue({ id: 'newMirrorId' }),
+      members: { add: vi.fn() },
+    };
+    const client = makeClient(channel);
+    (client.channels.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+      if (id === thread.id) return thread;
+      return channel;
+    });
+
+    await runBackfill({ client, dryRun: false, limit: undefined, verbose: false });
+
+    // After rerun: backfilled_at is now set, BUT the mirror id on phone_messages
+    // is the original live-relay value, not the duplicate send's id.
+    const [msg] = await db.select().from(phoneMessages).where(eq(phoneMessages.callId, callId));
+    expect(msg.staffMirrorMessageId).toBe(ORIGINAL_MIRROR_ID);
+    const [row] = await db.select().from(phoneCalls).where(eq(phoneCalls.id, callId));
+    expect(row.backfilledAt).toBeInstanceOf(Date);
+  });
+
   it('test 5 — pair with a live call: historic call reuses the live-created thread', async () => {
     const [caller] = await db.insert(players).values({ characterName: uniqueName('P5A'), discordId: uniqueSnowflake('1'), discordUsername: 'P5A', isAlive: true }).returning();
     const [recipient] = await db.insert(players).values({ characterName: uniqueName('P5B'), discordId: uniqueSnowflake('2'), discordUsername: 'P5B', isAlive: true }).returning();

@@ -1,11 +1,7 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, ilike } from 'drizzle-orm';
 import { bills } from '@hansard/db';
 import { db } from '../../db.js';
-import type { Command } from '../../client.js';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { formatBillStatus } from './shared.js';
@@ -74,93 +70,72 @@ async function resolveBill(input: string): Promise<BillReference | null> {
   return byPartial ?? null;
 }
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('bill-reraise')
-    .setDescription('Cancel a mistaken legislative vote and return a bill to submitted')
-    .addStringOption((opt) =>
-      opt
-        .setName('bill')
-        .setDescription('Bill number (e.g. B-001) or title')
-        .setRequired(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('reason')
-        .setDescription('Audit note explaining why the bill is being re-raised')
-        .setRequired(false)
-        .setMaxLength(512),
-    ) as SlashCommandBuilder,
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
+  const member = interaction.guild?.members.cache.get(interaction.user.id);
+  if (!member) {
+    await interaction.reply({
+      embeds: [errorEmbed('Could not resolve your guild membership.')],
+      ephemeral: true,
+    });
+    return;
+  }
 
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const member = interaction.guild?.members.cache.get(interaction.user.id);
-    if (!member) {
-      await interaction.reply({
-        embeds: [errorEmbed('Could not resolve your guild membership.')],
-        ephemeral: true,
-      });
-      return;
-    }
+  const allowed = await hasPermission(member, 'voting.create');
+  if (!allowed) {
+    await interaction.reply({
+      embeds: [errorEmbed('Only staff or the chancellor (legislative leader) can re-raise bills.')],
+      ephemeral: true,
+    });
+    return;
+  }
 
-    const allowed = await hasPermission(member, 'voting.create');
-    if (!allowed) {
-      await interaction.reply({
-        embeds: [errorEmbed('Only staff or the chancellor (legislative leader) can re-raise bills.')],
-        ephemeral: true,
-      });
-      return;
-    }
+  await interaction.deferReply({ ephemeral: true });
 
-    await interaction.deferReply({ ephemeral: true });
+  const billArg = interaction.options.getString('bill', true);
+  const reason = interaction.options.getString('reason', false);
 
-    const billArg = interaction.options.getString('bill', true);
-    const reason = interaction.options.getString('reason', false);
+  const bill = await resolveBill(billArg);
+  if (!bill) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`Could not find a bill matching \`${billArg}\`. Provide a bill number (e.g. \`B-001\`) or title.`)],
+    });
+    return;
+  }
 
-    const bill = await resolveBill(billArg);
-    if (!bill) {
-      await interaction.editReply({
-        embeds: [errorEmbed(`Could not find a bill matching \`${billArg}\`. Provide a bill number (e.g. \`B-001\`) or title.`)],
-      });
-      return;
-    }
+  try {
+    const result = await reraiseBillForVote(db, {
+      billId: bill.id,
+      actorDiscordId: interaction.user.id,
+      reason,
+    });
 
-    try {
-      const result = await reraiseBillForVote(db, {
-        billId: bill.id,
-        actorDiscordId: interaction.user.id,
-        reason,
-      });
+    const padded = String(result.bill.billNumber).padStart(3, '0');
+    const embed = createEmbed({
+      title: 'Bill Re-raised',
+      system: 'bills',
+      description: [
+        `**${result.bill.title}** (Bill #\`B-${padded}\`)`,
+        '',
+        'The mistaken linked legislative vote has been cancelled and this bill is back in the submitted queue.',
+        '',
+        `**Previous bill status:** ${formatBillStatus(result.previousBillStatus)}`,
+        `**Current bill status:** ${formatBillStatus(result.bill.status)}`,
+        `**Cancelled vote:** \`${result.election.id}\` (${result.previousElectionStatus})`,
+        `**Re-raised by:** <@${interaction.user.id}>`,
+        reason ? `**Reason:** ${reason}` : null,
+      ]
+        .filter((line): line is string => line != null)
+        .join('\n'),
+    });
 
-      const padded = String(result.bill.billNumber).padStart(3, '0');
-      const embed = createEmbed({
-        title: 'Bill Re-raised',
-        system: 'bills',
-        description: [
-          `**${result.bill.title}** (Bill #\`B-${padded}\`)`,
-          '',
-          'The mistaken linked legislative vote has been cancelled and this bill is back in the submitted queue.',
-          '',
-          `**Previous bill status:** ${formatBillStatus(result.previousBillStatus)}`,
-          `**Current bill status:** ${formatBillStatus(result.bill.status)}`,
-          `**Cancelled vote:** \`${result.election.id}\` (${result.previousElectionStatus})`,
-          `**Re-raised by:** <@${interaction.user.id}>`,
-          reason ? `**Reason:** ${reason}` : null,
-        ]
-          .filter((line): line is string => line != null)
-          .join('\n'),
-      });
-
-      await interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-      console.error('Failed to re-raise bill:', error);
-      const message = error instanceof Error
-        ? error.message
-        : 'Failed to re-raise the bill due to a database error.';
-      await interaction.editReply({
-        embeds: [errorEmbed(message)],
-      });
-    }
-  },
-};
-
-export default command;
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Failed to re-raise bill:', error);
+    const message = error instanceof Error
+      ? error.message
+      : 'Failed to re-raise the bill due to a database error.';
+    await interaction.editReply({
+      embeds: [errorEmbed(message)],
+    });
+  }
+}

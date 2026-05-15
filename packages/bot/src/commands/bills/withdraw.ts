@@ -1,12 +1,8 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, ilike } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { bills } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
-import type { Command } from '../../client.js';
 import { formatBillStatus } from './shared.js';
 import { withdrawSubmittedBill } from './withdrawFlow.js';
 
@@ -77,73 +73,52 @@ async function resolveBill(input: string): Promise<BillReference | null> {
   return byPartial ?? null;
 }
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('bill-withdraw')
-    .setDescription('Withdraw one of your submitted bills')
-    .addStringOption((opt) =>
-      opt
-        .setName('bill')
-        .setDescription('Bill number (e.g. B-001) or title')
-        .setRequired(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('reason')
-        .setDescription('Optional reason to record in the bill history')
-        .setRequired(false)
-        .setMaxLength(512),
-    ) as SlashCommandBuilder,
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
 
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+  const billArg = interaction.options.getString('bill', true);
+  const reason = interaction.options.getString('reason', false);
 
-    const billArg = interaction.options.getString('bill', true);
-    const reason = interaction.options.getString('reason', false);
+  const bill = await resolveBill(billArg);
+  if (!bill) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`Could not find a bill matching \`${billArg}\`. Provide a bill number (e.g. \`B-001\`) or title.`)],
+    });
+    return;
+  }
 
-    const bill = await resolveBill(billArg);
-    if (!bill) {
-      await interaction.editReply({
-        embeds: [errorEmbed(`Could not find a bill matching \`${billArg}\`. Provide a bill number (e.g. \`B-001\`) or title.`)],
-      });
-      return;
-    }
+  try {
+    const result = await withdrawSubmittedBill(db, {
+      billId: bill.id,
+      actorDiscordId: interaction.user.id,
+      reason,
+    });
 
-    try {
-      const result = await withdrawSubmittedBill(db, {
-        billId: bill.id,
-        actorDiscordId: interaction.user.id,
-        reason,
-      });
+    const embed = createEmbed({
+      title: 'Bill Withdrawn',
+      system: 'bills',
+      colour: 0x8A6F5A,
+      description: [
+        `**${result.bill.title}** (Bill #\`${formatBillNumber(result.bill.billNumber)}\`)`,
+        '',
+        'This bill has been withdrawn and will no longer be eligible for a legislature vote.',
+        '',
+        `**Previous status:** ${formatBillStatus(result.previousStatus)}`,
+        `**Current status:** ${formatBillStatus(result.bill.status)}`,
+        `**Withdrawn by:** <@${interaction.user.id}>`,
+        reason?.trim() ? `**Reason:** ${reason.trim()}` : null,
+      ]
+        .filter((line): line is string => line !== null)
+        .join('\n'),
+    });
 
-      const embed = createEmbed({
-        title: 'Bill Withdrawn',
-        system: 'bills',
-        colour: 0x8A6F5A,
-        description: [
-          `**${result.bill.title}** (Bill #\`${formatBillNumber(result.bill.billNumber)}\`)`,
-          '',
-          'This bill has been withdrawn and will no longer be eligible for a legislature vote.',
-          '',
-          `**Previous status:** ${formatBillStatus(result.previousStatus)}`,
-          `**Current status:** ${formatBillStatus(result.bill.status)}`,
-          `**Withdrawn by:** <@${interaction.user.id}>`,
-          reason?.trim() ? `**Reason:** ${reason.trim()}` : null,
-        ]
-          .filter((line): line is string => line !== null)
-          .join('\n'),
-      });
-
-      await interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : 'Failed to withdraw the bill due to a database error.';
-      await interaction.editReply({
-        embeds: [errorEmbed(message)],
-      });
-    }
-  },
-};
-
-export default command;
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    const message = error instanceof Error
+      ? error.message
+      : 'Failed to withdraw the bill due to a database error.';
+    await interaction.editReply({
+      embeds: [errorEmbed(message)],
+    });
+  }
+}

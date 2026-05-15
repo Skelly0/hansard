@@ -1,12 +1,8 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, ilike, asc } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { bills, billStatusLog, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
-import type { Command } from '../../client.js';
 import { formatBillStatus, statusEmoji } from './shared.js';
 
 /**
@@ -80,101 +76,87 @@ async function resolveBill(input: string): Promise<
   return byPartial ?? null;
 }
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('bill-status')
-    .setDescription('Show the full status timeline of a bill')
-    .addStringOption((opt) =>
-      opt
-        .setName('bill')
-        .setDescription('Bill number (e.g. B-001) or title')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply();
 
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply();
+  const billArg = interaction.options.getString('bill', true);
 
-    const billArg = interaction.options.getString('bill', true);
-
-    const bill = await resolveBill(billArg);
-    if (!bill) {
-      await interaction.editReply({
-        embeds: [errorEmbed(`Could not find a bill matching \`${billArg}\`. Provide a bill number (e.g. \`B-001\`) or title.`)],
-      });
-      return;
-    }
-
-    // Fetch full status log, oldest first
-    const logRows = await db
-      .select({
-        id: billStatusLog.id,
-        fromStatus: billStatusLog.fromStatus,
-        toStatus: billStatusLog.toStatus,
-        notes: billStatusLog.notes,
-        createdAt: billStatusLog.createdAt,
-        changedById: billStatusLog.changedById,
-        changedByName: players.characterName,
-        changedByDiscordId: players.discordId,
-      })
-      .from(billStatusLog)
-      .leftJoin(players, eq(billStatusLog.changedById, players.id))
-      .where(eq(billStatusLog.billId, bill.id))
-      .orderBy(asc(billStatusLog.createdAt));
-
-    const padded = String(bill.billNumber).padStart(3, '0');
-    const currentEmoji = statusEmoji(bill.status);
-    const currentStatus = formatBillStatus(bill.status);
-
-    if (logRows.length === 0) {
-      const embed = createEmbed({
-        title: `Status Timeline — ${bill.title}`,
-        system: 'bills',
-        description: [
-          `**Bill #\`B-${padded}\`** — ${bill.title}`,
-          `**Current Status:** ${currentEmoji} ${currentStatus}`,
-          '',
-          '_No status log entries found for this bill._',
-        ].join('\n'),
-      });
-      await interaction.editReply({ embeds: [embed] });
-      return;
-    }
-
-    // Build timeline lines
-    const timelineLines = logRows.map((row) => {
-      const ts = Math.floor(row.createdAt.getTime() / 1000);
-      const toEmoji = statusEmoji(row.toStatus);
-      const toLabel = formatBillStatus(row.toStatus);
-      const fromLabel = row.fromStatus
-        ? `${formatBillStatus(row.fromStatus)} → `
-        : '';
-      const who = row.changedByDiscordId
-        ? `<@${row.changedByDiscordId}>`
-        : (row.changedByName ?? 'Unknown');
-      const noteLine = row.notes ? `\n   > ${row.notes}` : '';
-      return `${toEmoji} **${fromLabel}${toLabel}**\n   <t:${ts}:f> — by ${who}${noteLine}`;
+  const bill = await resolveBill(billArg);
+  if (!bill) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`Could not find a bill matching \`${billArg}\`. Provide a bill number (e.g. \`B-001\`) or title.`)],
     });
+    return;
+  }
 
-    // Discord embed description max is ~4096 chars; truncate if needed
-    let description = [
-      `**Bill #\`B-${padded}\`** — ${bill.title}`,
-      `**Current Status:** ${currentEmoji} ${currentStatus}`,
-      '',
-      ...timelineLines,
-    ].join('\n');
+  // Fetch full status log, oldest first
+  const logRows = await db
+    .select({
+      id: billStatusLog.id,
+      fromStatus: billStatusLog.fromStatus,
+      toStatus: billStatusLog.toStatus,
+      notes: billStatusLog.notes,
+      createdAt: billStatusLog.createdAt,
+      changedById: billStatusLog.changedById,
+      changedByName: players.characterName,
+      changedByDiscordId: players.discordId,
+    })
+    .from(billStatusLog)
+    .leftJoin(players, eq(billStatusLog.changedById, players.id))
+    .where(eq(billStatusLog.billId, bill.id))
+    .orderBy(asc(billStatusLog.createdAt));
 
-    if (description.length > 4000) {
-      description = description.slice(0, 3990) + '\n…';
-    }
+  const padded = String(bill.billNumber).padStart(3, '0');
+  const currentEmoji = statusEmoji(bill.status);
+  const currentStatus = formatBillStatus(bill.status);
 
+  if (logRows.length === 0) {
     const embed = createEmbed({
       title: `Status Timeline — ${bill.title}`,
       system: 'bills',
-      description,
+      description: [
+        `**Bill #\`B-${padded}\`** — ${bill.title}`,
+        `**Current Status:** ${currentEmoji} ${currentStatus}`,
+        '',
+        '_No status log entries found for this bill._',
+      ].join('\n'),
     });
-
     await interaction.editReply({ embeds: [embed] });
-  },
-};
+    return;
+  }
 
-export default command;
+  // Build timeline lines
+  const timelineLines = logRows.map((row) => {
+    const ts = Math.floor(row.createdAt.getTime() / 1000);
+    const toEmoji = statusEmoji(row.toStatus);
+    const toLabel = formatBillStatus(row.toStatus);
+    const fromLabel = row.fromStatus
+      ? `${formatBillStatus(row.fromStatus)} → `
+      : '';
+    const who = row.changedByDiscordId
+      ? `<@${row.changedByDiscordId}>`
+      : (row.changedByName ?? 'Unknown');
+    const noteLine = row.notes ? `\n   > ${row.notes}` : '';
+    return `${toEmoji} **${fromLabel}${toLabel}**\n   <t:${ts}:f> — by ${who}${noteLine}`;
+  });
+
+  // Discord embed description max is ~4096 chars; truncate if needed
+  let description = [
+    `**Bill #\`B-${padded}\`** — ${bill.title}`,
+    `**Current Status:** ${currentEmoji} ${currentStatus}`,
+    '',
+    ...timelineLines,
+  ].join('\n');
+
+  if (description.length > 4000) {
+    description = description.slice(0, 3990) + '\n…';
+  }
+
+  const embed = createEmbed({
+    title: `Status Timeline — ${bill.title}`,
+    system: 'bills',
+    description,
+  });
+
+  await interaction.editReply({ embeds: [embed] });
+}

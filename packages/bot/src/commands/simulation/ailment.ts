@@ -1,17 +1,26 @@
-import {
-  SlashCommandBuilder,
-  PermissionFlagsBits,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog, simulationClock } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
-import type { Command } from '../../client.js';
+import { isStaff } from '../../utils/permissions.js';
 
-// ============================================================
-// Helpers
-// ============================================================
+async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<boolean> {
+  if (!interaction.guild || !interaction.member) {
+    await interaction.editReply({
+      embeds: [errorEmbed('This command must be used in a server.')],
+    });
+    return false;
+  }
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!(await isStaff(member))) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Only staff can manage ailments.')],
+    });
+    return false;
+  }
+  return true;
+}
 
 function getWorstSeverity(ailments: { severity: string }[]): string {
   if (ailments.some(a => a.severity === 'critical')) return 'critical';
@@ -33,66 +42,14 @@ type AilmentEntry = {
   notes?: string;
 };
 
-// ============================================================
-// Command
-// ============================================================
-
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('ailment')
-    .setDescription('Manage player ailments')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addSubcommand((sub) =>
-      sub
-        .setName('add')
-        .setDescription('Give a player an ailment')
-        .addUserOption((opt) =>
-          opt.setName('user').setDescription('The player').setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt.setName('condition').setDescription('Ailment name (e.g. gout, tuberculosis)').setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt
-            .setName('severity')
-            .setDescription('Ailment severity')
-            .setRequired(true)
-            .addChoices(
-              { name: 'Minor', value: 'minor' },
-              { name: 'Major', value: 'major' },
-              { name: 'Critical', value: 'critical' },
-            ),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName('remove')
-        .setDescription('Cure a player\'s ailment')
-        .addUserOption((opt) =>
-          opt.setName('user').setDescription('The player').setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt.setName('condition').setDescription('Ailment to remove').setRequired(true),
-        ),
-    ) as unknown as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-    switch (sub) {
-      case 'add': await handleAdd(interaction); break;
-      case 'remove': await handleRemove(interaction); break;
-    }
-  },
-};
-
-async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function executeAdd(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
+  if (!(await ensureStaff(interaction))) return;
 
   const targetUser = interaction.options.getUser('user', true);
   const condition = interaction.options.getString('condition', true);
   const severity = interaction.options.getString('severity', true) as 'minor' | 'major' | 'critical';
 
-  // Look up target player
   const [targetPlayer] = await db.select().from(players)
     .where(eq(players.discordId, targetUser.id));
 
@@ -106,7 +63,6 @@ async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void
     return;
   }
 
-  // Look up staff player for triggeredById
   const [staffPlayer] = await db.select().from(players)
     .where(eq(players.discordId, interaction.user.id));
 
@@ -148,7 +104,7 @@ async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void
     isAutomatic: false,
   });
 
-  const severityEmoji = severity === 'critical' ? '\u2620\uFE0F' : severity === 'major' ? '\u26A0\uFE0F' : '\uD83E\uDE79';
+  const severityEmoji = severity === 'critical' ? '☠️' : severity === 'major' ? '⚠️' : '🩹';
 
   const embed = createEmbed({
     title: 'Ailment Assigned',
@@ -167,8 +123,9 @@ async function handleAdd(interaction: ChatInputCommandInteraction): Promise<void
   await interaction.editReply({ embeds: [embed] });
 }
 
-async function handleRemove(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function executeRemove(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
+  if (!(await ensureStaff(interaction))) return;
 
   const targetUser = interaction.options.getUser('user', true);
   const condition = interaction.options.getString('condition', true);
@@ -227,5 +184,3 @@ async function handleRemove(interaction: ChatInputCommandInteraction): Promise<v
 
   await interaction.editReply({ embeds: [embed] });
 }
-
-export default command;

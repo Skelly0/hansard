@@ -1,23 +1,15 @@
-import {
-  SlashCommandBuilder,
-  PermissionFlagsBits,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog, simulationClock, officeHolders, offices } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { postObituaryToGraveyard } from '../../utils/graveyard.js';
-import type { Command } from '../../client.js';
+import { isStaff } from '../../utils/permissions.js';
 
 type DeathAilment = {
   condition: string;
   severity: string;
 };
-
-// ============================================================
-// Helpers
-// ============================================================
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -71,7 +63,6 @@ async function processPlayerDeath(
     triggeredById, isAutomatic: false,
   });
 
-  // Vacate all offices
   const heldOffices = await db.select({
     holderId: officeHolders.id, officeId: officeHolders.officeId, officeName: offices.name,
   }).from(officeHolders)
@@ -91,104 +82,95 @@ async function processPlayerDeath(
   }
 }
 
-// ============================================================
-// Command
-// ============================================================
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('kill')
-    .setDescription('Kill a player character and post their obituary')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addUserOption((opt) =>
-      opt.setName('user').setDescription('The player to kill').setRequired(true),
-    )
-    .addStringOption((opt) =>
-      opt.setName('cause').setDescription('Cause of death').setRequired(true),
-    ) as unknown as SlashCommandBuilder,
+  if (!interaction.guild || !interaction.member) {
+    await interaction.editReply({
+      embeds: [errorEmbed('This command must be used in a server.')],
+    });
+    return;
+  }
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!(await isStaff(member))) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Only staff can kill characters.')],
+    });
+    return;
+  }
 
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+  const targetUser = interaction.options.getUser('user', true);
+  const cause = interaction.options.getString('cause', true);
 
-    const targetUser = interaction.options.getUser('user', true);
-    const cause = interaction.options.getString('cause', true);
+  const [targetPlayer] = await db.select().from(players)
+    .where(eq(players.discordId, targetUser.id));
 
-    // Look up target player
-    const [targetPlayer] = await db.select().from(players)
-      .where(eq(players.discordId, targetUser.id));
+  if (!targetPlayer) {
+    await interaction.editReply({
+      embeds: [errorEmbed('That user is not registered as a player.')],
+    });
+    return;
+  }
 
-    if (!targetPlayer) {
-      await interaction.editReply({
-        embeds: [errorEmbed('That user is not registered as a player.')],
-      });
-      return;
-    }
+  if (!targetPlayer.isAlive) {
+    await interaction.editReply({
+      embeds: [errorEmbed('That character is already dead.')],
+    });
+    return;
+  }
 
-    if (!targetPlayer.isAlive) {
-      await interaction.editReply({
-        embeds: [errorEmbed('That character is already dead.')],
-      });
-      return;
-    }
+  const [staffPlayer] = await db.select().from(players)
+    .where(eq(players.discordId, interaction.user.id));
 
-    // Look up staff player
-    const [staffPlayer] = await db.select().from(players)
-      .where(eq(players.discordId, interaction.user.id));
+  try {
+    const clock = await fetchClock();
+    const currentDate = clock?.currentDate ?? 'unknown';
+    const currentTick = clock?.currentTick ?? 0;
+    const deathAilments = summarizeDeathAilments(targetPlayer.ailments);
 
-    try {
-      const clock = await fetchClock();
-      const currentDate = clock?.currentDate ?? 'unknown';
-      const currentTick = clock?.currentTick ?? 0;
-      const deathAilments = summarizeDeathAilments(targetPlayer.ailments);
+    await processPlayerDeath(
+      targetPlayer.id,
+      cause,
+      currentDate,
+      currentTick,
+      staffPlayer?.id ?? null,
+      deathAilments,
+    );
 
-      // Kill the character
-      await processPlayerDeath(
-        targetPlayer.id,
-        cause,
-        currentDate,
-        currentTick,
-        staffPlayer?.id ?? null,
-        deathAilments,
-      );
+    const graveyardPost = await postObituaryToGraveyard({
+      client: interaction.client,
+      db,
+      playerId: targetPlayer.id,
+    });
+    const obituary = graveyardPost.obituary ?? {
+      characterName: targetPlayer.characterName ?? targetUser.username,
+      age: targetPlayer.currentAge,
+      ailments: deathAilments,
+    };
+    const graveyardNotice = graveyardPost.status === 'sent'
+      ? `Obituary posted to <#${graveyardPost.channelId}>.`
+      : graveyardPost.channelId
+        ? `Death recorded, but the obituary could not be posted to <#${graveyardPost.channelId}>. Check bot logs.`
+        : '_No graveyard channel configured. Set GRAVEYARD\\_CHANNEL\\_ID to enable obituary posts._';
 
-      const graveyardPost = await postObituaryToGraveyard({
-        client: interaction.client,
-        db,
-        playerId: targetPlayer.id,
-      });
-      const obituary = graveyardPost.obituary ?? {
-        characterName: targetPlayer.characterName ?? targetUser.username,
-        age: targetPlayer.currentAge,
-        ailments: deathAilments,
-      };
-      const graveyardNotice = graveyardPost.status === 'sent'
-        ? `Obituary posted to <#${graveyardPost.channelId}>.`
-        : graveyardPost.channelId
-          ? `Death recorded, but the obituary could not be posted to <#${graveyardPost.channelId}>. Check bot logs.`
-          : '_No graveyard channel configured. Set GRAVEYARD\\_CHANNEL\\_ID to enable obituary posts._';
+    const ailmentsText = formatDeathAilments(obituary.ailments);
+    const confirmEmbed = createEmbed({
+      title: 'Character Killed',
+      description: [
+        `**${obituary.characterName}** has died.`,
+        '',
+        `**Cause:** ${cause}`,
+        `**Age:** ${obituary.age ?? 'unknown'}`,
+        ...(ailmentsText ? [`**Ailments:** ${ailmentsText}`] : []),
+        '',
+        graveyardNotice,
+      ].join('\n'),
+      system: 'graveyard',
+    });
 
-      // Reply in the command channel
-      const ailmentsText = formatDeathAilments(obituary.ailments);
-      const confirmEmbed = createEmbed({
-        title: 'Character Killed',
-        description: [
-          `**${obituary.characterName}** has died.`,
-          '',
-          `**Cause:** ${cause}`,
-          `**Age:** ${obituary.age ?? 'unknown'}`,
-          ...(ailmentsText ? [`**Ailments:** ${ailmentsText}`] : []),
-          '',
-          graveyardNotice,
-        ].join('\n'),
-        system: 'graveyard',
-      });
-
-      await interaction.editReply({ embeds: [confirmEmbed] });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to kill character';
-      await interaction.editReply({ embeds: [errorEmbed(message)] });
-    }
-  },
-};
-
-export default command;
+    await interaction.editReply({ embeds: [confirmEmbed] });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to kill character';
+    await interaction.editReply({ embeds: [errorEmbed(message)] });
+  }
+}

@@ -1,7 +1,4 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, parties, factions, playerEventLog, simulationClock } from '@hansard/db';
@@ -19,12 +16,13 @@ import {
 } from '@hansard/api/services/favourService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 
-const MIN_AGE = 18;
-const MAX_AGE = 90;
+export const ADMIN_MIN_AGE = 18;
+export const ADMIN_MAX_AGE = 90;
+const MIN_AGE = ADMIN_MIN_AGE;
+const MAX_AGE = ADMIN_MAX_AGE;
 
-async function handleCharacterCreate(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function executeCharacterCreate(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
 
   const member = interaction.member;
@@ -265,7 +263,7 @@ async function handleCharacterCreate(interaction: ChatInputCommandInteraction): 
   }
 }
 
-async function handleChangeParty(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function executeChangeParty(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
 
   const member = interaction.member;
@@ -363,59 +361,3 @@ async function handleChangeParty(interaction: ChatInputCommandInteraction): Prom
   await interaction.editReply({ embeds: [embed] });
 }
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('player-admin')
-    .setDescription('Staff player administration')
-    .addSubcommand((sub) =>
-      sub
-        .setName('character-create')
-        .setDescription('Create a character on behalf of another user (staff only)')
-        .addUserOption((opt) =>
-          opt.setName('user').setDescription('The user to create a character for').setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt.setName('character-name').setDescription('Character name').setRequired(true).setMaxLength(128),
-        )
-        .addIntegerOption((opt) =>
-          opt.setName('starting-age').setDescription(`Starting age (${MIN_AGE}-${MAX_AGE})`).setRequired(true).setMinValue(MIN_AGE).setMaxValue(MAX_AGE),
-        )
-        .addStringOption((opt) =>
-          opt.setName('faction').setDescription('Faction name').setRequired(false).setMaxLength(128),
-        )
-        .addStringOption((opt) =>
-          opt.setName('party').setDescription('Party name').setRequired(false).setMaxLength(128),
-        )
-        .addStringOption((opt) =>
-          opt.setName('bio').setDescription('Character biography').setRequired(false).setMaxLength(2000),
-        )
-        .addStringOption((opt) =>
-          opt.setName('portrait-url').setDescription('Portrait image URL').setRequired(false).setMaxLength(512),
-        ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName('change-party')
-        .setDescription('Change another player\'s party (staff only)')
-        .addUserOption((opt) =>
-          opt.setName('user').setDescription('The player whose party to change').setRequired(true),
-        )
-        .addStringOption((opt) =>
-          opt.setName('party').setDescription('Party name (or "independent")').setRequired(true).setMaxLength(128),
-        ),
-    ) as unknown as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand(true);
-    switch (sub) {
-      case 'character-create':
-        return handleCharacterCreate(interaction);
-      case 'change-party':
-        return handleChangeParty(interaction);
-      default:
-        await interaction.reply({ embeds: [errorEmbed(`Unknown subcommand: ${sub}`)], ephemeral: true });
-    }
-  },
-};
-
-export default command;

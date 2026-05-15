@@ -1,14 +1,10 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, and, desc, inArray } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog } from '@hansard/db';
 import { PlayerEventType } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 
 const HEALTH_DISPLAY: Record<string, string> = {
   healthy: '\u{1F7E2} Healthy',
@@ -32,18 +28,7 @@ interface AilmentEntry {
   notes?: string;
 }
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('player-health')
-    .setDescription('Show a player\'s health and ailment status')
-    .addUserOption((opt) =>
-      opt
-        .setName('user')
-        .setDescription('The player to inspect')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const targetUser = interaction.options.getUser('user', true);
@@ -153,8 +138,5 @@ const command: Command = {
       fields,
     });
 
-    await interaction.editReply({ embeds: [embed] });
-  },
-};
-
-export default command;
+  await interaction.editReply({ embeds: [embed] });
+}

@@ -44,6 +44,15 @@ import {
   buildTicketCategoryFields,
   normalizeTicketCategoryInput,
 } from './categoryHelpers.js';
+import { execute as viewExecute } from './view.js';
+import { execute as listExecute } from './list.js';
+import { execute as replyExecute } from './reply.js';
+import { execute as closeExecute } from './close.js';
+import { execute as assignExecute } from './assign.js';
+import { execute as priorityExecute } from './priority.js';
+import { execute as noteExecute } from './note.js';
+import { execute as linkExecute } from './link.js';
+import { execute as metricsExecute } from './metrics.js';
 
 /**
  * /ticket create
@@ -119,6 +128,165 @@ const command: Command = {
             .setRequired(false)
             .setMinValue(0),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('view')
+        .setDescription('View a ticket by its number')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('number')
+            .setDescription('The ticket number (e.g. 1042)')
+            .setRequired(true)
+            .setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('list')
+        .setDescription('List tickets with optional filters')
+        .addStringOption((opt) =>
+          opt
+            .setName('status')
+            .setDescription('Filter by status')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Open', value: 'open' },
+              { name: 'In Progress', value: 'in_progress' },
+              { name: 'Waiting', value: 'waiting' },
+              { name: 'Resolved', value: 'resolved' },
+              { name: 'Closed', value: 'closed' },
+            ),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('assignee')
+            .setDescription('Filter by assigned staff member')
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('reply')
+        .setDescription('Reply to a ticket with a public message')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('number')
+            .setDescription('The ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('message')
+            .setDescription('Your reply')
+            .setRequired(true)
+            .setMaxLength(2000),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('close')
+        .setDescription('Close a ticket')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('number')
+            .setDescription('The ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('reason')
+            .setDescription('Resolution note')
+            .setRequired(false)
+            .setMaxLength(1000),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('assign')
+        .setDescription('Assign a ticket to a staff member')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('number')
+            .setDescription('The ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('user')
+            .setDescription('The staff member to assign')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('priority')
+        .setDescription('Set a ticket priority level (staff only)')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('number')
+            .setDescription('The ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('level')
+            .setDescription('Priority level')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Low', value: 'low' },
+              { name: 'Normal', value: 'normal' },
+              { name: 'High', value: 'high' },
+              { name: 'Urgent', value: 'urgent' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('note')
+        .setDescription('Add a staff-only internal note to a ticket')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('number')
+            .setDescription('The ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('message')
+            .setDescription('The internal note')
+            .setRequired(true)
+            .setMaxLength(2000),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('link')
+        .setDescription('Link two tickets together (staff only)')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('a')
+            .setDescription('First ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('b')
+            .setDescription('Second ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('metrics')
+        .setDescription('Staff dashboard for ticket health'),
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -132,6 +300,36 @@ const command: Command = {
     if (subcommand === 'category-create') {
       await handleCategoryCreate(interaction);
       return;
+    }
+
+    switch (subcommand) {
+      case 'view':
+        await viewExecute(interaction);
+        return;
+      case 'list':
+        await listExecute(interaction);
+        return;
+      case 'reply':
+        await replyExecute(interaction);
+        return;
+      case 'close':
+        await closeExecute(interaction);
+        return;
+      case 'assign':
+        await assignExecute(interaction);
+        return;
+      case 'priority':
+        await priorityExecute(interaction);
+        return;
+      case 'note':
+        await noteExecute(interaction);
+        return;
+      case 'link':
+        await linkExecute(interaction);
+        return;
+      case 'metrics':
+        await metricsExecute(interaction);
+        return;
     }
 
     if (subcommand !== 'create') return;

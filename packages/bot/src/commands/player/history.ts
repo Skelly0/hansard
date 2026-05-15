@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
@@ -10,7 +9,6 @@ import { PlayerEventType } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 
 /** Number of events per page. */
 const EVENTS_PER_PAGE = 8;
@@ -41,18 +39,7 @@ const EVENT_TYPE_EMOJI: Record<string, string> = {
   unsuspension: '\u{2705}',         // check mark
 };
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('history')
-    .setDescription('View a player\'s event log')
-    .addUserOption((opt) =>
-      opt
-        .setName('user')
-        .setDescription('The player to view history for (defaults to yourself)')
-        .setRequired(false),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const targetUser = interaction.options.getUser('user') ?? interaction.user;
@@ -147,11 +134,8 @@ const command: Command = {
       pages.push(embed);
     }
 
-    await createPaginatedEmbed({
-      interaction,
-      pages,
-    });
-  },
-};
-
-export default command;
+  await createPaginatedEmbed({
+    interaction,
+    pages,
+  });
+}

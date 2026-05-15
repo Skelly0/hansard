@@ -25,6 +25,7 @@ import {
 import { listBills } from '../services/billService.js';
 import { getHistory as getFavourHistory, getPlayerBalances } from '../services/favourService.js';
 import { TicketService } from '../services/ticketService.js';
+import { validateCharacterName } from '@hansard/shared';
 
 // ============================================================
 // Route Parameter / Query Types
@@ -177,6 +178,14 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         });
       }
 
+      const nameValidation = validateCharacterName(body.characterName);
+      if (!nameValidation.ok) {
+        return reply.status(400).send({
+          error: nameValidation.error ?? 'Invalid character name',
+        });
+      }
+      const normalizedName = nameValidation.normalized!;
+
       if (!body.startingAge || body.startingAge < 18 || body.startingAge > 70) {
         return reply.status(400).send({
           error: 'startingAge must be between 18 and 70',
@@ -194,7 +203,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        const player = await createCharacter(fastify.db, body);
+        const player = await createCharacter(fastify.db, { ...body, characterName: normalizedName });
         const favourBonus = calculateStartingAgeFavourBonus(body.startingAge);
 
         return reply.status(201).send({
@@ -249,7 +258,18 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const updated = await updateCharacter(fastify.db, id, body);
+      let patchBody: UpdateCharacterInput = body;
+      if (body.characterName !== undefined) {
+        const nameValidation = validateCharacterName(body.characterName);
+        if (!nameValidation.ok) {
+          return reply.status(400).send({
+            error: nameValidation.error ?? 'Invalid character name',
+          });
+        }
+        patchBody = { ...body, characterName: nameValidation.normalized! };
+      }
+
+      const updated = await updateCharacter(fastify.db, id, patchBody);
       if (!updated) {
         return reply.status(404).send({ error: 'Player not found' });
       }

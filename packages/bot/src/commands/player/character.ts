@@ -31,6 +31,7 @@ import {
   birthDateForAge,
   buildArchivedCharacter,
   profileDataWithArchive,
+  validateCharacterName,
 } from '@hansard/shared';
 import { calculateStartingAgeFavourBonus } from '@hansard/api/services/playerService';
 import {
@@ -172,7 +173,15 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 
   await modalSubmit.deferReply({ ephemeral: true });
 
-  const characterName = modalSubmit.fields.getTextInputValue('character_name').trim();
+  const rawCharacterName = modalSubmit.fields.getTextInputValue('character_name');
+  const nameValidation = validateCharacterName(rawCharacterName);
+  if (!nameValidation.ok) {
+    await modalSubmit.editReply({
+      embeds: [errorEmbed(nameValidation.error ?? 'Invalid character name.')],
+    });
+    return;
+  }
+  const characterName = nameValidation.normalized!;
   const characterBio = modalSubmit.fields.getTextInputValue('character_bio').trim() || null;
   const ageRaw = modalSubmit.fields.getTextInputValue('character_age').trim();
   const startingAge = parseInt(ageRaw, 10);

@@ -67,6 +67,14 @@ export const phoneCalls = pgTable('phone_calls', {
   answeredAt: timestamp('answered_at', { withTimezone: true, mode: 'date' }),
   endedAt: timestamp('ended_at', { withTimezone: true, mode: 'date' }),
 
+  // Backfill completion marker. NULL means "not yet backfilled" or "backfill
+  // crashed mid-call"; set to NOW() by the one-shot
+  // `backfill:phone-threads` script only after the call's full historic
+  // transcript has been replayed into the staff thread. Distinct from
+  // `staffThreadId` (which marks "a thread exists for this pair"). See spec
+  // 2026-05-15-phone-log-backfill-design.md.
+  backfilledAt: timestamp('backfilled_at', { withTimezone: true, mode: 'date' }),
+
   // Staff actor for force-end. The `ended_reason` already carries `force_ended_by_staff:<note>`,
   // but the actor's identity must survive on a structured column so the audit trail is
   // queryable without parsing the reason string. Same rogue-staff threat model as

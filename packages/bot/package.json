@@ -8,6 +8,7 @@
     "build": "tsc",
     "test": "vitest",
     "test:run": "vitest run",
+    "backfill:phone-threads": "tsx scripts/backfillPhoneThreads.ts",
     "close:due-votes": "tsx src/scripts/closeDueVotes.ts",
     "post:party-join": "tsx src/scripts/postPartyJoinMessage.ts",
     "refresh:party-join": "tsx src/scripts/refreshPartyJoinMessage.ts",

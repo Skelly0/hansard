@@ -35,6 +35,31 @@ export interface PendingDeath {
 }
 
 // ============================================================
+// Archived Character (JSONB on players.profileData.previousCharacters)
+// ============================================================
+// When a player reincarnates after their character dies, the previous
+// character's snapshot is appended to profileData.previousCharacters so the
+// graveyard and dossier can still surface the dead character on the same
+// player row.
+
+export interface ArchivedCharacter {
+  characterName: string;
+  characterBio: string | null;
+  characterPortraitUrl: string | null;
+  factionId: string | null;
+  partyId: string | null;
+  birthDate: string | null;
+  startingAge: number | null;
+  currentAge: number | null;
+  deathDate: string | null;
+  causeOfDeath: string | null;
+  healthStatus: HealthStatus | null;
+  ailments: Ailment[];
+  registeredAt: string;
+  archivedAt: string;
+}
+
+// ============================================================
 // Profile Data (JSONB on players table)
 // ============================================================
 
@@ -42,6 +67,7 @@ export interface ProfileData {
   timezone?: string;
   pronouns?: string;
   pendingDeath?: PendingDeath;
+  previousCharacters?: ArchivedCharacter[];
   [key: string]: unknown;
 }
 

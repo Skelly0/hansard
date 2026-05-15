@@ -183,9 +183,10 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         });
       }
 
-      // Check if player already exists
+      // Reject if a *living* character already exists; deceased characters
+      // are archived inside createCharacter so the row can be reused.
       const existing = await getPlayerByDiscordId(fastify.db, body.discordId);
-      if (existing) {
+      if (existing && existing.characterName && existing.isAlive) {
         return reply.status(409).send({
           error: 'A character already exists for this Discord account',
           existingPlayerId: existing.id,

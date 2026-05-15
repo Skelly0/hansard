@@ -25,7 +25,13 @@ import {
   playerEventLog,
   simulationClock,
 } from '@hansard/db';
-import { DEFAULT_SIMULATION_CURRENT_DATE, birthDateForAge } from '@hansard/shared';
+import {
+  DEFAULT_SIMULATION_CURRENT_DATE,
+  PlayerEventType,
+  birthDateForAge,
+  buildArchivedCharacter,
+  profileDataWithArchive,
+} from '@hansard/shared';
 import { calculateStartingAgeFavourBonus } from '@hansard/api/services/playerService';
 import {
   grantStartingFactionFavours,
@@ -86,14 +92,20 @@ const HEALTH_DISPLAY: Record<string, string> = {
 // ─── /character create ─────────────────────────────────────────────────────
 
 async function handleCreate(interaction: ChatInputCommandInteraction): Promise<void> {
-  // Check if player already has a character
+  // Check if player already has a *living* character. Dead characters get
+  // archived to profileData.previousCharacters during creation so the same
+  // Discord user can play a fresh character on the same player row.
   const existing = await db
-    .select({ id: players.id, characterName: players.characterName })
+    .select({
+      id: players.id,
+      characterName: players.characterName,
+      isAlive: players.isAlive,
+    })
     .from(players)
     .where(eq(players.discordId, interaction.user.id))
     .limit(1);
 
-  if (existing.length > 0 && existing[0].characterName) {
+  if (existing.length > 0 && existing[0].characterName && existing[0].isAlive) {
     await interaction.reply({
       embeds: [
         errorEmbed(
@@ -172,14 +184,16 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
 
-  // Validate name uniqueness
+  // Validate name uniqueness. Allow the player's own previously-used name
+  // (e.g. a reincarnating player who wants to keep the family name) — that
+  // row will be archived during the transaction and free up the slot.
   const nameTaken = await db
-    .select({ id: players.id })
+    .select({ id: players.id, discordId: players.discordId })
     .from(players)
     .where(eq(players.characterName, characterName))
     .limit(1);
 
-  if (nameTaken.length > 0) {
+  if (nameTaken.length > 0 && nameTaken[0].discordId !== interaction.user.id) {
     await modalSubmit.editReply({
       embeds: [
         errorEmbed(
@@ -487,7 +501,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     }
 
     const existingPlayer = await db
-      .select({ id: players.id })
+      .select()
       .from(players)
       .where(eq(players.discordId, interaction.user.id))
       .limit(1);
@@ -499,30 +513,80 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     const creationResult = await db.transaction(async (tx) => {
       let playerId = '';
       let startingFavourGrant: StartingFactionFavourGrant | null = null;
+      let isReincarnation = false;
+      let previousCharacterName: string | null = null;
 
       if (existingPlayer.length > 0) {
-        playerId = existingPlayer[0].id;
-        const [updatedPlayer] = await tx
-          .update(players)
-          .set({
-            discordUsername: interaction.user.username,
-            characterName,
-            characterBio,
-            characterPortraitUrl: portraitUrl,
-            startingAge,
-            currentAge: startingAge,
-            birthDate,
-            factionId: selectedFactionId,
-            partyId: selectedPartyId,
-            startingFavoursGranted: false,
-            isActive: true,
-            lastActiveAt: new Date(),
-          })
-          .where(and(eq(players.id, playerId), isNull(players.characterName)))
-          .returning({ id: players.id });
+        const prior = existingPlayer[0];
+        playerId = prior.id;
 
-        if (!updatedPlayer) {
+        // A living character already occupies this player row — the early
+        // guard normally catches this, but we re-check inside the transaction
+        // to defend against a race between two concurrent /character create.
+        if (prior.characterName && prior.isAlive) {
           throw new Error(CHARACTER_ALREADY_EXISTS_ERROR);
+        }
+
+        if (prior.characterName && !prior.isAlive) {
+          // Reincarnation path: archive the dead character into profileData
+          // and reset all character + lifecycle fields for the new one.
+          isReincarnation = true;
+          previousCharacterName = prior.characterName;
+          const archive = buildArchivedCharacter(prior);
+          const newProfileData = profileDataWithArchive(prior.profileData, archive);
+
+          const [updatedPlayer] = await tx
+            .update(players)
+            .set({
+              discordUsername: interaction.user.username,
+              characterName,
+              characterBio,
+              characterPortraitUrl: portraitUrl,
+              startingAge,
+              currentAge: startingAge,
+              birthDate,
+              factionId: selectedFactionId,
+              partyId: selectedPartyId,
+              deathDate: null,
+              causeOfDeath: null,
+              isAlive: true,
+              healthStatus: 'healthy',
+              ailments: [],
+              startingFavoursGranted: false,
+              isActive: true,
+              lastActiveAt: new Date(),
+              profileData: newProfileData,
+            })
+            .where(and(eq(players.id, playerId), eq(players.isAlive, false)))
+            .returning({ id: players.id });
+
+          if (!updatedPlayer) {
+            throw new Error(CHARACTER_ALREADY_EXISTS_ERROR);
+          }
+        } else {
+          // OAuth placeholder row with no character yet — fill it in.
+          const [updatedPlayer] = await tx
+            .update(players)
+            .set({
+              discordUsername: interaction.user.username,
+              characterName,
+              characterBio,
+              characterPortraitUrl: portraitUrl,
+              startingAge,
+              currentAge: startingAge,
+              birthDate,
+              factionId: selectedFactionId,
+              partyId: selectedPartyId,
+              startingFavoursGranted: false,
+              isActive: true,
+              lastActiveAt: new Date(),
+            })
+            .where(and(eq(players.id, playerId), isNull(players.characterName)))
+            .returning({ id: players.id });
+
+          if (!updatedPlayer) {
+            throw new Error(CHARACTER_ALREADY_EXISTS_ERROR);
+          }
         }
       } else {
         const [newPlayer] = await tx
@@ -544,12 +608,21 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
         playerId = newPlayer.id;
       }
 
-      // Log registration event
+      // Log registration event (or reincarnation, if this Discord user had a prior dead character).
+      const eventDescription = isReincarnation
+        ? `${characterName} registered as the successor to **${previousCharacterName}** (age ${startingAge}, faction: ${selectedFactionName}${selectedPartyName ? `, party: ${selectedPartyName}` : ''}).`
+        : `${characterName} registered (age ${startingAge}, faction: ${selectedFactionName}${selectedPartyName ? `, party: ${selectedPartyName}` : ''}).`;
       await tx.insert(playerEventLog).values({
         playerId,
-        eventType: 'registration',
-        description: `${characterName} registered (age ${startingAge}, faction: ${selectedFactionName}${selectedPartyName ? `, party: ${selectedPartyName}` : ''}).`,
-        newValue: { characterName, startingAge, factionName: selectedFactionName, partyName: selectedPartyName },
+        eventType: isReincarnation ? PlayerEventType.REINCARNATION : PlayerEventType.REGISTRATION,
+        description: eventDescription,
+        newValue: {
+          characterName,
+          startingAge,
+          factionName: selectedFactionName,
+          partyName: selectedPartyName,
+          ...(isReincarnation ? { previousCharacterName } : {}),
+        },
       });
 
       if (favourBonus > 0) {
@@ -562,9 +635,9 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
         }
       }
 
-      return { playerId, startingFavourGrant };
+      return { playerId, startingFavourGrant, isReincarnation, previousCharacterName };
     });
-    const { playerId, startingFavourGrant } = creationResult;
+    const { playerId, startingFavourGrant, isReincarnation, previousCharacterName } = creationResult;
 
     try {
       // Assign Discord roles
@@ -604,9 +677,11 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 
     // Success embed
     const result = successEmbed(
-      'Character Created!',
+      isReincarnation ? 'Successor Character Registered' : 'Character Created!',
       [
-        `**${characterName}** has entered the political arena.`,
+        isReincarnation && previousCharacterName
+          ? `**${characterName}** takes up the seat left vacant by **${previousCharacterName}**.`
+          : `**${characterName}** has entered the political arena.`,
         '',
         `**Age:** ${startingAge}`,
         `**Faction:** ${selectedFactionName}`,

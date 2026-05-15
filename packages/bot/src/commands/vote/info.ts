@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
@@ -7,25 +6,13 @@ import { offices } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-info election:<title-or-id> — show the metadata "details page" for an
+ * /vote info election:<title-or-id> — show the metadata "details page" for an
  * election: type, method, threshold, start/end times, status.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-info')
-    .setDescription('Show details for an election')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const electionRef = interaction.options.getString('election', true);
@@ -118,7 +105,4 @@ const command: Command = {
     });
 
     await interaction.editReply({ embeds: [embed] });
-  },
-};
-
-export default command;
+}

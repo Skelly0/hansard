@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
@@ -9,31 +8,30 @@ import { DEFAULT_VOTE_DURATION_HOURS, SUPERMAJORITY_PASS_THRESHOLD } from '@hans
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { hasPermission, isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 
 /**
- * /vote-schedule — schedule a *future* vote/election (status `draft`).
+ * /vote schedule — schedule a *future* vote/election (status `draft`).
  *
  * Originally this was a stub for "show upcoming votes." That read intent is
- * now fully covered by `/vote-list scope:active` (which already shows draft,
+ * now fully covered by `/vote list scope:active` (which already shows draft,
  * nominations_open, voting_open, etc., sorted by close time). Rather than
  * duplicate that surface, this command is repurposed as the write counterpart
  * to `/vote create`: it inserts the election with `votingOpensAt` set to a
  * future timestamp and `status = 'draft'`. Staff/Chancellor then runs
- * `/vote-open` at the scheduled moment to flip it to `voting_open`.
+ * `/vote open` at the scheduled moment to flip it to `voting_open`.
  *
  * Permissions:
  * - `voting.create` (Chancellor or staff). Open scheduling to all players
  *   would let anyone clutter the schedule with future drafts; gating to
- *   Chancellor/staff matches `/vote-open` and `/elect`.
+ *   Chancellor/staff matches `/vote open` and `/vote elect`.
  * - The CHANCELLOR_ONLY_TYPES list is re-checked anyway since `voting.create`
  *   currently maps to "Chancellor or staff" — but if that helper is broadened
  *   later this guard preserves the create.ts policy.
  *
  * Why no auto-flip worker:
  * - The codebase has no auto-open worker for scheduled drafts. Drafts are
- *   flipped manually via `/vote-open`. This command therefore *records* the
- *   intended open time so the schedule is visible in `/vote-list`, but doesn't
+ *   flipped manually via `/vote open`. This command therefore *records* the
+ *   intended open time so the schedule is visible in `/vote list`, but doesn't
  *   promise automatic activation. The embed makes that explicit.
  *
  * Why no modal (unlike /vote create):
@@ -51,86 +49,7 @@ const CHANCELLOR_ONLY_TYPES = new Set([
   'appointment_confirmation',
 ]);
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-schedule')
-    .setDescription('Schedule a future vote/election (Chancellor/staff)')
-    .addStringOption((opt) =>
-      opt
-        .setName('title')
-        .setDescription('Title of the vote')
-        .setRequired(true)
-        .setMaxLength(256),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('type')
-        .setDescription('Type of vote')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Referendum', value: 'referendum' },
-          { name: 'Confidence Vote', value: 'confidence_vote' },
-          { name: 'Party Primary', value: 'party_primary' },
-          { name: 'Custom Vote', value: 'custom' },
-          { name: 'Position Election (Chancellor)', value: 'position_election' },
-          { name: 'Appointment Confirmation (Chancellor)', value: 'appointment_confirmation' },
-          { name: 'General Election', value: 'general_election' },
-          { name: 'Constitutional Amendment', value: 'constitutional_amendment' },
-        ),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('method')
-        .setDescription('Voting method')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Yea / Nay / Abstain', value: 'yea_nay_abstain' },
-          { name: 'First Past the Post', value: 'fptp' },
-          { name: 'Ranked Choice (Instant Runoff)', value: 'ranked_choice' },
-          { name: 'Approval Voting', value: 'approval' },
-          { name: 'Two-Round Runoff', value: 'two_round_runoff' },
-          { name: 'Exhaustive Ballot', value: 'exhaustive_ballot' },
-          { name: 'Single Transferable Vote', value: 'stv' },
-          { name: 'Proportional Representation', value: 'proportional' },
-        ),
-    )
-    .addNumberOption((opt) =>
-      opt
-        .setName('opens-in-hours')
-        .setDescription('Hours from now until voting opens (e.g. 24 = tomorrow)')
-        .setRequired(true)
-        .setMinValue(0.25)
-        .setMaxValue(24 * 365),
-    )
-    .addNumberOption((opt) =>
-      opt
-        .setName('duration-hours')
-        .setDescription(`How long voting stays open after it opens (default ${DEFAULT_VOTE_DURATION_HOURS})`)
-        .setRequired(false)
-        .setMinValue(1)
-        .setMaxValue(24 * 365),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('description')
-        .setDescription('What is being voted on')
-        .setRequired(false)
-        .setMaxLength(2000),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('majority')
-        .setDescription('Majority type (yea/nay only)')
-        .setRequired(false)
-        .addChoices(
-          { name: 'Simple Majority', value: 'simple' },
-          { name: 'Absolute Majority', value: 'absolute' },
-          { name: 'Supermajority (2/3)', value: 'supermajority' },
-          { name: 'Unanimous', value: 'unanimous' },
-        ),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const member = interaction.member as GuildMember | null;
@@ -254,7 +173,7 @@ const command: Command = {
       // Direct DB write per CLAUDE.md "vote/election writes are direct DB."
       // Single atomic insert; no transaction needed (no follow-on side
       // effects — we don't post a Discord embed or seed reactions until the
-      // staff member runs /vote-open).
+      // staff member runs /vote open).
       const [row] = await db
         .insert(elections)
         .values({
@@ -267,7 +186,7 @@ const command: Command = {
           votingClosesAt,
           status: 'draft',
           createdById: creator.id,
-          // Reaction-mode is configured at /vote-open time via /vote create's
+          // Reaction-mode is configured at /vote open time via /vote create's
           // reactions interface; scheduled drafts don't pre-post embeds.
           useReactions: false,
         })
@@ -327,9 +246,9 @@ const command: Command = {
       title: `Scheduled: ${title}`,
       description: [
         description ? `> ${description}\n` : '',
-        `This vote is **scheduled** but not yet open. There is no auto-flip worker — staff must run \`/vote-open election:${title}\` at the scheduled time to begin accepting ballots.`,
+        `This vote is **scheduled** but not yet open. There is no auto-flip worker — staff must run \`/vote open election:${title}\` at the scheduled time to begin accepting ballots.`,
         '',
-        'See it alongside other upcoming votes via `/vote-list scope:active`.',
+        'See it alongside other upcoming votes via `/vote list scope:active`.',
       ]
         .filter(Boolean)
         .join('\n'),
@@ -340,7 +259,7 @@ const command: Command = {
     await interaction.editReply({ embeds: [ephemeralEmbed] });
 
     // Public announcement so the calendar is visible to the chamber.
-    // Mirrors the announce pattern in /vote-open and /vote-close (best-effort,
+    // Mirrors the announce pattern in /vote open and /vote close (best-effort,
     // non-fatal if the channel won't accept it).
     if (interaction.channel && 'send' in interaction.channel) {
       const announceEmbed = createEmbed({
@@ -367,7 +286,4 @@ const command: Command = {
         // Non-critical announcement — the schedule is recorded regardless.
       }
     }
-  },
-};
-
-export default command;
+}

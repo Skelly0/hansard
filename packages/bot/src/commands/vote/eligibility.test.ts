@@ -35,7 +35,7 @@ vi.mock('./_electionReference.js', () => ({
   findElectionByReference: mocks.findElectionByReference,
 }));
 
-import command from './eligibility';
+import { execute } from './eligibility';
 
 function selectLimit(rows: unknown[]) {
   return {
@@ -59,7 +59,7 @@ function makeInteraction() {
   };
 }
 
-describe('/vote-eligibility', () => {
+describe('/vote eligibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -88,7 +88,7 @@ describe('/vote-eligibility', () => {
     });
     const interaction = makeInteraction();
 
-    await command.execute(interaction as any);
+    await execute(interaction as any);
 
     const embed = interaction.editReply.mock.calls[0]?.[0]?.embeds?.[0];
     expect(embed?.data.description).toContain('cannot vote');

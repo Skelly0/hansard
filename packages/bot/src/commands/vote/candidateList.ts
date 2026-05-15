@@ -1,31 +1,16 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { and, eq, inArray } from 'drizzle-orm';
 import { candidates, players, parties } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /candidate-list election:<title-or-id> — list all (non-withdrawn) candidates
- * in an election with their party/faction.
+ * /vote candidate-list election:<title-or-id> — list all (non-withdrawn)
+ * candidates in an election with their party/faction.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('candidate-list')
-    .setDescription('List candidates registered in an election')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const electionRef = interaction.options.getString('election', true);
@@ -106,8 +91,5 @@ const command: Command = {
       ],
     });
 
-    await interaction.editReply({ embeds: [embed] });
-  },
-};
-
-export default command;
+  await interaction.editReply({ embeds: [embed] });
+}

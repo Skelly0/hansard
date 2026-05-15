@@ -32,7 +32,8 @@ vi.mock('../../utils/permissions.js', () => ({
   isStaff: mocks.isStaff,
 }));
 
-import command from './schedule';
+import { execute } from './schedule';
+import voteCommand from './create';
 
 function makeInteraction(type = 'referendum') {
   return {
@@ -78,7 +79,7 @@ function makeInteraction(type = 'referendum') {
   };
 }
 
-describe('/vote-schedule legislative vote guard', () => {
+describe('/vote schedule legislative vote guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.hasPermission.mockResolvedValue(true);
@@ -86,8 +87,11 @@ describe('/vote-schedule legislative vote guard', () => {
   });
 
   it('does not advertise legislative votes in the slash command choices', () => {
-    const json = command.data.toJSON();
-    const typeOption = json.options?.find((option) => option.name === 'type');
+    const json = voteCommand.data.toJSON();
+    const scheduleSub = json.options?.find((option) => option.name === 'schedule') as {
+      options?: { name: string; choices?: { value: string }[] }[];
+    } | undefined;
+    const typeOption = scheduleSub?.options?.find((option) => option.name === 'type');
     const choiceValues = typeOption?.choices?.map((choice) => choice.value) ?? [];
 
     expect(choiceValues).not.toContain('legislative_vote');
@@ -96,7 +100,7 @@ describe('/vote-schedule legislative vote guard', () => {
   it('rejects stale legislative vote payloads and points staff to /vote create', async () => {
     const interaction = makeInteraction('legislative_vote');
 
-    await command.execute(interaction as any);
+    await execute(interaction as any);
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
     expect(mocks.db.select).not.toHaveBeenCalled();

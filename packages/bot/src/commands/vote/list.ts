@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
@@ -9,18 +8,17 @@ import { elections } from '@hansard/db';
 import { createEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 
 const RESULTS_PER_PAGE = 6;
 const MAX_RESULTS = 60;
 
-const SCOPE_CHOICES = [
+export const SCOPE_CHOICES = [
   { name: 'Active (anything in motion)', value: 'active' },
   { name: 'Past (certified or cancelled)', value: 'past' },
   { name: 'All', value: 'all' },
 ];
 
-const STATUS_CHOICES = [
+export const STATUS_CHOICES = [
   { name: 'Draft', value: 'draft' },
   { name: 'Nominations Open', value: 'nominations_open' },
   { name: 'Nominations Closed', value: 'nominations_closed' },
@@ -33,7 +31,7 @@ const STATUS_CHOICES = [
   { name: 'Cancelled', value: 'cancelled' },
 ];
 
-const TYPE_CHOICES = [
+export const TYPE_CHOICES = [
   { name: 'Legislative Vote', value: 'legislative_vote' },
   { name: 'Position Election', value: 'position_election' },
   { name: 'Appointment Confirmation', value: 'appointment_confirmation' },
@@ -45,7 +43,7 @@ const TYPE_CHOICES = [
   { name: 'Custom', value: 'custom' },
 ];
 
-const RANGE_CHOICES = [
+export const RANGE_CHOICES = [
   { name: 'Last 7 days', value: '7' },
   { name: 'Last 30 days', value: '30' },
   { name: 'Last 90 days', value: '90' },
@@ -100,40 +98,7 @@ function describeOutcome(row: typeof elections.$inferSelect): string {
   return '';
 }
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-list')
-    .setDescription('Browse votes and elections — past or present')
-    .addStringOption((opt) =>
-      opt
-        .setName('scope')
-        .setDescription('Active, past, or all (default: all)')
-        .setRequired(false)
-        .addChoices(...SCOPE_CHOICES),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('status')
-        .setDescription('Filter by exact status (overrides scope)')
-        .setRequired(false)
-        .addChoices(...STATUS_CHOICES),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('type')
-        .setDescription('Filter by election type')
-        .setRequired(false)
-        .addChoices(...TYPE_CHOICES),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('range')
-        .setDescription('Limit to votes created within a time window')
-        .setRequired(false)
-        .addChoices(...RANGE_CHOICES),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const scope = (interaction.options.getString('scope') ?? 'all') as 'active' | 'past' | 'all';
@@ -247,7 +212,7 @@ const command: Command = {
             '',
             ...lines,
             '',
-            'Use `/vote-info` with a title or ID for full details.',
+            'Use `/vote info` with a title or ID for full details.',
           ]
             .filter((l) => l !== null)
             .join('\n'),
@@ -257,7 +222,4 @@ const command: Command = {
     }
 
     await createPaginatedEmbed({ interaction, pages });
-  },
-};
-
-export default command;
+}

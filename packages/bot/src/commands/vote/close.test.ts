@@ -68,7 +68,7 @@ vi.mock('@hansard/api/services/voteService', () => ({
   },
 }));
 
-import command from './close';
+import { execute } from './close';
 
 const openElection = {
   id: 'election-1',
@@ -135,7 +135,7 @@ function makeInteraction() {
   };
 }
 
-describe('/vote-close reaction-mode embeds', () => {
+describe('/vote close reaction-mode embeds', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.hasPermission.mockResolvedValue(true);
@@ -167,7 +167,7 @@ describe('/vote-close reaction-mode embeds', () => {
       },
     });
 
-    await command.execute(makeInteraction() as any);
+    await execute(makeInteraction() as any);
 
     expect(edit).toHaveBeenCalled();
     expect(removeAll).not.toHaveBeenCalled();
@@ -199,7 +199,7 @@ describe('/vote-close reaction-mode embeds', () => {
       },
     });
 
-    await command.execute(makeInteraction() as any);
+    await execute(makeInteraction() as any);
 
     const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
     expect(resultEmbed?.data.description).toContain('**PASSED**');
@@ -224,7 +224,7 @@ describe('/vote-close reaction-mode embeds', () => {
       },
     });
 
-    await command.execute(makeInteraction() as any);
+    await execute(makeInteraction() as any);
 
     const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
     expect(resultEmbed?.data.description).toContain('**REJECTED**');
@@ -243,7 +243,7 @@ describe('/vote-close reaction-mode embeds', () => {
       },
     });
 
-    await command.execute(makeInteraction() as any);
+    await execute(makeInteraction() as any);
 
     expect(mocks.tallyVotes).toHaveBeenCalledWith(election.id);
   });
@@ -257,7 +257,7 @@ describe('/vote-close reaction-mode embeds', () => {
       },
     });
 
-    await command.execute(makeInteraction() as any);
+    await execute(makeInteraction() as any);
 
     expect(mocks.tallyVotes).not.toHaveBeenCalled();
   });
@@ -283,7 +283,7 @@ describe('/vote-close reaction-mode embeds', () => {
       },
     });
 
-    await command.execute(makeInteraction() as any);
+    await execute(makeInteraction() as any);
 
     // The yea-from-dead-voter should NOT appear in the result; result must
     // be REJECTED with yea=0 and nay=1.
@@ -331,7 +331,7 @@ describe('/vote-close reaction-mode embeds', () => {
       },
     });
 
-    await command.execute(makeInteraction() as any);
+    await execute(makeInteraction() as any);
 
     const resultEmbed = edit.mock.calls[0]?.[0]?.embeds?.[0];
     const resultField = resultEmbed?.data.fields?.find((f: { name: string }) => f.name === 'Result');

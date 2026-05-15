@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { eq, inArray } from 'drizzle-orm';
@@ -7,28 +6,16 @@ import { elections, candidates, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-rounds election:<title-or-id> — show round-by-round results for
+ * /vote rounds election:<title-or-id> — show round-by-round results for
  * ranked-choice / runoff / STV / exhaustive ballot elections.
  *
  * Mirrors VoteService.getRounds: walks the parent/child election chain
  * and renders each round's tallies and eliminations.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-rounds')
-    .setDescription('Show round-by-round results for an election')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const electionRef = interaction.options.getString('election', true);
@@ -142,7 +129,4 @@ const command: Command = {
     });
 
     await interaction.editReply({ embeds: [embed] });
-  },
-};
-
-export default command;
+}

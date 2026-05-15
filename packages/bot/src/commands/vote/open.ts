@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
@@ -9,28 +8,16 @@ import { REACTION_FPTP_MAX_CANDIDATES } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
-import type { Command } from '../../client.js';
 import { seedAllReactionsForOpenVote } from './_seedFptpReactions.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-open election:<title-or-id> — staff/Chancellor opens an election for voting.
+ * /vote open election:<title-or-id> — staff/Chancellor opens an election for voting.
  *
  * Mirrors VoteService.openVoting: transitions status to `voting_open`.
  * Looks up election by title or ID and updates its status.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-open')
-    .setDescription('Open an election for voting (Chancellor/staff)')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const member = interaction.member as GuildMember | null;
@@ -101,7 +88,7 @@ const command: Command = {
     // non-withdrawn candidate in registration order and add 1️⃣..N reactions
     // to the public vote message. Idempotent (Discord ignores duplicate
     // reaction-adds on the bot's own emoji), so this re-runs cleanly even
-    // if Trigger A in /candidate-submit already seeded most slots.
+    // if Trigger A in /vote candidate-submit already seeded most slots.
     //
     // Order matters: events/messageReactionAdd.ts maps emoji → candidate by
     // registeredAt asc, so the helper's same ordering is load-bearing.
@@ -155,7 +142,4 @@ const command: Command = {
         // Non-critical announcement
       }
     }
-  },
-};
-
-export default command;
+}

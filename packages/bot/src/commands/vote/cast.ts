@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -9,7 +8,6 @@ import { and, eq } from 'drizzle-orm';
 import { candidates, elections, players } from '@hansard/db';
 import type { VotingMethod } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
-import type { Command } from '../../client.js';
 import { db } from '../../db.js';
 
 /**
@@ -19,64 +17,52 @@ import { db } from '../../db.js';
  * For secret ballots, DMs the user a ballot form.
  * For ranked/approval, would use select menus or a modal.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-cast')
-    .setDescription('Cast your ballot in an election')
-    .addStringOption((opt) =>
-      opt
-        .setName('election_id')
-        .setDescription('The election ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
+  const electionId = interaction.options.getString('election_id', true);
 
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const electionId = interaction.options.getString('election_id', true);
+  const [election] = await db
+    .select({
+      id: elections.id,
+      title: elections.title,
+      method: elections.method,
+      status: elections.status,
+    })
+    .from(elections)
+    .where(eq(elections.id, electionId))
+    .limit(1);
 
-    const [election] = await db
-      .select({
-        id: elections.id,
-        title: elections.title,
-        method: elections.method,
-        status: elections.status,
-      })
-      .from(elections)
-      .where(eq(elections.id, electionId))
-      .limit(1);
-
-    if (!election) {
-      await interaction.reply({
-        embeds: [errorEmbed('Election not found.')],
-        ephemeral: true,
-      });
-      return;
-    }
-
-    if (election.status !== 'voting_open') {
-      await interaction.reply({
-        embeds: [errorEmbed('Voting is not open for this election.')],
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const method = election.method as VotingMethod;
-    if (method === 'yea_nay_abstain') {
-      await showYeaNayBallot(interaction, election.id, election.title);
-      return;
-    }
-
-    if (method === 'fptp' || method === 'two_round_runoff' || method === 'exhaustive_ballot') {
-      await showCandidateBallot(interaction, election.id, election.title);
-      return;
-    }
-
+  if (!election) {
     await interaction.reply({
-      embeds: [errorEmbed(`Discord voting is not available for ${formatVotingMethod(method)} elections yet. Please use the web ballot.`)],
+      embeds: [errorEmbed('Election not found.')],
       ephemeral: true,
     });
-  },
-};
+    return;
+  }
+
+  if (election.status !== 'voting_open') {
+    await interaction.reply({
+      embeds: [errorEmbed('Voting is not open for this election.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const method = election.method as VotingMethod;
+  if (method === 'yea_nay_abstain') {
+    await showYeaNayBallot(interaction, election.id, election.title);
+    return;
+  }
+
+  if (method === 'fptp' || method === 'two_round_runoff' || method === 'exhaustive_ballot') {
+    await showCandidateBallot(interaction, election.id, election.title);
+    return;
+  }
+
+  await interaction.reply({
+    embeds: [errorEmbed(`Discord voting is not available for ${formatVotingMethod(method)} elections yet. Please use the web ballot.`)],
+    ephemeral: true,
+  });
+}
 
 async function showYeaNayBallot(
   interaction: ChatInputCommandInteraction,
@@ -181,5 +167,3 @@ function truncateLabel(label: string): string {
 function formatVotingMethod(method: VotingMethod): string {
   return method.replaceAll('_', ' ');
 }
-
-export default command;

@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
@@ -8,27 +7,15 @@ import { elections } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-certify election:<title-or-id> — staff certifies the result post-tally.
+ * /vote certify election:<title-or-id> — staff certifies the result post-tally.
  *
  * Mirrors VoteService.certifyElection: validates NPC confirmation (if
  * required) and transitions status to `certified`.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-certify')
-    .setDescription('Certify a tallied election result (staff)')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const member = interaction.member as GuildMember | null;
@@ -71,7 +58,7 @@ const command: Command = {
       await interaction.editReply({
         embeds: [
           errorEmbed(
-            `Election must be tallied first (currently \`${election.status}\`). Run \`/vote-tally\` before certifying.`,
+            `Election must be tallied first (currently \`${election.status}\`). Run \`/vote tally\` before certifying.`,
           ),
         ],
       });
@@ -84,7 +71,7 @@ const command: Command = {
       const npc = election.npcConfirmation;
       if (!npc || npc.status === 'pending') {
         await interaction.editReply({
-          embeds: [errorEmbed('NPC confirmation is still pending. Use `/npc-confirm` first.')],
+          embeds: [errorEmbed('NPC confirmation is still pending. Use `/vote npc-confirm` first.')],
         });
         return;
       }
@@ -143,7 +130,4 @@ const command: Command = {
         // Non-critical announcement
       }
     }
-  },
-};
-
-export default command;
+}

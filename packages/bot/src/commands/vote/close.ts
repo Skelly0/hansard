@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
   type Message,
@@ -12,7 +11,6 @@ import { client } from '../../client.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
 const METHOD_LABELS: Record<string, string> = {
@@ -56,7 +54,7 @@ function formatMajority(majorityType: string | undefined, passThreshold: number 
 }
 
 /**
- * /vote-close election:<title-or-id> — closes voting for an election.
+ * /vote close election:<title-or-id> — closes voting for an election.
  *
  * Mirrors VoteService.closeVoting: transitions status to `voting_closed`.
  *
@@ -65,132 +63,120 @@ function formatMajority(majorityType: string | undefined, passThreshold: number 
  *   - Computes a quick inline tally (yea/nay/abstain or FPTP candidate counts)
  *     directly from `ballots`. The full tally pipeline still lives in the API
  *     package; this is a UX shortcut so the embed reflects the result without
- *     a separate `/vote-tally` round-trip.
+ *     a separate `/vote tally` round-trip.
  *   - Fetches the original posted message via discordMessageId/discordChannelId
  *     and replaces its embed with a results view.
  *   - Leaves reactions in place so the public vote record remains inspectable.
  *
  * Button-mode votes are unchanged: they get a public "Voting is Closed" notice
- * and rely on `/vote-tally` + `/vote-results` for the result view.
+ * and rely on `/vote tally` + `/vote results` for the result view.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-close')
-    .setDescription('Close voting on an election (Chancellor/staff)')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
 
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+  const member = interaction.member as GuildMember | null;
+  if (!member || !('roles' in member)) {
+    await interaction.editReply({
+      embeds: [errorEmbed('This command can only be used in a server.')],
+    });
+    return;
+  }
 
-    const member = interaction.member as GuildMember | null;
-    if (!member || !('roles' in member)) {
-      await interaction.editReply({
-        embeds: [errorEmbed('This command can only be used in a server.')],
-      });
-      return;
-    }
+  const permitted = await hasPermission(member, 'voting.close');
+  if (!permitted) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Only the Chancellor or staff can close elections.')],
+    });
+    return;
+  }
 
-    const permitted = await hasPermission(member, 'voting.close');
-    if (!permitted) {
-      await interaction.editReply({
-        embeds: [errorEmbed('Only the Chancellor or staff can close elections.')],
-      });
-      return;
-    }
+  const electionRef = interaction.options.getString('election', true);
 
-    const electionRef = interaction.options.getString('election', true);
+  const { election, errorMessage } = await findElectionByReference(db, electionRef);
 
-    const { election, errorMessage } = await findElectionByReference(db, electionRef);
+  if (!election) {
+    await interaction.editReply({
+      embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
+    });
+    return;
+  }
 
-    if (!election) {
-      await interaction.editReply({
-        embeds: [errorEmbed(errorMessage ?? 'Election not found.')],
-      });
-      return;
-    }
-
-    if (election.status !== 'voting_open') {
-      await interaction.editReply({
-        embeds: [
-          errorEmbed(
-            `Cannot close an election in \`${election.status}\` status. Only \`voting_open\` elections can be closed.`,
-          ),
-        ],
-      });
-      return;
-    }
-
-    // Mirror VoteService.closeVoting
-    const [updated] = await db
-      .update(elections)
-      .set({ status: 'voting_closed', updatedAt: new Date() })
-      .where(eq(elections.id, election.id))
-      .returning();
-
-    if (!updated) {
-      await interaction.editReply({
-        embeds: [errorEmbed('Failed to close election.')],
-      });
-      return;
-    }
-
-    // ---- Reaction-mode: rewrite the original embed in-place ----
-    if (updated.useReactions && updated.discordMessageId && updated.discordChannelId) {
-      try {
-        await renderReactionResult(updated);
-      } catch (error) {
-        console.error('[vote-close] failed to render reaction result:', error);
-        // Non-fatal — the election is still marked closed; staff can re-run results manually.
-      }
-    }
-
-    // ---- Legislative votes: auto-tally so the linked bill transitions ----
-    // Without this, /vote-close leaves the bill stuck in `voting` and
-    // /bill-enact rejects it. Mirrors what /vote-tally would do.
-    if (updated.type === 'legislative_vote' && updated.relatedBillId) {
-      try {
-        await new VoteService(db).tallyVotes(updated.id);
-      } catch (error) {
-        console.error('[vote-close] failed to auto-tally legislative vote:', error);
-        // Non-fatal — staff can re-run /vote-tally manually.
-      }
-    }
-
+  if (election.status !== 'voting_open') {
     await interaction.editReply({
       embeds: [
-        successEmbed(
-          'Voting Closed',
-          updated.useReactions
-            ? `**${updated.title}** is now closed. The vote embed has been updated with results.`
-            : `**${updated.title}** is now closed. Use \`/vote-tally\` to compute results.`,
+        errorEmbed(
+          `Cannot close an election in \`${election.status}\` status. Only \`voting_open\` elections can be closed.`,
         ),
       ],
     });
+    return;
+  }
 
-    // Public announcement (only for button-mode — reaction-mode already
-    // shows the result inline on the embed, so a separate notice is noisy).
-    if (!updated.useReactions) {
-      const announce = createEmbed({
-        title: 'Voting is Closed',
-        description: `**${updated.title}** has closed. Results will be tallied shortly.`,
-        system: 'voting',
-      });
+  // Mirror VoteService.closeVoting
+  const [updated] = await db
+    .update(elections)
+    .set({ status: 'voting_closed', updatedAt: new Date() })
+    .where(eq(elections.id, election.id))
+    .returning();
 
-      if (interaction.channel && 'send' in interaction.channel) {
-        try {
-          await (interaction.channel as { send: (opts: unknown) => Promise<unknown> }).send({ embeds: [announce] });
-        } catch {
-          // Non-critical announcement
-        }
+  if (!updated) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Failed to close election.')],
+    });
+    return;
+  }
+
+  // ---- Reaction-mode: rewrite the original embed in-place ----
+  if (updated.useReactions && updated.discordMessageId && updated.discordChannelId) {
+    try {
+      await renderReactionResult(updated);
+    } catch (error) {
+      console.error('[vote-close] failed to render reaction result:', error);
+      // Non-fatal — the election is still marked closed; staff can re-run results manually.
+    }
+  }
+
+  // ---- Legislative votes: auto-tally so the linked bill transitions ----
+  // Without this, /vote close leaves the bill stuck in `voting` and
+  // /bill-enact rejects it. Mirrors what /vote tally would do.
+  if (updated.type === 'legislative_vote' && updated.relatedBillId) {
+    try {
+      await new VoteService(db).tallyVotes(updated.id);
+    } catch (error) {
+      console.error('[vote-close] failed to auto-tally legislative vote:', error);
+      // Non-fatal — staff can re-run /vote tally manually.
+    }
+  }
+
+  await interaction.editReply({
+    embeds: [
+      successEmbed(
+        'Voting Closed',
+        updated.useReactions
+          ? `**${updated.title}** is now closed. The vote embed has been updated with results.`
+          : `**${updated.title}** is now closed. Use \`/vote tally\` to compute results.`,
+      ),
+    ],
+  });
+
+  // Public announcement (only for button-mode — reaction-mode already
+  // shows the result inline on the embed, so a separate notice is noisy).
+  if (!updated.useReactions) {
+    const announce = createEmbed({
+      title: 'Voting is Closed',
+      description: `**${updated.title}** has closed. Results will be tallied shortly.`,
+      system: 'voting',
+    });
+
+    if (interaction.channel && 'send' in interaction.channel) {
+      try {
+        await (interaction.channel as { send: (opts: unknown) => Promise<unknown> }).send({ embeds: [announce] });
+      } catch {
+        // Non-critical announcement
       }
     }
-  },
-};
+  }
+}
 
 /**
  * Compute a quick yea_nay_abstain or fptp tally and update the original
@@ -354,5 +340,3 @@ export async function renderReactionResult(election: typeof elections.$inferSele
 
   await msg.edit({ embeds: [resultEmbed] });
 }
-
-export default command;

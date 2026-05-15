@@ -24,7 +24,7 @@ vi.mock('./cancelFlow.js', () => ({
   cancelVote: mocks.cancelVote,
 }));
 
-import command from './cancel.js';
+import { execute } from './cancel.js';
 
 const openElection = {
   id: 'election-1',
@@ -52,7 +52,7 @@ function makeInteraction(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('/vote-cancel', () => {
+describe('/vote cancel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.hasPermission.mockResolvedValue(true);
@@ -77,7 +77,7 @@ describe('/vote-cancel', () => {
   it('allows legislative leaders to cancel a linked legislative vote', async () => {
     const interaction = makeInteraction();
 
-    await command.execute(interaction as any);
+    await execute(interaction as any);
 
     expect(mocks.hasPermission).toHaveBeenCalledWith(interaction.member, 'voting.cancel');
     expect(mocks.cancelVote).toHaveBeenCalledWith(mocks.db, openElection, {
@@ -93,7 +93,7 @@ describe('/vote-cancel', () => {
     mocks.hasPermission.mockResolvedValue(false);
     const interaction = makeInteraction();
 
-    await command.execute(interaction as any);
+    await execute(interaction as any);
 
     expect(mocks.cancelVote).not.toHaveBeenCalled();
     const replyEmbed = interaction.editReply.mock.calls[0]?.[0]?.embeds?.[0];

@@ -8,6 +8,7 @@
  *   --limit N    Stop after backfilling N calls (smoke-test mode).
  *   --verbose    Print per-send progress every 50 sends.
  */
+import { pathToFileURL } from 'node:url';
 import {
   Client,
   EmbedBuilder,
@@ -187,11 +188,11 @@ async function reportDryRunCounts(opts: BackfillOptions): Promise<void> {
 }
 
 export async function runBackfill(opts: BackfillOptions): Promise<void> {
-  const channel = await preflight(opts.client);
-
   if (opts.dryRun) {
-    // Non-blocking try-acquire. If held by a real backfill, warn-but-continue —
-    // the counts can be inaccurate but the user still gets a directional answer.
+    // Dry-run is a pure DB read — it does not write Discord and does not need
+    // a Discord client at all. Skipping preflight here lets the dry-run work
+    // even when the bot is not logged in (which is the documented pattern:
+    // `main()` only calls `client.login()` when `!dryRun`).
     const acquired = await tryAcquireLock();
     if (!acquired) {
       console.warn('[backfill] real backfill in progress; counts may shift mid-query.');
@@ -204,6 +205,7 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
     return;
   }
 
+  const channel = await preflight(opts.client);
   const acquired = await tryAcquireLock();
   if (!acquired) {
     throw new Error('Another backfill is in progress. Aborting.');
@@ -375,7 +377,12 @@ async function main() {
 }
 
 // Only auto-run when invoked directly (allow imports from tests).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Windows note: `process.argv[1]` is a Windows-style path with backslashes
+// (`C:\\path\\to\\script.ts`), while `import.meta.url` is a URL (`file:///C:/...`).
+// `pathToFileURL` normalizes the argv path into the URL form so the comparison
+// works cross-platform; a plain `\`file://\${process.argv[1]}\`` template never
+// matches on Windows.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     console.error(err);
     process.exit(1);

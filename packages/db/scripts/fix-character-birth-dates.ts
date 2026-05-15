@@ -33,6 +33,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import postgres from 'postgres';
 
 if (existsSync('../../.env')) {
@@ -186,8 +187,10 @@ async function main() {
 
   const sql = postgres(url, { max: 1 });
   try {
+    // `current_date` is a Postgres reserved keyword (returns the wall-clock
+    // date function); quote it so we read the column.
     const [clock] = await sql<{ current_date: string }[]>`
-      SELECT current_date FROM simulation_clock LIMIT 1
+      SELECT "current_date" FROM simulation_clock LIMIT 1
     `;
     const parsedClock = parseSimDate(clock?.current_date ?? null);
     if (!parsedClock) {
@@ -258,12 +261,13 @@ async function main() {
 }
 
 // Only run the side-effecting main() when executed directly, not when this
-// module is imported by unit tests.
+// module is imported by unit tests. `pathToFileURL` normalizes Windows paths
+// (backslashes, drive letters) so the comparison works cross-platform.
 const invokedDirectly =
   typeof process !== 'undefined'
   && Array.isArray(process.argv)
   && process.argv[1]
-  && import.meta.url === `file://${process.argv[1]}`;
+  && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (invokedDirectly) {
   main().catch((err) => {
     console.error(err);

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PermissionFlagsBits } from 'discord.js';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import {
   phoneCalls,
   phoneMessages,
@@ -26,7 +26,7 @@ if (HAS_REAL_DB) {
   process.env.DATABASE_URL = 'postgres://user:pass@localhost:5432/hansard';
 }
 
-const { runBackfill } = await import('./backfillPhoneThreads');
+const { runBackfill, BACKFILL_LOCK_KEY } = await import('./backfillPhoneThreads');
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -482,5 +482,89 @@ integrationDescribe('backfillPhoneThreads — core loop', () => {
     expect(channel.threads.create).not.toHaveBeenCalled();
     const [row] = await db.select().from(phoneCalls).where(eq(phoneCalls.id, historic.id));
     expect(row.staffThreadId).toBe(liveThreadId);
+  });
+});
+
+integrationDescribe('backfillPhoneThreads — flags', () => {
+  beforeEach(async () => {
+    process.env.PHONE_LOG_CHANNEL_ID = '1504812456042561587';
+    await clearPhoneTables();
+  });
+
+  it('test 10 — --limit 2 backfills the first 2 only; remaining 3 untouched', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const { callId } = await seedCall({
+        callerName: `A10_${i}`,
+        recipientName: `B10_${i}`,
+        callerNumberRaw: `+1555100${i}1`,
+        recipientNumberRaw: `+1555100${i}2`,
+        status: 'ended',
+      });
+      ids.push(callId);
+    }
+    const channel = makeOkChannel();
+    const thread = makeThread();
+    const client = makeClientWithThreadCreation(channel, thread);
+
+    await runBackfill({ client, dryRun: false, limit: 2, verbose: false });
+
+    const rows = await db.select().from(phoneCalls).where(inArray(phoneCalls.id, ids));
+    const backfilled = rows.filter((r) => r.backfilledAt !== null);
+    expect(backfilled.length).toBe(2);
+  });
+
+  it('test 11 — --dry-run writes no DB and emits "Would post"', async () => {
+    await seedCall({
+      callerName: 'A11',
+      recipientName: 'B11',
+      callerNumberRaw: '+15551101',
+      recipientNumberRaw: '+15551102',
+      status: 'ended',
+      messages: [{ senderIsCaller: true, content: 'x' }],
+    });
+    const channel = makeOkChannel();
+    const thread = makeThread();
+    const client = makeClientWithThreadCreation(channel, thread);
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runBackfill({ client, dryRun: true, limit: undefined, verbose: false });
+
+    expect(thread.send).not.toHaveBeenCalled();
+    const allRows = await db.select().from(phoneCalls);
+    expect(allRows.every((r) => r.backfilledAt === null)).toBe(true);
+    expect(spy.mock.calls.some((c) => String(c[0]).includes('Would post'))).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('test 12 — --dry-run when another lock is held prints a warning but still emits counts', async () => {
+    await seedCall({
+      callerName: 'A12',
+      recipientName: 'B12',
+      callerNumberRaw: '+15551201',
+      recipientNumberRaw: '+15551202',
+      status: 'ended',
+    });
+
+    // Hold the lock from a parallel connection.
+    const holder = postgres(REAL_DB_URL!, { max: 1 });
+    await holder.unsafe('SELECT pg_advisory_lock($1)', [BACKFILL_LOCK_KEY]);
+    try {
+      const channel = makeOkChannel();
+      const thread = makeThread();
+      const client = makeClientWithThreadCreation(channel, thread);
+      const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await runBackfill({ client, dryRun: true, limit: undefined, verbose: false });
+
+      expect(warnSpy.mock.calls.some((c) => String(c[0]).toLowerCase().includes('counts may shift'))).toBe(true);
+      expect(spy.mock.calls.some((c) => String(c[0]).includes('Would post'))).toBe(true);
+      spy.mockRestore();
+      warnSpy.mockRestore();
+    } finally {
+      await holder.unsafe('SELECT pg_advisory_unlock($1)', [BACKFILL_LOCK_KEY]);
+      await holder.end({ timeout: 5 });
+    }
   });
 });

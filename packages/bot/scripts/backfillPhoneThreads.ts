@@ -16,13 +16,13 @@ import {
   type TextChannel,
   type ThreadChannel,
 } from 'discord.js';
-import { and, asc, eq, isNull, notInArray } from 'drizzle-orm';
-import { db } from '../src/db.js';
+import { and, asc, eq, inArray, isNull, notInArray } from 'drizzle-orm';
+import { db, rawSql } from '../src/db.js';
 import {
   PhoneService,
   type PhoneViewer,
 } from '@hansard/api/services/phoneService';
-import { phoneCalls } from '@hansard/db';
+import { phoneCalls, phoneMessages } from '@hansard/db';
 import { formatPhoneEndedReason } from '@hansard/shared';
 import {
   backgroundStaffAdd,
@@ -32,6 +32,14 @@ import {
 import { resolveStaffRoleIds } from '../src/utils/staffRoles.js';
 
 const PHONE_LOG_CHANNEL_ENV = 'PHONE_LOG_CHANNEL_ID';
+
+/**
+ * Advisory-lock key for cross-process backfill serialization. Picked as a fixed
+ * int4 distinct from anything else in the codebase. The same key is used by
+ * the dry-run path (with `pg_try_advisory_lock`, warn-but-continue) and the
+ * main path (try-acquire, throw if held).
+ */
+export const BACKFILL_LOCK_KEY = 1504812456;
 
 export interface BackfillOptions {
   client: import('discord.js').Client;
@@ -100,11 +108,19 @@ export async function preflight(client: import('discord.js').Client): Promise<Te
   return text;
 }
 
-export async function runBackfill(opts: BackfillOptions): Promise<void> {
-  const channel = await preflight(opts.client);
-  const svc = new PhoneService(db);
+async function tryAcquireLock(): Promise<boolean> {
+  const [row] = await rawSql<{ pg_try_advisory_lock: boolean }[]>`
+    SELECT pg_try_advisory_lock(${BACKFILL_LOCK_KEY}) AS pg_try_advisory_lock
+  `;
+  return row.pg_try_advisory_lock;
+}
 
-  const rows = await db
+async function releaseLock(): Promise<void> {
+  await rawSql`SELECT pg_advisory_unlock(${BACKFILL_LOCK_KEY})`;
+}
+
+async function loadEligibleCalls() {
+  return db
     .select({
       id: phoneCalls.id,
       callerPlayerId: phoneCalls.callerPlayerId,
@@ -121,7 +137,65 @@ export async function runBackfill(opts: BackfillOptions): Promise<void> {
       notInArray(phoneCalls.status, ['ringing', 'active']),
     ))
     .orderBy(asc(phoneCalls.startedAt));
+}
 
+async function countMessages(callIds: string[]): Promise<number> {
+  if (callIds.length === 0) return 0;
+  const rows = await db
+    .select({ id: phoneMessages.id })
+    .from(phoneMessages)
+    .where(inArray(phoneMessages.callId, callIds));
+  return rows.length;
+}
+
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+async function reportDryRunCounts(opts: BackfillOptions): Promise<void> {
+  const rows = await loadEligibleCalls();
+  const calls = opts.limit ? rows.slice(0, opts.limit) : rows;
+  const msgCount = await countMessages(calls.map((c) => c.id));
+  const pairs = new Set(calls.map((c) => pairKey(c.callerPlayerId, c.recipientPlayerId)));
+  const sends = calls.length * 2 + msgCount;
+  const estimatedMinutes = Math.max(1, Math.ceil((sends * 1.1) / 60));
+  console.log(`Found ${calls.length} calls needing backfill across ${pairs.size} pairs.`);
+  console.log(`Would post ${sends} embeds (${calls.length} connected + ${msgCount} messages + ${calls.length} ended across ${pairs.size} threads).`);
+  console.log(`Estimated runtime: ~${estimatedMinutes} minute${estimatedMinutes === 1 ? '' : 's'}.`);
+}
+
+export async function runBackfill(opts: BackfillOptions): Promise<void> {
+  const channel = await preflight(opts.client);
+
+  if (opts.dryRun) {
+    // Non-blocking try-acquire. If held by a real backfill, warn-but-continue —
+    // the counts can be inaccurate but the user still gets a directional answer.
+    const acquired = await tryAcquireLock();
+    if (!acquired) {
+      console.warn('[backfill] real backfill in progress; counts may shift mid-query.');
+    }
+    try {
+      await reportDryRunCounts(opts);
+    } finally {
+      if (acquired) await releaseLock();
+    }
+    return;
+  }
+
+  const acquired = await tryAcquireLock();
+  if (!acquired) {
+    throw new Error('Another backfill is in progress. Aborting.');
+  }
+  try {
+    await runMainLoop(opts, channel);
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function runMainLoop(opts: BackfillOptions, channel: TextChannel): Promise<void> {
+  const svc = new PhoneService(db);
+  const rows = await loadEligibleCalls();
   const calls = opts.limit ? rows.slice(0, opts.limit) : rows;
   if (opts.verbose) console.log(`[backfill] processing ${calls.length} calls`);
 

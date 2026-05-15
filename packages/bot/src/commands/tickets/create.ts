@@ -54,6 +54,7 @@ import * as priority from './priority.js';
 import * as note from './note.js';
 import * as link from './link.js';
 import * as metrics from './metrics.js';
+import * as history from './history.js';
 
 /**
  * /ticket create
@@ -288,6 +289,18 @@ const command: Command = {
       sub
         .setName('metrics')
         .setDescription('Staff dashboard for ticket health'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('history')
+        .setDescription('Show the full history of a ticket')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('number')
+            .setDescription('The ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        ),
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -304,6 +317,7 @@ const command: Command = {
       note,
       link,
       metrics,
+      history,
     });
   },
 };

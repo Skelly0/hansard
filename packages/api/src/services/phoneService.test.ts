@@ -319,7 +319,8 @@ describe('PhoneService.initiateCall', () => {
         [{ id: 'n2', playerId: 'p2', isActive: true }],
         [{ id: 'p1', characterName: 'Alice', discordId: '1', isAlive: true }],
         [{ id: 'p2', characterName: 'Bob', discordId: '2', isAlive: true }],
-        [],
+        [], // caller-side open call check
+        [], // recipient-side open call check
       ],
       insertErrors: [Object.assign(new Error('dup'), { code: '23505' })],
     });
@@ -341,6 +342,26 @@ describe('PhoneService.initiateCall', () => {
     const svc = new PhoneService(db);
     await expect(svc.initiateCall({ callerPlayerId: 'p1', callerNumberId: 'n1', recipientNumberId: 'n2' }))
       .rejects.toMatchObject({ code: 'already_on_call' });
+  });
+
+  it('refuses dials whose recipient is on another call with a busy reason (not "hang up first")', async () => {
+    // Regression: previously a recipient already on another call surfaced as
+    // `PHONE_ALREADY_ON_CALL` ("Hang up first with /phone hangup") to the dialer, who then
+    // ran /phone hangup and was told "You are not currently in a call" — a confusing no-op
+    // loop. The dialer should see a distinct "line is busy" message instead.
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'n1', playerId: 'p1', isActive: true }],
+        [{ id: 'n2', playerId: 'p2', isActive: true }],
+        [{ id: 'p1', characterName: 'Alice', discordId: '1', isAlive: true }],
+        [{ id: 'p2', characterName: 'Bob', discordId: '2', isAlive: true }],
+        [], // caller-side open call check — clean
+        [{ id: 'existing-call', callerPlayerId: 'p2', recipientPlayerId: 'p3', status: 'active' }],
+      ],
+    });
+    const svc = new PhoneService(db);
+    await expect(svc.initiateCall({ callerPlayerId: 'p1', callerNumberId: 'n1', recipientNumberId: 'n2' }))
+      .rejects.toMatchObject({ code: 'recipient_busy' });
   });
 });
 

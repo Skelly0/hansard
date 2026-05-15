@@ -53,6 +53,8 @@ TypeScript monorepo with pnpm workspaces:
 
 `vitest` is set up in `packages/web` (with `@testing-library/react` + `happy-dom`), `packages/api`, `packages/bot`, and `packages/mcp`. Run `pnpm --filter @hansard/web test:run`, `pnpm --filter @hansard/api test:run`, `pnpm --filter @hansard/bot test:run`, `pnpm --filter @hansard/mcp test:run`, or `pnpm -r --if-present test:run`. API/MCP test files are excluded from `tsc` output and Vitest excludes `dist/**`; keep that guard so build artifacts do not make tests run twice. Pure-logic units (auth hooks, color hash, trend formatter, service functions) get TDD. UI integration is verified manually.
 
+**Integration tests that touch a real Postgres MUST gate on `TEST_DATABASE_URL` only — never fall back to `DATABASE_URL`.** Early backfill tests had `TEST_DATABASE_URL ?? DATABASE_URL`, which silently routed test fixture rows into the prod Neon DB whenever the suite ran under `railway run --service bot`. Use the pattern in `packages/bot/scripts/backfillPhoneThreads.test.ts`: integration `describe` blocks resolve `HAS_REAL_DB` from `TEST_DATABASE_URL` alone, refuse to run if `TEST_DATABASE_URL === DATABASE_URL`, and skip cleanly when neither is set. The preflight/unit cases stay outside the integration `describe` so they always run.
+
 ## Commands
 
 ```bash

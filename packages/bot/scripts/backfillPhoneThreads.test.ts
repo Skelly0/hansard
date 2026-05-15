@@ -17,8 +17,24 @@ import {
 // If TEST_DATABASE_URL is set, route the script's pool to it before importing.
 // Otherwise stub DATABASE_URL with a known-bad URL so the import succeeds; the
 // preflight unit test never reaches DB work, and the integration `describe`
-// below is skipped without a real DB.
-const REAL_DB_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// below is skipped.
+//
+// Hard rule: integration tests run ONLY when TEST_DATABASE_URL is set. We do
+// NOT fall back to DATABASE_URL — that path previously caused tests run via
+// `railway run --service bot` to inject the prod DB URL and write fixture rows
+// against prod Neon. If the operator wants integration tests, they must set
+// TEST_DATABASE_URL explicitly. As a belt-and-braces guard, refuse to run if
+// TEST_DATABASE_URL happens to equal DATABASE_URL.
+const REAL_DB_URL = process.env.TEST_DATABASE_URL;
+if (
+  REAL_DB_URL
+  && process.env.DATABASE_URL
+  && REAL_DB_URL === process.env.DATABASE_URL
+) {
+  throw new Error(
+    'TEST_DATABASE_URL must NOT equal DATABASE_URL. Integration tests write fixture rows and would pollute the target DB.',
+  );
+}
 const HAS_REAL_DB = Boolean(REAL_DB_URL);
 if (HAS_REAL_DB) {
   process.env.DATABASE_URL = REAL_DB_URL!;

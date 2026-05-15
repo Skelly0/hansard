@@ -320,4 +320,127 @@ integrationDescribe('backfillPhoneThreads — core loop', () => {
 
     expect(thread.send).not.toHaveBeenCalled();
   });
+
+  it('test 3 — two fresh calls between the same pair share one thread, ping once', async () => {
+    const [caller] = await db.insert(players).values({
+      characterName: uniqueName('P3A'), discordId: uniqueSnowflake('1'), discordUsername: 'P3A', isAlive: true,
+    }).returning();
+    const [recipient] = await db.insert(players).values({
+      characterName: uniqueName('P3B'), discordId: uniqueSnowflake('2'), discordUsername: 'P3B', isAlive: true,
+    }).returning();
+    const [callerNum] = await db.insert(phoneNumbers).values({
+      playerId: caller.id, numberRaw: '+15551001', numberNormalized: '+15551001', isActive: true,
+    }).returning();
+    const [recipientNum] = await db.insert(phoneNumbers).values({
+      playerId: recipient.id, numberRaw: '+15551002', numberNormalized: '+15551002', isActive: true,
+    }).returning();
+    const t0 = new Date(Date.now() - 120_000);
+    const t1 = new Date(Date.now() - 60_000);
+    await db.insert(phoneCalls).values([
+      {
+        callerNumberId: callerNum.id, recipientNumberId: recipientNum.id,
+        callerPlayerId: caller.id, recipientPlayerId: recipient.id,
+        status: 'ended', endedReason: 'hangup_caller',
+        startedAt: t0, answeredAt: t0, endedAt: t1,
+      },
+      {
+        callerNumberId: callerNum.id, recipientNumberId: recipientNum.id,
+        callerPlayerId: caller.id, recipientPlayerId: recipient.id,
+        status: 'ended', endedReason: 'hangup_caller',
+        startedAt: t1, answeredAt: t1, endedAt: new Date(),
+      },
+    ]);
+
+    const channel = makeOkChannel();
+    const thread = makeThread();
+    const client = makeClientWithThreadCreation(channel, thread);
+    // Second iteration falls back to client.channels.fetch(threadRow.discordThreadId)
+    // because findOrCreateThread returns created=false on cache hit. Return the same
+    // thread mock so the reused thread has a real id.
+    (client.channels.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+      if (id === thread.id) return thread;
+      return channel;
+    });
+
+    await runBackfill({ client, dryRun: false, limit: undefined, verbose: false });
+
+    expect(channel.threads.create).toHaveBeenCalledTimes(1);
+    // 2 calls × (1 connected + 1 ended) + initial pair join-ping send = at least 4 send invocations.
+    expect(thread.send.mock.calls.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('test 4 — pair with one pre-backfilled call: fresh call reuses the existing thread without re-pinging', async () => {
+    const [caller] = await db.insert(players).values({ characterName: uniqueName('P4A'), discordId: uniqueSnowflake('1'), discordUsername: 'P4A', isAlive: true }).returning();
+    const [recipient] = await db.insert(players).values({ characterName: uniqueName('P4B'), discordId: uniqueSnowflake('2'), discordUsername: 'P4B', isAlive: true }).returning();
+    const [callerNum] = await db.insert(phoneNumbers).values({ playerId: caller.id, numberRaw: '+15552001', numberNormalized: '+15552001', isActive: true }).returning();
+    const [recipientNum] = await db.insert(phoneNumbers).values({ playerId: recipient.id, numberRaw: '+15552002', numberNormalized: '+15552002', isActive: true }).returning();
+    // Existing thread row from a prior run.
+    const existingThreadId = '900000000000000201';
+    const [aPlayer, bPlayer] = caller.id < recipient.id ? [caller.id, recipient.id] : [recipient.id, caller.id];
+    await db.insert(phoneThreads).values({ playerAId: aPlayer, playerBId: bPlayer, discordThreadId: existingThreadId });
+    // Pre-backfilled call: skipped.
+    await db.insert(phoneCalls).values({
+      callerNumberId: callerNum.id, recipientNumberId: recipientNum.id,
+      callerPlayerId: caller.id, recipientPlayerId: recipient.id,
+      status: 'ended', endedReason: 'hangup_caller',
+      backfilledAt: new Date(), staffThreadId: existingThreadId,
+    });
+    // Fresh call: must reuse the existing thread.
+    const [freshCall] = await db.insert(phoneCalls).values({
+      callerNumberId: callerNum.id, recipientNumberId: recipientNum.id,
+      callerPlayerId: caller.id, recipientPlayerId: recipient.id,
+      status: 'ended', endedReason: 'hangup_caller',
+    }).returning();
+
+    const channel = makeOkChannel();
+    const existingThread = { id: existingThreadId, type: 12, send: vi.fn().mockResolvedValue({ id: 's' }), members: { add: vi.fn() } };
+    const client = makeClient(channel);
+    (client.channels.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+      if (id === existingThreadId) return existingThread;
+      return channel;
+    });
+
+    await runBackfill({ client, dryRun: false, limit: undefined, verbose: false });
+
+    expect(channel.threads.create).not.toHaveBeenCalled();
+    const [row] = await db.select().from(phoneCalls).where(eq(phoneCalls.id, freshCall.id));
+    expect(row.staffThreadId).toBe(existingThreadId);
+    expect(row.backfilledAt).toBeInstanceOf(Date);
+  });
+
+  it('test 5 — pair with a live call: historic call reuses the live-created thread', async () => {
+    const [caller] = await db.insert(players).values({ characterName: uniqueName('P5A'), discordId: uniqueSnowflake('1'), discordUsername: 'P5A', isAlive: true }).returning();
+    const [recipient] = await db.insert(players).values({ characterName: uniqueName('P5B'), discordId: uniqueSnowflake('2'), discordUsername: 'P5B', isAlive: true }).returning();
+    const [callerNum] = await db.insert(phoneNumbers).values({ playerId: caller.id, numberRaw: '+15553001', numberNormalized: '+15553001', isActive: true }).returning();
+    const [recipientNum] = await db.insert(phoneNumbers).values({ playerId: recipient.id, numberRaw: '+15553002', numberNormalized: '+15553002', isActive: true }).returning();
+    const liveThreadId = '900000000000000301';
+    const [aPlayer, bPlayer] = caller.id < recipient.id ? [caller.id, recipient.id] : [recipient.id, caller.id];
+    await db.insert(phoneThreads).values({ playerAId: aPlayer, playerBId: bPlayer, discordThreadId: liveThreadId });
+    // Live call: skipped by filter.
+    await db.insert(phoneCalls).values({
+      callerNumberId: callerNum.id, recipientNumberId: recipientNum.id,
+      callerPlayerId: caller.id, recipientPlayerId: recipient.id,
+      status: 'active', staffThreadId: liveThreadId, answeredAt: new Date(),
+    });
+    // Historic ended call on the same pair.
+    const [historic] = await db.insert(phoneCalls).values({
+      callerNumberId: callerNum.id, recipientNumberId: recipientNum.id,
+      callerPlayerId: caller.id, recipientPlayerId: recipient.id,
+      status: 'ended', endedReason: 'hangup_caller',
+    }).returning();
+
+    const channel = makeOkChannel();
+    const liveThread = { id: liveThreadId, type: 12, send: vi.fn().mockResolvedValue({ id: 's' }), members: { add: vi.fn() } };
+    const client = makeClient(channel);
+    (client.channels.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+      if (id === liveThreadId) return liveThread;
+      return channel;
+    });
+
+    await runBackfill({ client, dryRun: false, limit: undefined, verbose: false });
+
+    expect(channel.threads.create).not.toHaveBeenCalled();
+    const [row] = await db.select().from(phoneCalls).where(eq(phoneCalls.id, historic.id));
+    expect(row.staffThreadId).toBe(liveThreadId);
+  });
 });

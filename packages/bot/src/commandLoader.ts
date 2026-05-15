@@ -39,8 +39,14 @@ export async function loadCommands(
   const loadedCommandFiles = new Map<string, string>();
 
   for (const filePath of commandFiles) {
-    const module = (await import(toCommandModuleSpecifier(filePath))) as { default: Command };
+    const module = (await import(toCommandModuleSpecifier(filePath))) as { default?: Command };
     const command = module.default;
+
+    if (command === undefined) {
+      // Module is a handler-only or helper module (subcommand leaf, shared helper).
+      // Skip silently so startup logs stay focused on real top-level commands.
+      continue;
+    }
 
     if (!command?.data?.name) {
       console.warn(`Skipping ${filePath} - no valid command export found.`);

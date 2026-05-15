@@ -112,6 +112,65 @@ async function fetchPhoneLogChannel(client: Client): Promise<TextChannel | null>
 const threadCreateLocks = new Map<string, Promise<ThreadChannel | null>>();
 
 /**
+ * Builds the `{ createThread, onOrphan }` callback pair for
+ * `PhoneService.findOrCreateThread`. Shared between the live relay's
+ * `ensurePhoneThread` and the one-shot `backfill:phone-threads` script so a
+ * future change to thread-creation semantics applies in both places.
+ *
+ * Captures the just-created `ThreadChannel` in a closure-local cell so a lost
+ * persist race (`onOrphan`) can delete it.
+ */
+export function createPhoneThreadWithOrphanCleanup(
+  client: Client,
+  channel: TextChannel,
+  threadName: string,
+  reason: string,
+): {
+  callbacks: {
+    createThread: () => Promise<string | null>;
+    onOrphan: (discordThreadId: string) => Promise<void>;
+  };
+  getCreatedThread: () => ThreadChannel | null;
+} {
+  let createdThread: ThreadChannel | null = null;
+
+  return {
+    callbacks: {
+      createThread: async () => {
+        try {
+          createdThread = await channel.threads.create({
+            name: threadName,
+            type: ChannelType.PrivateThread,
+            invitable: false,
+            autoArchiveDuration: 1440,
+            reason,
+          });
+          return createdThread.id;
+        } catch (err) {
+          console.error('[phone:relay] failed to create phone thread:', err);
+          return null;
+        }
+      },
+      onOrphan: async (discordThreadId) => {
+        try {
+          const orphan = await client.channels.fetch(discordThreadId);
+          if (
+            orphan
+            && 'delete' in orphan
+            && typeof (orphan as { delete?: unknown }).delete === 'function'
+          ) {
+            await (orphan as ThreadChannel).delete('Orphaned phone thread — lost persist race');
+          }
+        } catch (err) {
+          console.error('[phone:relay] failed to delete orphaned phone thread:', err);
+        }
+      },
+    },
+    getCreatedThread: () => createdThread,
+  };
+}
+
+/**
  * Look up or create the per-pair private thread that staff use to oversee all calls
  * between the same two players. Reused across multiple calls.
  *
@@ -166,46 +225,25 @@ export async function ensurePhoneThread(
     const recipientName = participants.recipientPlayer.characterName ?? 'Unknown';
     const threadName = `\u{260E} ${callerName} \u{2194} ${recipientName}`.slice(0, 95);
 
-    // The created thread is captured here so a lost persist race can return it (already
-    // fetched + valid) or, if we orphaned it, the `onOrphan` hook can delete it.
-    let createdThread: ThreadChannel | null = null;
+    const { callbacks, getCreatedThread } = createPhoneThreadWithOrphanCleanup(
+      client,
+      channel,
+      threadName,
+      `Phone log for ${callerName} and ${recipientName}`,
+    );
 
     const { thread: row, created: didCreate } = await svc.findOrCreateThread(
       participants.callerPlayer.id,
       participants.recipientPlayer.id,
       {
-        createThread: async () => {
-          try {
-            createdThread = await channel.threads.create({
-              name: threadName,
-              type: ChannelType.PrivateThread,
-              invitable: false,
-              autoArchiveDuration: 1440,
-              reason: `Phone log for ${callerName} and ${recipientName}`,
-            });
-            return createdThread.id;
-          } catch (err) {
-            console.error('[phone:relay] failed to create phone thread:', err);
-            return null;
-          }
-        },
+        ...callbacks,
         replaceThreadId: staleThreadId ?? undefined,
-        onOrphan: async (discordThreadId) => {
-          // We lost the persist race — another relay's row won. Delete the thread we just
-          // created so it isn't left as a dangling private thread nobody references.
-          try {
-            const orphan = await client.channels.fetch(discordThreadId);
-            if (orphan && 'delete' in orphan && typeof (orphan as { delete?: unknown }).delete === 'function') {
-              await (orphan as ThreadChannel).delete('Orphaned phone thread — lost persist race');
-            }
-          } catch (err) {
-            console.error('[phone:relay] failed to delete orphaned phone thread:', err);
-          }
-        },
       },
     );
 
     if (!row) return null;
+
+    const createdThread = getCreatedThread();
 
     if (didCreate && createdThread) {
       // We won — finish wiring up the brand-new thread.
@@ -232,7 +270,7 @@ export async function ensurePhoneThread(
   return created;
 }
 
-async function sendStaffJoinPing(
+export async function sendStaffJoinPing(
   thread: ThreadChannel,
   guild: Guild,
   callerName: string,
@@ -264,7 +302,7 @@ async function sendStaffJoinPing(
   }
 }
 
-async function backgroundStaffAdd(
+export async function backgroundStaffAdd(
   thread: ThreadChannel,
   guild: Guild,
   staffRoleIds: string[],

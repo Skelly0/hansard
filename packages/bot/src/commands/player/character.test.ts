@@ -168,6 +168,140 @@ describe('/character create', () => {
     expect(containsText(confirmPayload, /ex=65d903de|hm=abc123/)).toBe(false);
   });
 
+  it('accepts character names with straight quotes (the case the user reported)', async () => {
+    let selectCall = 0;
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    let endHandler: (() => void) | undefined;
+    const portraitCollector = {
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'end') {
+          endHandler = handler;
+          queueMicrotask(() => endHandler?.());
+        }
+        return portraitCollector;
+      }),
+      stop: vi.fn(),
+    };
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => portraitCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({
+          customId: 'char_cancel_discord-user-1',
+          update: vi.fn(),
+        }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Edmund "The Cruel" Blackwood',
+          character_bio: '',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: null,
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    // Should NOT have errored on the quotes — should reach the confirmation step
+    // (and only stop there because we wire the test to cancel).
+    expect(editPayloads.some((payload) => containsText(payload, /cannot contain|invisible|Invalid character name/i))).toBe(false);
+    expect(editPayloads.some((payload) => containsText(payload, /Character Summary/))).toBe(true);
+    // Quotes survive the round-trip unchanged.
+    expect(editPayloads.some((payload) => containsText(payload, /Edmund "The Cruel" Blackwood/))).toBe(true);
+  });
+
+  it('rejects character names containing @ with a specific error before any DB call', async () => {
+    let selectCall = 0;
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      throw new Error(`Unexpected select call ${selectCall} (validation should reject before name uniqueness check)`);
+    });
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: '@everyone is alerted',
+          character_bio: '',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    expect(editPayloads.some((payload) => containsText(payload, /cannot contain/i))).toBe(true);
+    // No "database error" fallback — error should be the validation message.
+    expect(editPayloads.some((payload) => containsText(payload, /database error/i))).toBe(false);
+  });
+
+  it('rejects empty character names with a specific error', async () => {
+    mocks.select.mockImplementation(() => selectLimitResult([]));
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: '   ',
+          character_bio: '',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    expect(editPayloads.some((payload) => containsText(payload, /empty/i))).toBe(true);
+  });
+
   it('acknowledges the submitted modal before checking character name uniqueness', async () => {
     const events: string[] = [];
     let selectCall = 0;

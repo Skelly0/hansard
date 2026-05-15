@@ -8,6 +8,7 @@ import {
   birthDateForAge,
   buildArchivedCharacter,
   profileDataWithArchive,
+  validateCharacterName,
 } from '@hansard/shared';
 import { calculateStartingAgeFavourBonus } from '@hansard/api/services/playerService';
 import {
@@ -36,7 +37,15 @@ export async function executeCharacterCreate(interaction: ChatInputCommandIntera
   }
 
   const targetUser = interaction.options.getUser('user', true);
-  const characterName = interaction.options.getString('character-name', true).trim();
+  const rawCharacterName = interaction.options.getString('character-name', true);
+  const nameValidation = validateCharacterName(rawCharacterName);
+  if (!nameValidation.ok) {
+    await interaction.editReply({
+      embeds: [errorEmbed(nameValidation.error ?? 'Invalid character name.')],
+    });
+    return;
+  }
+  const characterName = nameValidation.normalized!;
   const startingAge = interaction.options.getInteger('starting-age', true);
   const characterBio = interaction.options.getString('bio')?.trim() || null;
   const portraitUrl = interaction.options.getString('portrait-url')?.trim() || null;

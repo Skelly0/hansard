@@ -1894,11 +1894,11 @@ The legislative pipeline in Discord:
    - Posts the vote in the voting channel
    - No formal queue — the Chancellor decides the legislative agenda organically
 4. **Player vote resolves**: After tallying, the bill status becomes `player_passed` or `player_rejected`.
-5. **NPC house** (if `npcVoteRequired`): Staff enter the NPC result via `/npc-bill` or the webapp.
+5. **NPC house** (if `npcVoteRequired`): Staff enter the NPC result via `/bill npc-vote` or the webapp.
 6. **Enacted**: If both houses pass, staff run enact or it auto-advances.
 
 ### Position Election Flow (Governor Example)
-1. **Chancellor creates election**: `/elect "Governor of Northshire" fptp` (or `ranked_choice`, `two_round_runoff`, etc.)
+1. **Chancellor creates election**: `/vote elect "Governor of Northshire" fptp` (or `ranked_choice`, `two_round_runoff`, etc.)
    - Creates an `election` with `type: 'position_election'` and `forOfficeId` linked to the Governor office
    - Status set to `nominations_open`
    - Posted in announcement channel
@@ -1913,14 +1913,14 @@ The legislative pipeline in Discord:
      - Second round vote runs
    - If `ranked_choice`: instant runoff tallying (eliminate lowest, redistribute, repeat)
 6. **NPC confirmation** (if `config.requiresNpcConfirmation`):
-   - Staff enter NPC house result via `/npc-confirm`
+   - Staff enter NPC house result via `/vote npc-confirm`
    - If confirmed: winner gets the office
    - If rejected: election may need to be re-run (staff decision)
 7. **Office assignment**: Winner is added to `officeHolders`, Discord role assigned, event logged
 
 ### PM Appointment Flow
 The Prime Minister (or whoever holds an office with `appoint_ministers` permission) can:
-1. `/appoint "Minister of War" @player` — immediate appointment if `office.requiresConfirmation` is false:
+1. `/office appoint "Minister of War" @player` — immediate appointment if `office.requiresConfirmation` is false:
    - Creates `officeHolders` entry with `appointmentMethod: 'appointed'`
    - Removes previous holder if any (logged with `removalReason: 'replaced'`)
    - Assigns Discord role to new holder, removes from old
@@ -1929,7 +1929,7 @@ The Prime Minister (or whoever holds an office with `appoint_ministers` permissi
    - Creates an `appointment_confirmation` election (yea/nay) — "Confirm @player as Minister of War?"
    - If confirmed: appointment proceeds as above
    - If rejected: appointment fails, PM must choose someone else
-3. `/dismiss "Minister of War" [reason]` — removes the current holder:
+3. `/office dismiss "Minister of War" [reason]` — removes the current holder:
    - Sets `endDate` + `removalReason: 'removed_by_appointer'` on the officeHolder
    - Removes Discord role
    - Logs event
@@ -1959,7 +1959,7 @@ In both cases, staff use a command or the webapp. The NPC can pass, reject, or (
 Future stretch goal: NPC behaviour influenced by popsim approval ratings.
 
 ### Graveyard Channel
-When a player character dies (from `/kill`, `/time advance` death roll, or any other cause), the bot posts a rich obituary embed to a configured graveyard channel. The obituary is auto-generated from the player's event log:
+When a player character dies (from `/character kill`, `/time advance` death roll, or any other cause), the bot posts a rich obituary embed to a configured graveyard channel. The obituary is auto-generated from the player's event log:
 
 **Embed content:**
 - Character name, birth date, death date, age at death, cause of death
@@ -1983,7 +1983,7 @@ Players accumulate and spend favours through roleplay — the bot just tracks th
 favours based on what's happening in the sim. The bot doesn't enforce what favours can be spent on —
 the `spendableOn` field on categories is descriptive, not enforced. Staff decide whether a spend is valid.
 
-**Player-facing**: players can check their own balances anytime with `/favours`. They see category names,
+**Player-facing**: players can check their own balances anytime with `/favour balance`. They see category names,
 balances, and transaction history. This is public to the player but not to other players by default.
 
 **Staff-facing**: staff can grant, spend, and remove favours with a reason attached to every transaction.
@@ -2145,7 +2145,7 @@ pnpm add -D tailwindcss postcss autoprefixer
 
 ### Phase 5: Voting & Offices
 23. General vote creation (any player: referenda, confidence, custom)
-24. Position elections (Chancellor: `/elect`, candidate submissions, NPC confirmation)
+24. Position elections (Chancellor: `/vote elect`, candidate submissions, NPC confirmation)
 25. Ballot casting (with secret ballot DM flow)
 26. Tallying algorithms (FPTP, yea/nay, ranked choice, two-round runoff)
 27. Runoff auto-creation when no majority
@@ -2156,7 +2156,7 @@ pnpm add -D tailwindcss postcss autoprefixer
 ### Phase 5b: Favours
 31. Favour categories CRUD (staff)
 32. Grant/spend/remove commands with transaction logging
-33. Player balance view (`/favours`)
+33. Player balance view (`/favour balance`)
 34. Webapp favours dashboard
 
 ### Phase 6: Graveyard + Moderation + Polish

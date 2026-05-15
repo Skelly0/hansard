@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
@@ -7,28 +6,16 @@ import { ballots, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-turnout election:<title-or-id> — live turnout stats. Public.
+ * /vote turnout election:<title-or-id> — live turnout stats. Public.
  *
  * Mirrors VoteService.getTurnout: counts ballots cast for the election.
  * Adds a turnout percentage if we can derive a denominator from the
  * active player base (best-effort; eligibility filters are not applied).
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-turnout')
-    .setDescription('Show live turnout stats for an election')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const electionRef = interaction.options.getString('election', true);
@@ -120,7 +107,4 @@ const command: Command = {
     });
 
     await interaction.editReply({ embeds: [embed] });
-  },
-};
-
-export default command;
+}

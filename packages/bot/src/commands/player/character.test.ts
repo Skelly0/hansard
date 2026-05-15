@@ -151,7 +151,7 @@ describe('/character create', () => {
       channel: {
         createMessageCollector: vi.fn(() => messageCollector),
       },
-      options: { getSubcommand: vi.fn().mockReturnValue('create') },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
       reply: vi.fn(),
       showModal: vi.fn(),
       awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
@@ -200,7 +200,7 @@ describe('/character create', () => {
 
     const interaction = {
       user: { id: 'discord-user-1', username: 'ada' },
-      options: { getSubcommand: vi.fn().mockReturnValue('create') },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
       reply: vi.fn(),
       showModal: vi.fn(),
       awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
@@ -291,7 +291,7 @@ describe('/character create', () => {
           fetch: vi.fn(),
         },
       },
-      options: { getSubcommand: vi.fn().mockReturnValue('create') },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
       reply: vi.fn(),
       showModal: vi.fn(),
       awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
@@ -362,7 +362,7 @@ describe('/character create', () => {
     const interaction = {
       user: { id: 'discord-user-1', username: 'ada' },
       guild: null,
-      options: { getSubcommand: vi.fn().mockReturnValue('create') },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
       reply: vi.fn(),
       showModal: vi.fn(),
       awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
@@ -445,7 +445,7 @@ describe('/character create', () => {
     const interaction = {
       user: { id: 'discord-user-1', username: 'ada' },
       guild: null,
-      options: { getSubcommand: vi.fn().mockReturnValue('create') },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
       reply: vi.fn(),
       showModal: vi.fn(),
       awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
@@ -502,6 +502,7 @@ describe('/character view', () => {
       user: { id: 'discord-user-1', displayName: 'Ada' },
       options: {
         getSubcommand: vi.fn().mockReturnValue('view'),
+        getSubcommandGroup: vi.fn().mockReturnValue(null),
         getUser: vi.fn().mockReturnValue(null),
       },
       deferReply: vi.fn(),

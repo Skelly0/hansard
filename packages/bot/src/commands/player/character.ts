@@ -40,6 +40,11 @@ import {
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
+import { PermissionFlagsBits } from 'discord.js';
+import { dispatchSubcommand } from '../../utils/parentCommand.js';
+import * as heal from '../simulation/heal.js';
+import * as kill from '../simulation/kill.js';
+import { executeAdd as executeAilmentAdd, executeRemove as executeAilmentRemove } from '../simulation/ailment.js';
 
 // ─── Age Config (will load from simulation config later) ───────────────────
 
@@ -953,7 +958,7 @@ async function handleEdit(interaction: ChatInputCommandInteraction): Promise<voi
 const command: Command = {
   data: new SlashCommandBuilder()
     .setName('character')
-    .setDescription('Character management')
+    .setDescription('Character management — create, view, edit, plus staff ailment/death tools')
     .addSubcommand((sub) =>
       sub.setName('create').setDescription('Create your character for this season'),
     )
@@ -967,22 +972,76 @@ const command: Command = {
     )
     .addSubcommand((sub) =>
       sub.setName('edit').setDescription('Edit your character bio and portrait'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('heal')
+        .setDescription('Cure (resolve) an active ailment on a player (staff only)')
+        .addUserOption((opt) =>
+          opt.setName('user').setDescription('The player').setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('ailment')
+            .setDescription('Ailment name (case-insensitive partial match)')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('kill')
+        .setDescription('Kill a player character and post their obituary (staff only)')
+        .addUserOption((opt) =>
+          opt.setName('user').setDescription('The player to kill').setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName('cause').setDescription('Cause of death').setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('ailment-add')
+        .setDescription('Give a player an ailment (staff only)')
+        .addUserOption((opt) =>
+          opt.setName('user').setDescription('The player').setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName('condition').setDescription('Ailment name (e.g. gout, tuberculosis)').setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('severity')
+            .setDescription('Ailment severity')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Minor', value: 'minor' },
+              { name: 'Major', value: 'major' },
+              { name: 'Critical', value: 'critical' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('ailment-remove')
+        .setDescription('Cure a player\'s ailment by exact name (staff only)')
+        .addUserOption((opt) =>
+          opt.setName('user').setDescription('The player').setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName('condition').setDescription('Ailment to remove').setRequired(true),
+        ),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-
-    switch (sub) {
-      case 'create':
-        await handleCreate(interaction);
-        break;
-      case 'view':
-        await handleView(interaction);
-        break;
-      case 'edit':
-        await handleEdit(interaction);
-        break;
-    }
+    await dispatchSubcommand(interaction, {
+      create: { execute: handleCreate },
+      view: { execute: handleView },
+      edit: { execute: handleEdit },
+      heal,
+      kill,
+      'ailment-add': { execute: executeAilmentAdd },
+      'ailment-remove': { execute: executeAilmentRemove },
+    });
   },
 };
 

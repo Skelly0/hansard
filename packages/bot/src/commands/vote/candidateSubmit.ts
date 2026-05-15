@@ -1,42 +1,20 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { and, eq } from 'drizzle-orm';
 import { candidates, players, parties } from '@hansard/db';
 import { REACTION_FPTP_MAX_CANDIDATES } from '@hansard/shared';
-import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
-import type { Command } from '../../client.js';
 import { seedReactionForNewCandidate } from './_seedFptpReactions.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /candidate-submit election:<title-or-id> — register the invoking player as a
- * candidate in a position election.
+ * /vote candidate-submit election:<title-or-id> — register the invoking player
+ * as a candidate in a position election.
  *
  * Mirrors VoteService.registerCandidate. Looks up the election by title or ID.
- * Fails clearly
- * if the invoker isn't a registered player or nominations aren't open.
+ * Fails clearly if the invoker isn't a registered player or nominations aren't open.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('candidate-submit')
-    .setDescription('Register yourself as a candidate in an election')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('statement')
-        .setDescription('Optional candidate statement / manifesto')
-        .setRequired(false),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const electionRef = interaction.options.getString('election', true);
@@ -141,7 +119,7 @@ const command: Command = {
     //
     // Best-effort: any failure here is logged inside the helper and never
     // surfaces back to the candidate (the registration itself succeeded).
-    // Trigger B in /vote-open is the safety net that re-seeds at open time.
+    // Trigger B in /vote open is the safety net that re-seeds at open time.
     if (election.useReactions && election.method === 'fptp' && election.discordMessageId) {
       try {
         const result = await seedReactionForNewCandidate({
@@ -167,7 +145,4 @@ const command: Command = {
         console.error('[candidate-submit] reaction seeding failed:', error);
       }
     }
-  },
-};
-
-export default command;
+}

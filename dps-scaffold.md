@@ -1578,9 +1578,9 @@ GET    /api/dashboard/activity          → Recent activity feed across all syst
 /bill view <bill_number>               → Display bill embed (title, author, status, link, summary)
 /bill search <query>                   → Full-text search across all bills
 /bill list [status] [author]           → Browse bills with filters
-/bill vote <bill_number>               → Create a legislature vote on this bill (Chancellor only)
+/vote create type:legislative_vote bill:<bill_number>               → Create a legislature vote on this bill (Chancellor only)
 /bill status <bill_number>             → Show full status timeline for a bill
-/npc-bill <bill_number> <yea> <nay> <abstain> [notes]  → Enter NPC house vote on a bill (staff only)
+/bill npc-vote <bill_number> <yea> <nay> <abstain> [notes]  → Enter NPC house vote on a bill (staff only)
 ```
 
 ### Documents (worldbuilding, reference)
@@ -1596,7 +1596,7 @@ GET    /api/dashboard/activity          → Recent activity feed across all syst
 /vote create                       → Create new vote (opens modal: type, method, majority, title, description)
                                      Type determines permissions — referendum/custom = any player,
                                      position_election/appointment_confirmation = Chancellor only,
-                                     legislative_vote = use /bill vote instead
+                                     legislative_vote = use /vote create type:legislative_vote instead
 /vote cast <election_id>           → Cast ballot (DMs user ballot form for secret votes)
 /vote results <election_id>        → Show results (if polls closed or unsealed)
 /vote schedule                     → Show upcoming elections/votes
@@ -1604,11 +1604,11 @@ GET    /api/dashboard/activity          → Recent activity feed across all syst
 /vote rounds <election_id>         → Show all rounds of a multi-round election
 
 # === POSITION ELECTIONS ===
-/elect <office> [method]           → Create a position election (Chancellor only, opens candidate submissions)
+/vote elect <office> [method]           → Create a position election (Chancellor only, opens candidate submissions)
                                      method defaults to FPTP, can be ranked_choice, two_round_runoff, etc.
-/candidate submit <election_id>    → Submit yourself as candidate for a position (opens statement modal)
-/candidate list <election_id>      → List candidates
-/npc-confirm <election_id> <yea> <nay> <abstain> [notes]  → Enter NPC house confirmation (staff only)
+/vote candidate-submit <election_id>    → Submit yourself as candidate for a position (opens statement modal)
+/vote candidate-list <election_id>      → List candidates
+/vote npc-confirm <election_id> <yea> <nay> <abstain> [notes]  → Enter NPC house confirmation (staff only)
 ```
 
 ### Offices & Appointments
@@ -1616,9 +1616,9 @@ GET    /api/dashboard/activity          → Recent activity feed across all syst
 /office list                       → Show all offices and current holders
 /office info <office>              → Details on an office (permissions, how filled, holder history)
 /office history <office>           → Full holder history for an office
-/appoint <office> <user>           → PM appoints player to a ministerial office (requires appoint_ministers permission)
+/office appoint <office> <user>           → PM appoints player to a ministerial office (requires appoint_ministers permission)
                                      If office.requiresConfirmation=true, creates a confirmation vote first
-/dismiss <office> [reason]         → PM removes current holder from office (requires appoint_ministers permission)
+/office dismiss <office> [reason]         → PM removes current holder from office (requires appoint_ministers permission)
                                      Both commands sync Discord roles and log to playerEventLog
 ```
 
@@ -1629,12 +1629,12 @@ GET    /api/dashboard/activity          → Recent activity feed across all syst
                                      Assigns Discord roles on completion.
 /character edit                    → Edit bio and portrait. Name changes require staff approval.
 /character view [user]             → Full character dossier embed (portrait, bio, age, health, offices, favours)
-/whois <character_name>            → Reverse lookup by character name
-/roster [faction] [party]          → List players with filters
+/player whois <character_name>            → Reverse lookup by character name
+/player roster [faction] [party]          → List players with filters
 /party join <party>                → Join/switch party (updates DB + Discord role, logs event)
 /party leave                       → Leave current party (become independent)
 /party list                        → List all parties with member counts
-/history [user]                    → View player event log (party changes, offices, ailments, etc.)
+/player history [user]                    → View player event log (party changes, offices, ailments, etc.)
 ```
 
 ### Simulation / Time (staff only)
@@ -1651,16 +1651,16 @@ GET    /api/dashboard/activity          → Recent activity feed across all syst
 /time set <date>                   → Override current sim date (admin only)
 /time pause                        → Pause the simulation clock
 /time unpause                      → Unpause the simulation clock
-/ailment add <user> <condition> <severity>  → Manually give player an ailment
-/ailment remove <user> <condition>          → Cure an ailment
-/kill <user> <cause>               → Kill a player character (posts obituary to graveyard channel)
+/character ailment-add <user> <condition> <severity>  → Manually give player an ailment
+/character ailment-remove <user> <condition>          → Cure an ailment
+/character kill <user> <cause>               → Kill a player character (posts obituary to graveyard channel)
 ```
 
 ### Favours
 ```
 # Players
-/favours                           → View your own favour balances across all categories
-/favours history [category]        → View your own transaction history
+/favour balance                    → View your own favour balances across all categories
+/favour history [category]         → View your own transaction history
 
 # Staff
 /favour grant <user> <category> <amount> [reason]   → Give favours to a player
@@ -1669,8 +1669,8 @@ GET    /api/dashboard/activity          → Recent activity feed across all syst
 /favour check <user>               → View a player's favour balances (staff only)
 /favour history <user> [category]  → View a player's transaction history (staff only)
 /favour categories                 → List all favour categories with descriptions
-/favour category add <name> [description] [emoji]    → Create new favour category (staff only)
-/favour category edit <name>       → Edit category details (staff only)
+/favour category-create <name> [description] [emoji]    → Create new favour category (staff only)
+/favour category-edit <name>       → Edit category details (staff only)
 ```
 
 ### Moderation (staff only)
@@ -1888,21 +1888,21 @@ The legislative pipeline in Discord:
    - Posts a notification in the legislation channel
    - **Alternatively**: Chancellor can use `/bill submit-for @player "Title" <url>` to submit on someone else's behalf
      (sets `authorId` to that player, `submittedById` to the Chancellor)
-3. **Chancellor puts to vote**: When the Chancellor decides it's time, they run `/bill vote <bill_number>` which:
+3. **Chancellor puts to vote**: When the Chancellor decides it's time, they run `/vote create type:legislative_vote bill:<bill_number>` which:
    - Creates an `election` linked to this bill (yea/nay/abstain type)
    - Advances bill status to `voting`
    - Posts the vote in the voting channel
    - No formal queue — the Chancellor decides the legislative agenda organically
 4. **Player vote resolves**: After tallying, the bill status becomes `player_passed` or `player_rejected`.
-5. **NPC house** (if `npcVoteRequired`): Staff enter the NPC result via `/npc-bill` or the webapp.
+5. **NPC house** (if `npcVoteRequired`): Staff enter the NPC result via `/bill npc-vote` or the webapp.
 6. **Enacted**: If both houses pass, staff run enact or it auto-advances.
 
 ### Position Election Flow (Governor Example)
-1. **Chancellor creates election**: `/elect "Governor of Northshire" fptp` (or `ranked_choice`, `two_round_runoff`, etc.)
+1. **Chancellor creates election**: `/vote elect "Governor of Northshire" fptp` (or `ranked_choice`, `two_round_runoff`, etc.)
    - Creates an `election` with `type: 'position_election'` and `forOfficeId` linked to the Governor office
    - Status set to `nominations_open`
    - Posted in announcement channel
-2. **Candidates submit themselves**: Players run `/candidate submit <election_id>` — opens a modal for their candidate statement
+2. **Candidates submit themselves**: Players run `/vote candidate-submit <election_id>` — opens a modal for their candidate statement
 3. **Chancellor closes nominations** and **opens voting**
 4. **Players vote** using whatever method was chosen
 5. **Tally**:
@@ -1913,14 +1913,14 @@ The legislative pipeline in Discord:
      - Second round vote runs
    - If `ranked_choice`: instant runoff tallying (eliminate lowest, redistribute, repeat)
 6. **NPC confirmation** (if `config.requiresNpcConfirmation`):
-   - Staff enter NPC house result via `/npc-confirm`
+   - Staff enter NPC house result via `/vote npc-confirm`
    - If confirmed: winner gets the office
    - If rejected: election may need to be re-run (staff decision)
 7. **Office assignment**: Winner is added to `officeHolders`, Discord role assigned, event logged
 
 ### PM Appointment Flow
 The Prime Minister (or whoever holds an office with `appoint_ministers` permission) can:
-1. `/appoint "Minister of War" @player` — immediate appointment if `office.requiresConfirmation` is false:
+1. `/office appoint "Minister of War" @player` — immediate appointment if `office.requiresConfirmation` is false:
    - Creates `officeHolders` entry with `appointmentMethod: 'appointed'`
    - Removes previous holder if any (logged with `removalReason: 'replaced'`)
    - Assigns Discord role to new holder, removes from old
@@ -1929,7 +1929,7 @@ The Prime Minister (or whoever holds an office with `appoint_ministers` permissi
    - Creates an `appointment_confirmation` election (yea/nay) — "Confirm @player as Minister of War?"
    - If confirmed: appointment proceeds as above
    - If rejected: appointment fails, PM must choose someone else
-3. `/dismiss "Minister of War" [reason]` — removes the current holder:
+3. `/office dismiss "Minister of War" [reason]` — removes the current holder:
    - Sets `endDate` + `removalReason: 'removed_by_appointer'` on the officeHolder
    - Removes Discord role
    - Logs event
@@ -1959,7 +1959,7 @@ In both cases, staff use a command or the webapp. The NPC can pass, reject, or (
 Future stretch goal: NPC behaviour influenced by popsim approval ratings.
 
 ### Graveyard Channel
-When a player character dies (from `/kill`, `/time advance` death roll, or any other cause), the bot posts a rich obituary embed to a configured graveyard channel. The obituary is auto-generated from the player's event log:
+When a player character dies (from `/character kill`, `/time advance` death roll, or any other cause), the bot posts a rich obituary embed to a configured graveyard channel. The obituary is auto-generated from the player's event log:
 
 **Embed content:**
 - Character name, birth date, death date, age at death, cause of death
@@ -1983,7 +1983,7 @@ Players accumulate and spend favours through roleplay — the bot just tracks th
 favours based on what's happening in the sim. The bot doesn't enforce what favours can be spent on —
 the `spendableOn` field on categories is descriptive, not enforced. Staff decide whether a spend is valid.
 
-**Player-facing**: players can check their own balances anytime with `/favours`. They see category names,
+**Player-facing**: players can check their own balances anytime with `/favour balance`. They see category names,
 balances, and transaction history. This is public to the player but not to other players by default.
 
 **Staff-facing**: staff can grant, spend, and remove favours with a reason attached to every transaction.
@@ -2145,7 +2145,7 @@ pnpm add -D tailwindcss postcss autoprefixer
 
 ### Phase 5: Voting & Offices
 23. General vote creation (any player: referenda, confidence, custom)
-24. Position elections (Chancellor: `/elect`, candidate submissions, NPC confirmation)
+24. Position elections (Chancellor: `/vote elect`, candidate submissions, NPC confirmation)
 25. Ballot casting (with secret ballot DM flow)
 26. Tallying algorithms (FPTP, yea/nay, ranked choice, two-round runoff)
 27. Runoff auto-creation when no majority
@@ -2156,7 +2156,7 @@ pnpm add -D tailwindcss postcss autoprefixer
 ### Phase 5b: Favours
 31. Favour categories CRUD (staff)
 32. Grant/spend/remove commands with transaction logging
-33. Player balance view (`/favours`)
+33. Player balance view (`/favour balance`)
 34. Webapp favours dashboard
 
 ### Phase 6: Graveyard + Moderation + Polish

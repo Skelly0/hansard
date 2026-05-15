@@ -43,7 +43,8 @@ vi.mock('../../utils/partyJoinMessage.js', () => ({
   refreshPartyJoinMessage: mocks.refreshPartyJoinMessage,
 }));
 
-import editPartyCommand from './edit';
+import { execute as editPartyExecute } from './edit';
+import partyParentCommand from './party';
 
 class Query<T = unknown> implements PromiseLike<T[]> {
   constructor(private readonly rows: T[]) {}
@@ -88,8 +89,13 @@ class UpdateQuery {
 }
 
 function commandOption(name: string) {
-  const option = editPartyCommand.data.toJSON().options?.find((candidate) => candidate.name === name);
-  if (!option) throw new Error(`Missing /party-edit ${name} option`);
+  const editSub = partyParentCommand.data
+    .toJSON()
+    .options?.find((candidate): candidate is { name: string; options?: unknown[] } & Record<string, unknown> => {
+      return (candidate as { name: string }).name === 'edit';
+    }) as { options?: Array<{ name: string; type: number }> } | undefined;
+  const option = editSub?.options?.find((candidate) => candidate.name === name);
+  if (!option) throw new Error(`Missing /party edit ${name} option`);
   return option;
 }
 
@@ -123,7 +129,7 @@ function fakeInteraction(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-describe('/party-edit', () => {
+describe('/party edit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.selectRows = [];
@@ -146,7 +152,7 @@ describe('/party-edit', () => {
       [{ id: 'leader-player', characterName: 'Avery Chair' }],
     ];
 
-    await editPartyCommand.execute(interaction);
+    await editPartyExecute(interaction);
 
     expect(mocks.updateSet).toMatchObject({ leaderId: 'leader-player' });
     expect(interaction.editReply).toHaveBeenCalledWith({ embeds: expect.any(Array) });
@@ -159,7 +165,7 @@ describe('/party-edit', () => {
       [],
     ];
 
-    await editPartyCommand.execute(interaction);
+    await editPartyExecute(interaction);
 
     expect(mocks.update).not.toHaveBeenCalled();
     const replyPayload = interaction.editReply.mock.calls[0]?.[0];
@@ -179,7 +185,7 @@ describe('/party-edit', () => {
       [{ id: 'party-new', name: 'New Horizon', shortName: 'NH' }],
     ];
 
-    await editPartyCommand.execute(interaction);
+    await editPartyExecute(interaction);
 
     expect(mocks.updateSet).toMatchObject({ leaderId: null });
   });
@@ -199,7 +205,7 @@ describe('/party-edit', () => {
     });
     mocks.selectRows = [[{ id: 'party-new', name: 'New Horizon', shortName: 'NH' }]];
 
-    await editPartyCommand.execute(interaction);
+    await editPartyExecute(interaction);
 
     expect(mocks.refreshPartyJoinMessage).toHaveBeenCalledWith(interaction.client);
   });
@@ -215,7 +221,7 @@ describe('/party-edit', () => {
     });
     mocks.selectRows = [[{ id: 'party-new', name: 'New Horizon', shortName: 'NH' }]];
 
-    await editPartyCommand.execute(interaction);
+    await editPartyExecute(interaction);
 
     expect(mocks.refreshPartyJoinMessage).not.toHaveBeenCalled();
   });

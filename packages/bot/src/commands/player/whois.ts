@@ -1,7 +1,4 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, ilike, and, isNull } from 'drizzle-orm';
 import { db } from '../../db.js';
 import {
@@ -15,7 +12,6 @@ import {
 } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 
 const HEALTH_DISPLAY: Record<string, string> = {
   healthy: '\u{1F7E2} Healthy',
@@ -25,19 +21,7 @@ const HEALTH_DISPLAY: Record<string, string> = {
   deceased: '\u{26B0}\u{FE0F} Deceased',
 };
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('whois')
-    .setDescription('Reverse-lookup a player by their in-character name')
-    .addStringOption((opt) =>
-      opt
-        .setName('name')
-        .setDescription('The character name to search for')
-        .setRequired(true)
-        .setMaxLength(128),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const searchName = interaction.options.getString('name', true).trim();
@@ -199,8 +183,5 @@ const command: Command = {
       fields,
     });
 
-    await interaction.editReply({ embeds: [embed] });
-  },
-};
-
-export default command;
+  await interaction.editReply({ embeds: [embed] });
+}

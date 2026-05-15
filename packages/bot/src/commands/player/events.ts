@@ -1,14 +1,10 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, and, desc, inArray, ne, type SQL } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog } from '@hansard/db';
 import { PlayerEventType } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 
 const EVENT_LIMIT = 10;
 const PUBLIC_PLAYER_EVENT_TYPES: PlayerEventType[] = [
@@ -37,30 +33,12 @@ const EVENT_TYPE_EMOJI: Record<string, string> = {
 };
 
 // Build slash-command choices from the PlayerEventType enum so they stay in sync.
-const TYPE_CHOICES = Object.values(PlayerEventType).map((value) => ({
+export const TYPE_CHOICES = Object.values(PlayerEventType).map((value) => ({
   name: value.replace(/_/g, ' '),
   value,
 })) as { name: string; value: string }[];
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('player-events')
-    .setDescription('Show recent events from a player\'s log')
-    .addUserOption((opt) =>
-      opt
-        .setName('user')
-        .setDescription('The player to look up')
-        .setRequired(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('type')
-        .setDescription('Filter by event type (optional)')
-        .setRequired(false)
-        .addChoices(...TYPE_CHOICES),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const targetUser = interaction.options.getUser('user', true);
@@ -145,8 +123,5 @@ const command: Command = {
       ],
     });
 
-    await interaction.editReply({ embeds: [embed] });
-  },
-};
-
-export default command;
+  await interaction.editReply({ embeds: [embed] });
+}

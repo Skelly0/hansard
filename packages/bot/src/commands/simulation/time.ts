@@ -12,6 +12,7 @@ import { isStaff } from '../../utils/permissions.js';
 import { postObituaryToGraveyard, type GraveyardPostResult } from '../../utils/graveyard.js';
 import { postGameEventsEmbed, type GameEventsPostResult } from '../../utils/gameEventsChannel.js';
 import type { Command } from '../../client.js';
+import { execute as eventsExecute, TYPE_CHOICES as EVENT_TYPE_CHOICES } from './events.js';
 
 type DeathAilment = {
   condition: string;
@@ -166,6 +167,33 @@ const command: Command = {
             .setMaxValue(25)
             .setRequired(false),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('events')
+        .setDescription('Show a global timeline of recent player events')
+        .addStringOption((opt) =>
+          opt
+            .setName('type')
+            .setDescription('Filter by event type')
+            .setRequired(false)
+            .addChoices(...EVENT_TYPE_CHOICES),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('limit')
+            .setDescription('Number of events (default 25, max 100)')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(100),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('since')
+            .setDescription('Sim date floor (e.g. 1925-06-01) — events on/after this date')
+            .setRequired(false)
+            .setMaxLength(32),
+        ),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -179,6 +207,7 @@ const command: Command = {
       case 'unpause': await handlePauseToggle(interaction, false); break;
       case 'npc-house': await handleNpcHouseToggle(interaction); break;
       case 'history': await handleHistory(interaction); break;
+      case 'events': await eventsExecute(interaction); break;
     }
   },
 };

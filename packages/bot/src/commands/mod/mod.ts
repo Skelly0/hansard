@@ -10,6 +10,9 @@ import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { postModLog } from '../../utils/modLog.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
+import { execute as appealExecute } from './appeal.js';
+import { execute as listExecute } from './list.js';
+import { execute as statsExecute } from './stats.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -728,6 +731,52 @@ const command: Command = {
         .addStringOption((opt) =>
           opt.setName('reason').setDescription('Reviewer note explaining the decision').setRequired(true).setMaxLength(1000),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('appeal')
+        .setDescription('Review the appeal on a moderation action (staff only)')
+        .addStringOption((opt) =>
+          opt
+            .setName('action')
+            .setDescription('Action ID (full UUID or first 8+ characters)')
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('decision')
+            .setDescription('Appeal decision')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Approved', value: 'approved' },
+              { name: 'Denied', value: 'denied' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('list')
+        .setDescription('Browse moderation actions with optional filters (staff only)')
+        .addStringOption((opt) =>
+          opt
+            .setName('type')
+            .setDescription('Filter by action type')
+            .addChoices(
+              { name: 'Verbal Warning', value: 'verbal_warning' },
+              { name: 'Formal Warning', value: 'formal_warning' },
+              { name: 'Mute', value: 'mute' },
+              { name: 'Temporary Suspension', value: 'temporary_suspension' },
+              { name: 'Permanent Ban', value: 'permanent_ban' },
+            ),
+        )
+        .addBooleanOption((opt) =>
+          opt.setName('active').setDescription('Only show active actions'),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('stats')
+        .setDescription('Summary stats for moderation actions (staff only)'),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -763,6 +812,12 @@ const command: Command = {
         return handleAppealList(interaction);
       case 'appeal-review':
         return handleAppealReview(interaction);
+      case 'appeal':
+        return appealExecute(interaction);
+      case 'list':
+        return listExecute(interaction);
+      case 'stats':
+        return statsExecute(interaction);
       default:
         await interaction.reply({ embeds: [errorEmbed(`Unknown subcommand: ${subcommand}`)], ephemeral: true });
     }

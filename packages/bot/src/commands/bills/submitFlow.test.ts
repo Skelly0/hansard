@@ -132,6 +132,7 @@ function makeInteraction(modalSubmit: ModalSubmitStub) {
   return {
     options: {
       getSubcommand: vi.fn().mockReturnValue('submit'),
+      getSubcommandGroup: vi.fn().mockReturnValue(null),
       getString: vi.fn((name: string) => {
         if (name === 'title') return 'Transit Reform Act';
         return null;

@@ -549,7 +549,7 @@ export class TicketService {
     // guard, assigning a ticket to an ordinary player would silently grant
     // that player ticket visibility (getTicket / listTickets treat the
     // assignee as a permitted viewer). CLAUDE.md is explicit that
-    // `/ticket-assign` must validate this — the bot already does so locally,
+    // `/ticket assign` must validate this — the bot already does so locally,
     // and the rule lives here so any caller (web API, future bot rewrites)
     // benefits from the same check.
     const [target] = await this.db

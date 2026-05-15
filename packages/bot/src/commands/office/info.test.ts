@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import officeInfoCommand from './info.js';
+import { execute as officeInfoExecute } from './info.js';
 
 const mocks = vi.hoisted(() => ({
   isStaff: vi.fn(),
@@ -78,7 +78,7 @@ function embedFieldText(interaction: ReturnType<typeof fakeInteraction>) {
     .join('\n');
 }
 
-describe('/office-info', () => {
+describe('/office info', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.isStaff.mockResolvedValue(false);
@@ -92,7 +92,7 @@ describe('/office-info', () => {
   it('hides permission strings from non-staff users', async () => {
     const interaction = fakeInteraction();
 
-    await officeInfoCommand.execute(interaction);
+    await officeInfoExecute(interaction);
 
     const text = embedFieldText(interaction);
     expect(text).not.toContain('Permissions');
@@ -103,7 +103,7 @@ describe('/office-info', () => {
     mocks.isStaff.mockResolvedValue(true);
     const interaction = fakeInteraction();
 
-    await officeInfoCommand.execute(interaction);
+    await officeInfoExecute(interaction);
 
     const text = embedFieldText(interaction);
     expect(text).toContain('Permissions');

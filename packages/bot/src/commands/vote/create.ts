@@ -39,6 +39,26 @@ import {
   buildLinkedBillSourceDisplay,
   type BillSourceDisplay,
 } from './billSourceDisplay.js';
+import { dispatchSubcommand } from '../../utils/parentCommand.js';
+import * as cast from './cast.js';
+import * as close from './close.js';
+import * as open from './open.js';
+import * as list from './list.js';
+import * as info from './info.js';
+import * as results from './results.js';
+import * as tally from './tally.js';
+import * as certify from './certify.js';
+import * as cancel from './cancel.js';
+import * as history from './history.js';
+import * as schedule from './schedule.js';
+import * as eligibility from './eligibility.js';
+import * as rounds from './rounds.js';
+import * as runoff from './runoff.js';
+import * as turnout from './turnout.js';
+import * as elect from './elect.js';
+import * as candidateSubmit from './candidateSubmit.js';
+import * as candidateList from './candidateList.js';
+import * as npcConfirm from './npcConfirm.js';
 
 const CHANCELLOR_ONLY_TYPES = new Set([
   'legislative_vote',
@@ -84,7 +104,7 @@ export function buildReactionVoteInstructions(method: string): string {
     return `React with ${REACTION_EMOJI.YEA} for **Yea**, ${REACTION_EMOJI.NAY} for **Nay**, or ${REACTION_EMOJI.ABSTAIN} for **Abstain**.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.`;
   }
 
-  return 'React with the number matching your preferred candidate. Use `/candidate-list` to see candidates by position.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.\n*Note: candidates must be registered before votes are cast -- restart the vote if you add candidates after.*';
+  return 'React with the number matching your preferred candidate. Use `/vote candidate-list` to see candidates by position.\nReactions stay visible as the public voting record. If you change your vote, remove your old reaction and add the new one.\n*Note: candidates must be registered before votes are cast -- restart the vote if you add candidates after.*';
 }
 
 function buildVoteCreateModal(
@@ -155,7 +175,7 @@ export function buildLegislativeVotePublicEmbeds(options: {
       options.useReactions ? '**This is a public reaction vote.**' : '**A legislative vote has been opened.**',
       options.useReactions
         ? options.reactionInstructions
-        : 'Players can cast ballots with `/vote-cast` or the usual vote controls.',
+        : 'Players can cast ballots with `/vote cast` or the usual vote controls.',
     ]
       .filter(Boolean)
       .join('\n'),
@@ -250,42 +270,471 @@ const command: Command = {
               { name: 'Buttons (private/ephemeral)', value: 'buttons' },
             ),
         ),
-    ) as SlashCommandBuilder,
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('cast')
+        .setDescription('Cast a ballot in an election')
+        .addStringOption((opt) =>
+          opt
+            .setName('election_id')
+            .setDescription('The election ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('close')
+        .setDescription('Close voting on an election (Chancellor/staff)')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('open')
+        .setDescription('Open an election for voting (Chancellor/staff)')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('list')
+        .setDescription('Browse votes and elections — past or present')
+        .addStringOption((opt) =>
+          opt
+            .setName('scope')
+            .setDescription('Active, past, or all (default: all)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Active (anything in motion)', value: 'active' },
+              { name: 'Past (certified or cancelled)', value: 'past' },
+              { name: 'All', value: 'all' },
+            ),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('status')
+            .setDescription('Filter by exact status (overrides scope)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Draft', value: 'draft' },
+              { name: 'Nominations Open', value: 'nominations_open' },
+              { name: 'Nominations Closed', value: 'nominations_closed' },
+              { name: 'Voting Open', value: 'voting_open' },
+              { name: 'Voting Closed', value: 'voting_closed' },
+              { name: 'Tallied', value: 'tallied' },
+              { name: 'Runoff Needed', value: 'runoff_needed' },
+              { name: 'NPC Pending', value: 'npc_pending' },
+              { name: 'Certified', value: 'certified' },
+              { name: 'Cancelled', value: 'cancelled' },
+            ),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('type')
+            .setDescription('Filter by election type')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Legislative Vote', value: 'legislative_vote' },
+              { name: 'Position Election', value: 'position_election' },
+              { name: 'Appointment Confirmation', value: 'appointment_confirmation' },
+              { name: 'General Election', value: 'general_election' },
+              { name: 'Referendum', value: 'referendum' },
+              { name: 'Confidence Vote', value: 'confidence_vote' },
+              { name: 'Constitutional Amendment', value: 'constitutional_amendment' },
+              { name: 'Party Primary', value: 'party_primary' },
+              { name: 'Custom', value: 'custom' },
+            ),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('range')
+            .setDescription('Limit to votes created within a time window')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Last 7 days', value: '7' },
+              { name: 'Last 30 days', value: '30' },
+              { name: 'Last 90 days', value: '90' },
+              { name: 'All time', value: 'all' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('info')
+        .setDescription('Show details for an election')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('results')
+        .setDescription('Show the results of an election')
+        .addStringOption((opt) =>
+          opt
+            .setName('election_id')
+            .setDescription('The election ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('tally')
+        .setDescription('Force-tally an election (staff)')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('certify')
+        .setDescription('Certify a tallied election result (staff)')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('cancel')
+        .setDescription('Cancel a vote or election (Chancellor/staff)')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('reason')
+            .setDescription('Optional reason to record in linked bill history')
+            .setRequired(false)
+            .setMaxLength(500),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('history')
+        .setDescription('Browse completed votes (certified or cancelled)')
+        .addStringOption((opt) =>
+          opt
+            .setName('range')
+            .setDescription('Time window (default: last 30 days)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Last 7 days', value: '7' },
+              { name: 'Last 30 days', value: '30' },
+              { name: 'Last 90 days', value: '90' },
+              { name: 'Last year', value: '365' },
+              { name: 'All time', value: 'all' },
+            ),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('type')
+            .setDescription('Filter by election type')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Legislative Vote', value: 'legislative_vote' },
+              { name: 'Position Election', value: 'position_election' },
+              { name: 'Appointment Confirmation', value: 'appointment_confirmation' },
+              { name: 'General Election', value: 'general_election' },
+              { name: 'Referendum', value: 'referendum' },
+              { name: 'Confidence Vote', value: 'confidence_vote' },
+              { name: 'Constitutional Amendment', value: 'constitutional_amendment' },
+              { name: 'Party Primary', value: 'party_primary' },
+              { name: 'Custom', value: 'custom' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('schedule')
+        .setDescription('Schedule a future vote/election (Chancellor/staff)')
+        .addStringOption((opt) =>
+          opt
+            .setName('title')
+            .setDescription('Title of the vote')
+            .setRequired(true)
+            .setMaxLength(256),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('type')
+            .setDescription('Type of vote')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Referendum', value: 'referendum' },
+              { name: 'Confidence Vote', value: 'confidence_vote' },
+              { name: 'Party Primary', value: 'party_primary' },
+              { name: 'Custom Vote', value: 'custom' },
+              { name: 'Position Election (Chancellor)', value: 'position_election' },
+              { name: 'Appointment Confirmation (Chancellor)', value: 'appointment_confirmation' },
+              { name: 'General Election', value: 'general_election' },
+              { name: 'Constitutional Amendment', value: 'constitutional_amendment' },
+            ),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('method')
+            .setDescription('Voting method')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Yea / Nay / Abstain', value: 'yea_nay_abstain' },
+              { name: 'First Past the Post', value: 'fptp' },
+              { name: 'Ranked Choice (Instant Runoff)', value: 'ranked_choice' },
+              { name: 'Approval Voting', value: 'approval' },
+              { name: 'Two-Round Runoff', value: 'two_round_runoff' },
+              { name: 'Exhaustive Ballot', value: 'exhaustive_ballot' },
+              { name: 'Single Transferable Vote', value: 'stv' },
+              { name: 'Proportional Representation', value: 'proportional' },
+            ),
+        )
+        .addNumberOption((opt) =>
+          opt
+            .setName('opens-in-hours')
+            .setDescription('Hours from now until voting opens (e.g. 24 = tomorrow)')
+            .setRequired(true)
+            .setMinValue(0.25)
+            .setMaxValue(24 * 365),
+        )
+        .addNumberOption((opt) =>
+          opt
+            .setName('duration-hours')
+            .setDescription(`How long voting stays open after it opens (default ${DEFAULT_VOTE_DURATION_HOURS})`)
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(24 * 365),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('description')
+            .setDescription('What is being voted on')
+            .setRequired(false)
+            .setMaxLength(2000),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('majority')
+            .setDescription('Majority type (yea/nay only)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Simple Majority', value: 'simple' },
+              { name: 'Absolute Majority', value: 'absolute' },
+              { name: 'Supermajority (2/3)', value: 'supermajority' },
+              { name: 'Unanimous', value: 'unanimous' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('eligibility')
+        .setDescription('Check if you can vote in an election')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('rounds')
+        .setDescription('Show round-by-round results for an election')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('runoff')
+        .setDescription('Spawn a runoff round for an election (Chancellor/staff)')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('turnout')
+        .setDescription('Show live turnout stats for an election')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('elect')
+        .setDescription('Create a position election (Chancellor only)')
+        .addStringOption((opt) =>
+          opt
+            .setName('office')
+            .setDescription('The office to elect for (e.g. "Governor of Northshire")')
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('method')
+            .setDescription('Voting method (default: fptp)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'First Past the Post', value: 'fptp' },
+              { name: 'Ranked Choice (IRV)', value: 'ranked_choice' },
+              { name: 'Two-Round Runoff', value: 'two_round_runoff' },
+              { name: 'Exhaustive Ballot', value: 'exhaustive_ballot' },
+              { name: 'Approval Voting', value: 'approval' },
+              { name: 'STV (Multi-Seat)', value: 'stv' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('candidate-submit')
+        .setDescription('Register yourself as a candidate in an election')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('statement')
+            .setDescription('Optional candidate statement / manifesto')
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('candidate-list')
+        .setDescription('List candidates registered in an election')
+        .addStringOption((opt) =>
+          opt
+            .setName('election')
+            .setDescription('Election title or ID')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('npc-confirm')
+        .setDescription('Enter NPC house confirmation for an election (staff only)')
+        .addStringOption((opt) =>
+          opt
+            .setName('election_id')
+            .setDescription('The election ID')
+            .setRequired(true),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('yea')
+            .setDescription('Number of NPC yea votes')
+            .setRequired(true)
+            .setMinValue(0),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('nay')
+            .setDescription('Number of NPC nay votes')
+            .setRequired(true)
+            .setMinValue(0),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('abstain')
+            .setDescription('Number of NPC abstain votes')
+            .setRequired(true)
+            .setMinValue(0),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('notes')
+            .setDescription('Optional notes about the NPC decision')
+            .setRequired(false),
+        ),
+    ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-    if (sub !== 'create') return;
-
-    const electionType = interaction.options.getString('type', true);
-    const method = interaction.options.getString('method', true);
-    const majority = interaction.options.getString('majority') ?? 'simple';
-    const iface = getRequestedVoteInterface(interaction.options.getString('interface'), method);
-
-    // Reject reaction mode early for incompatible methods.
-    // (Only `yea_nay_abstain` and `fptp` map cleanly to a small set of emoji.)
-    if (iface === 'reactions' && !REACTION_COMPATIBLE_METHODS.includes(method as never)) {
-      await interaction.reply({
-        embeds: [
-          errorEmbed(
-            `Reaction-mode voting is only supported for **Yea/Nay/Abstain** and **First Past the Post**. Method \`${method}\` requires the buttons interface.`,
-          ),
-        ],
-        ephemeral: true,
-      });
-      return;
-    }
-
-    if (electionType === 'legislative_vote') {
-      await handleLegislativeBillVoteCreate(interaction, { method, majority, iface });
-      return;
-    }
-
-    // Show modal for title and description. Carry the iface choice through customId.
-    await interaction.showModal(
-      buildVoteCreateModal(`vote-create:${electionType}:${method}:${majority}:${iface}`),
-    );
+    await dispatchSubcommand(interaction, {
+      create: { execute: handleCreateSubcommand },
+      cast,
+      close,
+      open,
+      list,
+      info,
+      results,
+      tally,
+      certify,
+      cancel,
+      history,
+      schedule,
+      eligibility,
+      rounds,
+      runoff,
+      turnout,
+      elect,
+      'candidate-submit': candidateSubmit,
+      'candidate-list': candidateList,
+      'npc-confirm': npcConfirm,
+    });
   },
 };
+
+async function handleCreateSubcommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const electionType = interaction.options.getString('type', true);
+  const method = interaction.options.getString('method', true);
+  const majority = interaction.options.getString('majority') ?? 'simple';
+  const iface = getRequestedVoteInterface(interaction.options.getString('interface'), method);
+
+  // Reject reaction mode early for incompatible methods.
+  // (Only `yea_nay_abstain` and `fptp` map cleanly to a small set of emoji.)
+  if (iface === 'reactions' && !REACTION_COMPATIBLE_METHODS.includes(method as never)) {
+    await interaction.reply({
+      embeds: [
+        errorEmbed(
+          `Reaction-mode voting is only supported for **Yea/Nay/Abstain** and **First Past the Post**. Method \`${method}\` requires the buttons interface.`,
+        ),
+      ],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (electionType === 'legislative_vote') {
+    await handleLegislativeBillVoteCreate(interaction, { method, majority, iface });
+    return;
+  }
+
+  // Show modal for title and description. Carry the iface choice through customId.
+  await interaction.showModal(
+    buildVoteCreateModal(`vote-create:${electionType}:${method}:${majority}:${iface}`),
+  );
+}
 
 async function handleLegislativeBillVoteCreate(
   interaction: ChatInputCommandInteraction,
@@ -787,7 +1236,7 @@ export async function handleVoteCreateModal(
 
   // Seed reactions. For yea_nay_abstain we add all three immediately; for FPTP
   // candidates are registered separately and reactions are seeded later via
-  // /candidate-submit completion or a follow-up command.
+  // /vote candidate-submit completion or a follow-up command.
   if (method === 'yea_nay_abstain') {
     try {
       await posted.react(REACTION_EMOJI.YEA);
@@ -798,7 +1247,7 @@ export async function handleVoteCreateModal(
       // Non-fatal — the election is recorded; staff can re-seed manually.
     }
   }
-  // FPTP: candidate emoji are seeded by the candidate-list flow once
+  // FPTP: candidate emoji are seeded by the vote candidate-list flow once
   // candidates are registered (see candidateSubmit.ts — TODO follow-up).
 
   await interaction.editReply({

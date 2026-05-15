@@ -1,12 +1,8 @@
-import {
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-} from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, and, isNull, isNotNull, asc } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, factions, parties, offices, officeHolders } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
-import type { Command } from '../../client.js';
 
 // Office tier ranking — lower number = higher tier (used to pick top-tier office).
 const TIER_RANK: Record<string, number> = {
@@ -21,26 +17,7 @@ function tierRank(tier: string): number {
   return TIER_RANK[tier] ?? 99;
 }
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('roster')
-    .setDescription('List active players, optionally filtered by faction or party')
-    .addStringOption((opt) =>
-      opt
-        .setName('faction')
-        .setDescription('Filter by faction name (case-insensitive)')
-        .setRequired(false)
-        .setMaxLength(128),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('party')
-        .setDescription('Filter by party name (case-insensitive)')
-        .setRequired(false)
-        .setMaxLength(128),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply();
 
     const factionFilter = interaction.options.getString('faction')?.trim().toLowerCase();
@@ -168,8 +145,5 @@ const command: Command = {
         : undefined,
     });
 
-    await interaction.editReply({ embeds: [embed] });
-  },
-};
-
-export default command;
+  await interaction.editReply({ embeds: [embed] });
+}

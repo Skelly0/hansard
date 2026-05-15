@@ -1,12 +1,10 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 import { cancelVote } from './cancelFlow.js';
 
@@ -30,30 +28,12 @@ function buildCancelDescription(result: Awaited<ReturnType<typeof cancelVote>>):
 }
 
 /**
- * /vote-cancel election:<title-or-id> — cancels a vote.
+ * /vote cancel election:<title-or-id> — cancels a vote.
  *
  * For linked legislative votes, the linked bill is moved back to submitted
  * and its player-vote fields are cleared in the same transaction.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-cancel')
-    .setDescription('Cancel a vote or election (Chancellor/staff)')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('reason')
-        .setDescription('Optional reason to record in linked bill history')
-        .setRequired(false)
-        .setMaxLength(500),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const member = interaction.member as GuildMember | null;
@@ -114,7 +94,4 @@ const command: Command = {
         // Non-critical announcement.
       }
     }
-  },
-};
-
-export default command;
+}

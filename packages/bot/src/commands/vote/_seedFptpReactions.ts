@@ -9,10 +9,10 @@ import { db } from '../../db.js';
  * a reaction-mode vote message.
  *
  * Two trigger sites:
- *   A. /candidate-submit  — top up the next emoji when a candidate registers
+ *   A. /vote candidate-submit — top up the next emoji when a candidate registers
  *      while the vote message already exists. Responsive UX so the embed
  *      grows reactions as nominations come in.
- *   B. /vote-open          — at the status flip to `voting_open`, walk every
+ *   B. /vote open             — at the status flip to `voting_open`, walk every
  *      non-withdrawn candidate (in registeredAt order, matching the cast
  *      handler in events/messageReactionAdd.ts) and seed reactions 1..N.
  *      Idempotent because Discord drops duplicate-add reactions on the

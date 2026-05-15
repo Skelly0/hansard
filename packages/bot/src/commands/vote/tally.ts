@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
@@ -10,26 +9,14 @@ import { errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import { buildResultsEmbed } from './results.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-tally election:<title-or-id> — staff force-tally an election.
+ * /vote tally election:<title-or-id> — staff force-tally an election.
  *
  * Mirrors VoteService.tallyVotes.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-tally')
-    .setDescription('Force-tally an election (staff)')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const member = interaction.member as GuildMember | null;
@@ -66,7 +53,7 @@ const command: Command = {
       await interaction.editReply({
         embeds: [
           errorEmbed(
-            `Election must be in \`voting_closed\` status to tally (currently \`${election.status}\`). Run \`/vote-close\` first.`,
+            `Election must be in \`voting_closed\` status to tally (currently \`${election.status}\`). Run \`/vote close\` first.`,
           ),
         ],
       });
@@ -90,8 +77,7 @@ const command: Command = {
     });
 
     await interaction.editReply({ embeds: [embed] });
-  },
-};
+}
 
 async function getCandidateNames(electionId: string): Promise<Record<string, string>> {
   const rows = await db
@@ -111,5 +97,3 @@ async function getCandidateNames(electionId: string): Promise<Record<string, str
     ]),
   );
 }
-
-export default command;

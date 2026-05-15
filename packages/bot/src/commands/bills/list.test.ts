@@ -19,9 +19,9 @@ vi.mock('../../utils/pagination.js', () => ({
   createPaginatedEmbed: mocks.createPaginatedEmbed,
 }));
 
-import command from './list.js';
+import { execute } from './list.js';
 
-describe('/bill-list', () => {
+describe('/bill list', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.select.mockReturnValue({ from: mocks.from });
@@ -49,7 +49,7 @@ describe('/bill-list', () => {
       user: { id: 'discord-user-1' },
     };
 
-    await command.execute(interaction as any);
+    await execute(interaction as any);
 
     expect(mocks.select).toHaveBeenCalledWith(expect.objectContaining({
       id: expect.anything(),

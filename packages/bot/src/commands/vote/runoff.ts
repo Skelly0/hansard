@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type GuildMember,
 } from 'discord.js';
@@ -9,11 +8,10 @@ import { DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
-import type { Command } from '../../client.js';
 import { findElectionByReference } from './_electionReference.js';
 
 /**
- * /vote-runoff election:<title-or-id> — Chancellor/staff spawns a runoff round.
+ * /vote runoff election:<title-or-id> — Chancellor/staff spawns a runoff round.
  *
  * Mirrors VoteService.createRunoff. Selects qualifying candidates from the
  * existing `results.finalTallies`, creates a child election with
@@ -26,18 +24,7 @@ import { findElectionByReference } from './_electionReference.js';
  * (eliminate-lowest) and two_round_runoff (specific top-N rules), use the
  * API endpoint instead. TODO if/when strategies move to @hansard/shared.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-runoff')
-    .setDescription('Spawn a runoff round for an election (Chancellor/staff)')
-    .addStringOption((opt) =>
-      opt
-        .setName('election')
-        .setDescription('Election title or ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const member = interaction.member as GuildMember | null;
@@ -164,7 +151,7 @@ const command: Command = {
       embeds: [
         successEmbed(
           'Runoff Created',
-          `**${runoff.title}** (round ${runoffRound}) created with ${originalCandidates.length} candidate(s). Use \`/vote-open\` to open it for voting.`,
+          `**${runoff.title}** (round ${runoffRound}) created with ${originalCandidates.length} candidate(s). Use \`/vote open\` to open it for voting.`,
         ),
       ],
     });
@@ -183,7 +170,4 @@ const command: Command = {
         // Non-critical announcement
       }
     }
-  },
-};
-
-export default command;
+}

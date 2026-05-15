@@ -4,16 +4,18 @@ import { createEmbed, type System, type EmbedField } from '../utils/embeds.js';
 import { isStaff } from '../utils/permissions.js';
 
 const SYSTEM_BY_PREFIX: Array<{ match: (name: string) => boolean; system: System; label: string }> = [
-  { match: (n) => n.startsWith('bill') || n === 'npc-bill', system: 'bills', label: 'Bills' },
-  { match: (n) => n.startsWith('vote') || n.startsWith('candidate') || n === 'elect' || n === 'npc-confirm', system: 'voting', label: 'Voting & Elections' },
-  { match: (n) => n.startsWith('ticket'), system: 'tickets', label: 'Tickets' },
-  { match: (n) => n.startsWith('doc'), system: 'bills', label: 'Documents' },
-  { match: (n) => n.startsWith('favour'), system: 'favours', label: 'Favours' },
-  { match: (n) => n.startsWith('office') || n === 'appoint' || n === 'dismiss' || n === 'sync-roles', system: 'offices', label: 'Offices' },
-  { match: (n) => n.startsWith('party'), system: 'offices', label: 'Parties' },
-  { match: (n) => n === 'character' || n === 'lookup' || n === 'history' || n === 'whois' || n === 'roster' || n.startsWith('player'), system: 'players', label: 'Players' },
-  { match: (n) => n === 'ailment' || n === 'kill' || n === 'heal' || n.startsWith('time'), system: 'simulation', label: 'Simulation' },
-  { match: (n) => n.startsWith('mod'), system: 'moderation', label: 'Moderation' },
+  { match: (n) => n === 'bill', system: 'bills', label: 'Bills' },
+  { match: (n) => n === 'vote', system: 'voting', label: 'Voting & Elections' },
+  { match: (n) => n === 'ticket', system: 'tickets', label: 'Tickets' },
+  { match: (n) => n === 'doc', system: 'bills', label: 'Documents' },
+  { match: (n) => n === 'favour', system: 'favours', label: 'Favours' },
+  { match: (n) => n === 'office' || n === 'sync-roles', system: 'offices', label: 'Offices' },
+  { match: (n) => n === 'party', system: 'offices', label: 'Parties' },
+  { match: (n) => n === 'character' || n === 'player', system: 'players', label: 'Players' },
+  { match: (n) => n === 'time', system: 'simulation', label: 'Simulation' },
+  { match: (n) => n === 'mod', system: 'moderation', label: 'Moderation' },
+  { match: (n) => n === 'faction', system: 'offices', label: 'Factions' },
+  { match: (n) => n === 'phone', system: 'simulation', label: 'Phones' },
   { match: (n) => n === 'ping' || n === 'help' || n === 'dashboard', system: 'simulation', label: 'Utility' },
 ];
 

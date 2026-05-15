@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import command from './roster.js';
+import { execute as rosterExecute } from './roster.js';
 
 const mocks = vi.hoisted(() => ({
   select: vi.fn(),
@@ -49,7 +49,7 @@ function makeOfficeSelect() {
   };
 }
 
-describe('/roster', () => {
+describe('/player roster', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -68,7 +68,7 @@ describe('/roster', () => {
     });
 
     const editReply = vi.fn();
-    await command.execute({
+    await rosterExecute({
       deferReply: vi.fn(),
       editReply,
       options: { getString: vi.fn().mockReturnValue(undefined) },

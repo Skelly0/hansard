@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { eq } from 'drizzle-orm';
@@ -7,7 +6,6 @@ import { candidates, elections, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
-import type { Command } from '../../client.js';
 
 /**
  * /vote results <election_id> — show election results.
@@ -15,18 +13,7 @@ import type { Command } from '../../client.js';
  * Displays the tally, winner(s), and round-by-round breakdown
  * for multi-round elections. Respects sealed results.
  */
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-results')
-    .setDescription('Show the results of an election')
-    .addStringOption((opt) =>
-      opt
-        .setName('election_id')
-        .setDescription('The election ID')
-        .setRequired(true),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const electionId = interaction.options.getString('election_id', true);
@@ -69,8 +56,7 @@ const command: Command = {
     });
 
     await interaction.editReply({ embeds: [embed] });
-  },
-};
+}
 
 /**
  * Build a results embed from election data.
@@ -204,5 +190,3 @@ async function getCandidateNames(electionId: string): Promise<Record<string, str
     ]),
   );
 }
-
-export default command;

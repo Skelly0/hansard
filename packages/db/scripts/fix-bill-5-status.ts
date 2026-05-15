@@ -1,6 +1,6 @@
 /**
  * One-shot data fix: mark Bill #B-005 (Public Safety Ordinance) as
- * `player_passed` so it can be enacted via `/bill-enact`.
+ * `player_passed` so it can be enacted via `/bill enact`.
  *
  * Context: B-005 went through three amendment votes (custom type, no
  * relatedBillId) but never had a `legislative_vote` created against it,

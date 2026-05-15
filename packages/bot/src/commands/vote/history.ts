@@ -1,5 +1,4 @@
 import {
-  SlashCommandBuilder,
   EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
@@ -8,12 +7,11 @@ import { db } from '../../db.js';
 import { elections } from '@hansard/db';
 import { createEmbed } from '../../utils/embeds.js';
 import { createPaginatedEmbed } from '../../utils/pagination.js';
-import type { Command } from '../../client.js';
 
 /**
- * /vote-history — alias-style shortcut for past, completed votes.
+ * /vote history — alias-style shortcut for past, completed votes.
  *
- * The full filter surface lives on /vote-list (scope/status/type/range);
+ * The full filter surface lives on /vote list (scope/status/type/range);
  * this command exists because "history" is what most users reach for when
  * they want to look up something that already happened. It defaults to
  * past statuses (certified, cancelled) and the last 30 days, but accepts
@@ -27,9 +25,9 @@ const PAST_STATUSES = ['certified', 'cancelled'];
 
 // "Past" deliberately doesn't include 'tallied'/'voting_closed' — those
 // are still in motion (awaiting NPC confirmation, awaiting certification).
-// Use /vote-list scope:active for those.
+// Use /vote list scope:active for those.
 
-const TYPE_CHOICES = [
+export const HISTORY_TYPE_CHOICES = [
   { name: 'Legislative Vote', value: 'legislative_vote' },
   { name: 'Position Election', value: 'position_election' },
   { name: 'Appointment Confirmation', value: 'appointment_confirmation' },
@@ -41,7 +39,7 @@ const TYPE_CHOICES = [
   { name: 'Custom', value: 'custom' },
 ];
 
-const RANGE_CHOICES = [
+export const HISTORY_RANGE_CHOICES = [
   { name: 'Last 7 days', value: '7' },
   { name: 'Last 30 days', value: '30' },
   { name: 'Last 90 days', value: '90' },
@@ -76,26 +74,7 @@ function describeOutcome(row: typeof elections.$inferSelect): string {
   return '—';
 }
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('vote-history')
-    .setDescription('Browse completed votes (certified or cancelled)')
-    .addStringOption((opt) =>
-      opt
-        .setName('range')
-        .setDescription('Time window (default: last 30 days)')
-        .setRequired(false)
-        .addChoices(...RANGE_CHOICES),
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName('type')
-        .setDescription('Filter by election type')
-        .setRequired(false)
-        .addChoices(...TYPE_CHOICES),
-    ) as SlashCommandBuilder,
-
-  async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply();
 
     const range = interaction.options.getString('range') ?? '30';
@@ -170,7 +149,7 @@ const command: Command = {
             '',
             ...lines,
             '',
-            'Use `/vote-info` with a title for full details, or `/vote-list` for active votes.',
+            'Use `/vote info` with a title for full details, or `/vote list` for active votes.',
           ].join('\n'),
           system: 'voting',
         }),
@@ -178,7 +157,4 @@ const command: Command = {
     }
 
     await createPaginatedEmbed({ interaction, pages });
-  },
-};
-
-export default command;
+}

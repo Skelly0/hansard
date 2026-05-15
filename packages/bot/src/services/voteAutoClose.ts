@@ -101,7 +101,7 @@ export async function closeDueVotes(
       }
 
       // Legislative votes: auto-tally so the linked bill transitions out of
-      // `voting`. Without this, /bill-enact rejects bills whose votes closed.
+      // `voting`. Without this, /bill enact rejects bills whose votes closed.
       if (
         options.tallyElection
         && updated.type === 'legislative_vote'

@@ -1,19 +1,53 @@
-import { PermissionFlagsBits } from 'discord.js';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  isStaff: vi.fn(),
+}));
 
 vi.mock('../../db.js', () => ({
   db: {},
 }));
 
-import leaderboardCommand from './leaderboard.js';
+vi.mock('../../utils/permissions.js', () => ({
+  isStaff: mocks.isStaff,
+}));
 
-describe('/favour-leaderboard', () => {
-  it('is restricted to staff-capable members by default', () => {
-    const json = leaderboardCommand.data.toJSON();
+import favourCommand from './favour.js';
+import { execute } from './leaderboard.js';
 
-    expect(json.description).toContain('staff only');
-    expect(json.default_member_permissions).toBe(
-      PermissionFlagsBits.ManageGuild.toString(),
-    );
+describe('/favour leaderboard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('is registered as a subcommand under /favour with staff-only description', () => {
+    const json = favourCommand.data.toJSON();
+
+    const leaderboardSub = (json.options ?? []).find(
+      (opt: any) => opt.name === 'leaderboard',
+    ) as { description?: string } | undefined;
+
+    expect(leaderboardSub).toBeDefined();
+    expect(leaderboardSub?.description).toContain('staff only');
+  });
+
+  it('rejects non-staff callers at runtime', async () => {
+    mocks.isStaff.mockResolvedValue(false);
+
+    const editReply = vi.fn();
+    const interaction = {
+      member: { roles: { cache: new Map() } },
+      deferReply: vi.fn(),
+      editReply,
+      options: { getString: () => null },
+    };
+
+    await execute(interaction as any);
+
+    expect(mocks.isStaff).toHaveBeenCalled();
+    expect(editReply).toHaveBeenCalledTimes(1);
+    // Couple to "is there a staff-related message somewhere in the reply"
+    // rather than to the embed-helper's internal shape.
+    expect(JSON.stringify(editReply.mock.calls[0])).toMatch(/staff/i);
   });
 });

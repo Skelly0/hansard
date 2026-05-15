@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import command from './reply.js';
+import { execute } from './reply.js';
 
 const mocks = vi.hoisted(() => ({
   db: {
@@ -79,7 +79,7 @@ function makeInteraction() {
   };
 }
 
-describe('/ticket-reply', () => {
+describe('/ticket reply', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.db.select
@@ -105,7 +105,7 @@ describe('/ticket-reply', () => {
   it('notifies the ticket owner by DM when a public reply is posted by someone else', async () => {
     const interaction = makeInteraction();
 
-    await command.execute(interaction as any);
+    await execute(interaction as any);
 
     expect(mocks.usersFetch).toHaveBeenCalledWith(ownerPlayer.discordId);
     expect(mocks.ownerSend).toHaveBeenCalledTimes(1);

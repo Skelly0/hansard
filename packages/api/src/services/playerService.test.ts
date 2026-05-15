@@ -372,6 +372,15 @@ describe('createCharacter starting favours', () => {
           limit: vi.fn().mockResolvedValue(clockRows),
         }),
       })
+      // Reincarnation check: select existing player by discordId. Default
+      // to no row so the test takes the fresh-insert path.
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      })
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({

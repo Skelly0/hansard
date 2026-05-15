@@ -161,6 +161,7 @@ export const PlayerEventType = {
   DEATH_PENDING: 'death_pending',
   DEATH: 'death',
   REGISTRATION: 'registration',
+  REINCARNATION: 'reincarnation',
   NAME_CHANGE: 'name_change',
   SUSPENSION: 'suspension',
   UNSUSPENSION: 'unsuspension',

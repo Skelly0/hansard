@@ -17,7 +17,13 @@ import type {
   Ailment,
   ElectionConfig,
 } from '@hansard/shared';
-import { DEFAULT_SIMULATION_CURRENT_DATE, PlayerEventType, birthDateForAge } from '@hansard/shared';
+import {
+  DEFAULT_SIMULATION_CURRENT_DATE,
+  PlayerEventType,
+  birthDateForAge,
+  buildArchivedCharacter,
+  profileDataWithArchive,
+} from '@hansard/shared';
 import { grantStartingFactionFavours } from './favourService.js';
 
 // ============================================================
@@ -147,49 +153,128 @@ export async function createCharacter(db: Database, data: CreateCharacterInput):
   const favourBonus = calculateStartingAgeFavourBonus(data.startingAge);
 
   const player = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(players).values({
-      discordId: data.discordId,
-      discordUsername: data.discordUsername,
-      characterName: data.characterName,
-      characterBio: data.characterBio ?? null,
-      characterPortraitUrl: data.characterPortraitUrl ?? null,
-      startingAge: data.startingAge,
-      currentAge: data.startingAge,
-      birthDate,
-      factionId: data.factionId ?? null,
-      partyId: data.partyId ?? null,
-      profileData: data.profileData ?? null,
-      startingFavoursGranted: false,
-      isAlive: true,
-      isActive: true,
-      isStaff: false,
-      healthStatus: 'healthy',
-      ailments: [],
-    }).returning();
+    // Reincarnation: if the Discord user already has a row whose character
+    // is dead, archive the dead character and reset the row.
+    const [existing] = await tx
+      .select()
+      .from(players)
+      .where(eq(players.discordId, data.discordId))
+      .limit(1);
 
-    // Log registration event
+    let writtenRow: typeof players.$inferSelect;
+    let isReincarnation = false;
+    let previousCharacterName: string | null = null;
+
+    if (existing && existing.characterName && !existing.isAlive) {
+      isReincarnation = true;
+      previousCharacterName = existing.characterName;
+      const archive = buildArchivedCharacter(existing);
+      const baseProfileData = profileDataWithArchive(existing.profileData, archive);
+      const mergedProfileData = data.profileData
+        ? { ...baseProfileData, ...data.profileData, previousCharacters: baseProfileData.previousCharacters }
+        : baseProfileData;
+
+      const [updated] = await tx
+        .update(players)
+        .set({
+          discordUsername: data.discordUsername,
+          characterName: data.characterName,
+          characterBio: data.characterBio ?? null,
+          characterPortraitUrl: data.characterPortraitUrl ?? null,
+          startingAge: data.startingAge,
+          currentAge: data.startingAge,
+          birthDate,
+          factionId: data.factionId ?? null,
+          partyId: data.partyId ?? null,
+          deathDate: null,
+          causeOfDeath: null,
+          isAlive: true,
+          healthStatus: 'healthy',
+          ailments: [],
+          startingFavoursGranted: false,
+          isActive: true,
+          profileData: mergedProfileData,
+        })
+        .where(and(eq(players.id, existing.id), eq(players.isAlive, false)))
+        .returning();
+
+      if (!updated) {
+        throw new Error('CHARACTER_RACE_CONDITION');
+      }
+      writtenRow = updated;
+    } else if (existing && !existing.characterName) {
+      // OAuth placeholder row — fill it in.
+      const [updated] = await tx
+        .update(players)
+        .set({
+          discordUsername: data.discordUsername,
+          characterName: data.characterName,
+          characterBio: data.characterBio ?? null,
+          characterPortraitUrl: data.characterPortraitUrl ?? null,
+          startingAge: data.startingAge,
+          currentAge: data.startingAge,
+          birthDate,
+          factionId: data.factionId ?? null,
+          partyId: data.partyId ?? null,
+          profileData: data.profileData ?? existing.profileData ?? null,
+          startingFavoursGranted: false,
+          isActive: true,
+        })
+        .where(and(eq(players.id, existing.id), isNull(players.characterName)))
+        .returning();
+
+      if (!updated) {
+        throw new Error('CHARACTER_RACE_CONDITION');
+      }
+      writtenRow = updated;
+    } else {
+      const [created] = await tx.insert(players).values({
+        discordId: data.discordId,
+        discordUsername: data.discordUsername,
+        characterName: data.characterName,
+        characterBio: data.characterBio ?? null,
+        characterPortraitUrl: data.characterPortraitUrl ?? null,
+        startingAge: data.startingAge,
+        currentAge: data.startingAge,
+        birthDate,
+        factionId: data.factionId ?? null,
+        partyId: data.partyId ?? null,
+        profileData: data.profileData ?? null,
+        startingFavoursGranted: false,
+        isAlive: true,
+        isActive: true,
+        isStaff: false,
+        healthStatus: 'healthy',
+        ailments: [],
+      }).returning();
+      writtenRow = created;
+    }
+
     await tx.insert(playerEventLog).values({
-      playerId: created.id,
-      eventType: PlayerEventType.REGISTRATION,
-      description: `${data.characterName} registered as a new character (age ${data.startingAge})`,
+      playerId: writtenRow.id,
+      eventType: isReincarnation ? PlayerEventType.REINCARNATION : PlayerEventType.REGISTRATION,
+      description: isReincarnation
+        ? `${data.characterName} registered as the successor to ${previousCharacterName} (age ${data.startingAge})`
+        : `${data.characterName} registered as a new character (age ${data.startingAge})`,
       newValue: {
         characterName: data.characterName,
         startingAge: data.startingAge,
         factionId: data.factionId ?? null,
         partyId: data.partyId ?? null,
         favourBonus,
+        ...(isReincarnation ? { previousCharacterName } : {}),
       },
     });
 
-    const startingFavourGrant = await grantStartingFactionFavours(tx, created.id, data.factionId, favourBonus);
+    const startingFavourGrant = await grantStartingFactionFavours(tx, writtenRow.id, data.factionId, favourBonus);
     if (!startingFavourGrant) {
-      return created;
+      return writtenRow;
     }
 
     const [updated] = await tx
       .update(players)
       .set({ startingFavoursGranted: true })
-      .where(eq(players.id, created.id))
+      .where(eq(players.id, writtenRow.id))
       .returning();
 
     return updated;

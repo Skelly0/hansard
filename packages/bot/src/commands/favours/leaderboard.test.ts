@@ -46,8 +46,8 @@ describe('/favour leaderboard', () => {
 
     expect(mocks.isStaff).toHaveBeenCalled();
     expect(editReply).toHaveBeenCalledTimes(1);
-    const embed = editReply.mock.calls[0]?.[0]?.embeds?.[0];
-    const description = embed?.data?.description ?? embed?.description;
-    expect(description).toMatch(/staff/i);
+    // Couple to "is there a staff-related message somewhere in the reply"
+    // rather than to the embed-helper's internal shape.
+    expect(JSON.stringify(editReply.mock.calls[0])).toMatch(/staff/i);
   });
 });

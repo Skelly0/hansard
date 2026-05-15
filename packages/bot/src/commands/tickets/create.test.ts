@@ -141,6 +141,7 @@ function makeInteraction() {
   return {
     options: {
       getSubcommand: vi.fn().mockReturnValue('create'),
+      getSubcommandGroup: vi.fn().mockReturnValue(null),
     },
     user: {
       id: creator.discordId,

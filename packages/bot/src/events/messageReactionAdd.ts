@@ -189,7 +189,7 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     return;
   }
 
-  // Eligibility filters — mirror /vote-eligibility logic for faction/party.
+  // Eligibility filters — mirror /vote eligibility logic for faction/party.
   const config = election.config ?? {};
   if (config.eligibleFactions?.length) {
     if (!player.factionId || !config.eligibleFactions.includes(player.factionId)) {
@@ -235,7 +235,7 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
     console.error(`[reaction-vote] failed to record ballot for ${user.id} on ${election.id}:`, message);
     await notifyByDm(
       user,
-      `Your reaction on **${election.title}** was not recorded due to an internal error. Please try \`/vote-cast\` instead, or contact staff.`,
+      `Your reaction on **${election.title}** was not recorded due to an internal error. Please try \`/vote cast\` instead, or contact staff.`,
     );
     return;
   }

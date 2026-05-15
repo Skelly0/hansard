@@ -5,7 +5,7 @@ import { db } from '../../db.js';
 
 /**
  * Autocomplete handler for the `office` option on office commands
- * (`/appoint`, `/dismiss`, `/office-info`).
+ * (`/office appoint`, `/office dismiss`, `/office info`).
  *
  * Loads active offices from the DB, filters by what the user has typed
  * (case-insensitive substring match on `name`), and responds with up to

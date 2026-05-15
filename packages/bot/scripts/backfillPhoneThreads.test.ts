@@ -448,6 +448,67 @@ integrationDescribe('backfillPhoneThreads — core loop', () => {
     expect(row.backfilledAt).toBeInstanceOf(Date);
   });
 
+  it('test 13 — transcript taps field is never iterated: send count equals messages + 2 bookends', async () => {
+    await seedCall({
+      callerName: 'A13',
+      recipientName: 'B13',
+      callerNumberRaw: '+15554301',
+      recipientNumberRaw: '+15554302',
+      status: 'ended',
+      messages: [
+        { senderIsCaller: true, content: 'first' },
+        { senderIsCaller: false, content: 'second' },
+      ],
+    });
+    const channel = makeOkChannel();
+    const thread = makeThread();
+    const client = makeClientWithThreadCreation(channel, thread);
+
+    await runBackfill({ client, dryRun: false, limit: undefined, verbose: false });
+
+    // Exactly: 1 connected + 2 messages + 1 ended = 4 sends. Any extra send would
+    // indicate the script is consuming transcript.taps (it must not — taps are
+    // for staff readback only and the backfill script ignores them).
+    expect(thread.send).toHaveBeenCalledTimes(4);
+  });
+
+  it('test 14 — consecutive sends to the same thread are paced ≥1100ms apart', async () => {
+    await seedCall({
+      callerName: 'A14',
+      recipientName: 'B14',
+      callerNumberRaw: '+15554401',
+      recipientNumberRaw: '+15554402',
+      status: 'ended',
+      messages: [
+        { senderIsCaller: true, content: 'one' },
+        { senderIsCaller: false, content: 'two' },
+      ],
+    });
+    const channel = makeOkChannel();
+    const thread = makeThread();
+    const sendTimestamps: number[] = [];
+    thread.send.mockImplementation(async () => {
+      sendTimestamps.push(Date.now());
+      return { id: 'sentMsgId' };
+    });
+    const client = makeClientWithThreadCreation(channel, thread);
+
+    await runBackfill({ client, dryRun: false, limit: undefined, verbose: false });
+
+    // 4 sends: connected + 2 messages + ended.
+    expect(sendTimestamps.length).toBe(4);
+    let maxGap = 0;
+    for (let i = 1; i < sendTimestamps.length; i++) {
+      const gap = sendTimestamps[i] - sendTimestamps[i - 1];
+      if (gap > maxGap) maxGap = gap;
+    }
+    // All consecutive gaps to the same thread must be ≥1100ms.
+    for (let i = 1; i < sendTimestamps.length; i++) {
+      const gap = sendTimestamps[i] - sendTimestamps[i - 1];
+      expect(gap).toBeGreaterThanOrEqual(1100);
+    }
+  }, 30_000);
+
   it('test 5 — pair with a live call: historic call reuses the live-created thread', async () => {
     const [caller] = await db.insert(players).values({ characterName: uniqueName('P5A'), discordId: uniqueSnowflake('1'), discordUsername: 'P5A', isAlive: true }).returning();
     const [recipient] = await db.insert(players).values({ characterName: uniqueName('P5B'), discordId: uniqueSnowflake('2'), discordUsername: 'P5B', isAlive: true }).returning();

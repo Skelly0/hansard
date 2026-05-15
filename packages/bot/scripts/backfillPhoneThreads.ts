@@ -66,6 +66,28 @@ const SYNTHETIC_BACKFILL_VIEWER: PhoneViewer = {
 
 const EMBED_DESC_BUDGET = 4000;
 
+/**
+ * Per-thread send pacing. Discord's per-channel rate limit is 5 messages / 5 seconds,
+ * so a sustained ~1 send/sec per thread is the actual cap. Pacing at 1100ms gives a
+ * little headroom while keeping pair-shared replays from tripping `429`s. The map is
+ * keyed by Discord thread id; different threads are paced independently because they
+ * have independent rate-limit buckets.
+ */
+const PER_THREAD_PACE_MS = 1100;
+const threadLastSendAt = new Map<string, number>();
+
+async function paceThread(threadId: string): Promise<void> {
+  const last = threadLastSendAt.get(threadId);
+  if (last !== undefined) {
+    const elapsed = Date.now() - last;
+    const wait = PER_THREAD_PACE_MS - elapsed;
+    if (wait > 0) {
+      await new Promise<void>((r) => setTimeout(r, wait));
+    }
+  }
+  threadLastSendAt.set(threadId, Date.now());
+}
+
 function chunkForEmbed(text: string): string[] {
   if (text.length <= EMBED_DESC_BUDGET) return [text];
   const chunks: string[] = [];
@@ -249,6 +271,7 @@ async function runMainLoop(opts: BackfillOptions, channel: TextChannel): Promise
     await svc.setStaffThread(call.id, threadChannel.id);
 
     // Connected embed.
+    await paceThread(threadChannel.id);
     await threadChannel.send({
       embeds: [
         new EmbedBuilder()
@@ -281,6 +304,7 @@ async function runMainLoop(opts: BackfillOptions, channel: TextChannel): Promise
         const chunks = chunkForEmbed(message.content);
         for (let i = 0; i < chunks.length; i++) {
           const piece = chunks[i];
+          await paceThread(threadChannel.id);
           await threadChannel.send({
             embeds: [
               new EmbedBuilder()
@@ -301,6 +325,7 @@ async function runMainLoop(opts: BackfillOptions, channel: TextChannel): Promise
     }
 
     // Ended embed.
+    await paceThread(threadChannel.id);
     await threadChannel.send({
       embeds: [
         new EmbedBuilder()

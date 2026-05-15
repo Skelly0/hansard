@@ -41,8 +41,9 @@ import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 import { PermissionFlagsBits } from 'discord.js';
-import { execute as executeHeal } from '../simulation/heal.js';
-import { execute as executeKill } from '../simulation/kill.js';
+import { dispatchSubcommand } from '../../utils/parentCommand.js';
+import * as heal from '../simulation/heal.js';
+import * as kill from '../simulation/kill.js';
 import { executeAdd as executeAilmentAdd, executeRemove as executeAilmentRemove } from '../simulation/ailment.js';
 
 // ─── Age Config (will load from simulation config later) ───────────────────
@@ -1032,31 +1033,15 @@ const command: Command = {
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-
-    switch (sub) {
-      case 'create':
-        await handleCreate(interaction);
-        break;
-      case 'view':
-        await handleView(interaction);
-        break;
-      case 'edit':
-        await handleEdit(interaction);
-        break;
-      case 'heal':
-        await executeHeal(interaction);
-        break;
-      case 'kill':
-        await executeKill(interaction);
-        break;
-      case 'ailment-add':
-        await executeAilmentAdd(interaction);
-        break;
-      case 'ailment-remove':
-        await executeAilmentRemove(interaction);
-        break;
-    }
+    await dispatchSubcommand(interaction, {
+      create: { execute: handleCreate },
+      view: { execute: handleView },
+      edit: { execute: handleEdit },
+      heal,
+      kill,
+      'ailment-add': { execute: executeAilmentAdd },
+      'ailment-remove': { execute: executeAilmentRemove },
+    });
   },
 };
 

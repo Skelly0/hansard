@@ -18,7 +18,11 @@ export function dispatchSubcommand(
   handlers: SubcommandMap,
   groups: GroupedSubcommandMap = {},
 ): Promise<void> {
-  const group = interaction.options.getSubcommandGroup(false);
+  // Real Discord interactions always expose getSubcommandGroup; older test
+  // doubles may not, so fall back to no-group rather than crashing.
+  const group = typeof interaction.options.getSubcommandGroup === 'function'
+    ? interaction.options.getSubcommandGroup(false)
+    : null;
   const sub = interaction.options.getSubcommand();
 
   if (group) {
@@ -47,7 +51,9 @@ export function dispatchAutocomplete(
   handlers: SubcommandMap,
   groups: GroupedSubcommandMap = {},
 ): Promise<void> {
-  const group = interaction.options.getSubcommandGroup(false);
+  const group = typeof interaction.options.getSubcommandGroup === 'function'
+    ? interaction.options.getSubcommandGroup(false)
+    : null;
   const sub = interaction.options.getSubcommand();
   const handler = group ? groups[group]?.[sub] : handlers[sub];
   if (!handler?.autocomplete) {

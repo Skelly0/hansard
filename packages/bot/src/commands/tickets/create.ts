@@ -34,6 +34,7 @@ import {
   unregisterAwaitingInteraction,
 } from '../../utils/awaitingInteractions.js';
 import type { Command } from '../../client.js';
+import { dispatchSubcommand } from '../../utils/parentCommand.js';
 import {
   buildTicketActionRow,
   buildTicketOpeningMessages,
@@ -44,15 +45,15 @@ import {
   buildTicketCategoryFields,
   normalizeTicketCategoryInput,
 } from './categoryHelpers.js';
-import { execute as viewExecute } from './view.js';
-import { execute as listExecute } from './list.js';
-import { execute as replyExecute } from './reply.js';
-import { execute as closeExecute } from './close.js';
-import { execute as assignExecute } from './assign.js';
-import { execute as priorityExecute } from './priority.js';
-import { execute as noteExecute } from './note.js';
-import { execute as linkExecute } from './link.js';
-import { execute as metricsExecute } from './metrics.js';
+import * as view from './view.js';
+import * as list from './list.js';
+import * as reply from './reply.js';
+import * as close from './close.js';
+import * as assign from './assign.js';
+import * as priority from './priority.js';
+import * as note from './note.js';
+import * as link from './link.js';
+import * as metrics from './metrics.js';
 
 /**
  * /ticket create
@@ -290,50 +291,24 @@ const command: Command = {
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const subcommand = interaction.options.getSubcommand();
+    await dispatchSubcommand(interaction, {
+      create: { execute: handleCreate },
+      categories: { execute: handleCategories },
+      'category-create': { execute: handleCategoryCreate },
+      view,
+      list,
+      reply,
+      close,
+      assign,
+      priority,
+      note,
+      link,
+      metrics,
+    });
+  },
+};
 
-    if (subcommand === 'categories') {
-      await handleCategories(interaction);
-      return;
-    }
-
-    if (subcommand === 'category-create') {
-      await handleCategoryCreate(interaction);
-      return;
-    }
-
-    switch (subcommand) {
-      case 'view':
-        await viewExecute(interaction);
-        return;
-      case 'list':
-        await listExecute(interaction);
-        return;
-      case 'reply':
-        await replyExecute(interaction);
-        return;
-      case 'close':
-        await closeExecute(interaction);
-        return;
-      case 'assign':
-        await assignExecute(interaction);
-        return;
-      case 'priority':
-        await priorityExecute(interaction);
-        return;
-      case 'note':
-        await noteExecute(interaction);
-        return;
-      case 'link':
-        await linkExecute(interaction);
-        return;
-      case 'metrics':
-        await metricsExecute(interaction);
-        return;
-    }
-
-    if (subcommand !== 'create') return;
-
+async function handleCreate(interaction: ChatInputCommandInteraction): Promise<void> {
     // Step 0: Load active categories from DB.
     const categoryRows = await db
       .select()
@@ -656,8 +631,7 @@ const command: Command = {
     );
 
     await modalInteraction.editReply({ embeds: [confirmEmbed] });
-  },
-};
+}
 
 function buildTicketThreadName(ticketNumber: number, title: string): string {
   return `#${ticketNumber} — ${title.slice(0, 80)}`;

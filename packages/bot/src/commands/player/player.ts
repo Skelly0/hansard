@@ -3,18 +3,32 @@ import {
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import type { Command } from '../../client.js';
-import { errorEmbed } from '../../utils/embeds.js';
-import { execute as executeEvents, TYPE_CHOICES as EVENT_TYPE_CHOICES } from './events.js';
-import { execute as executeHealth } from './health.js';
-import { execute as executeHistory } from './history.js';
-import { execute as executeRoster } from './roster.js';
-import { execute as executeWhois } from './whois.js';
+import { dispatchSubcommand } from '../../utils/parentCommand.js';
+import { TYPE_CHOICES as EVENT_TYPE_CHOICES } from './events.js';
+import * as events from './events.js';
+import * as health from './health.js';
+import * as history from './history.js';
+import * as roster from './roster.js';
+import * as whois from './whois.js';
 import {
   executeCharacterCreate,
   executeChangeParty,
   ADMIN_MIN_AGE,
   ADMIN_MAX_AGE,
 } from './admin.js';
+
+const handlers = {
+  roster,
+  whois,
+  history,
+  events,
+  health,
+};
+
+const adminHandlers = {
+  'character-create': { execute: executeCharacterCreate },
+  'change-party': { execute: executeChangeParty },
+};
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -140,48 +154,7 @@ const command: Command = {
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const group = interaction.options.getSubcommandGroup(false);
-    const sub = interaction.options.getSubcommand();
-
-    if (group === 'admin') {
-      switch (sub) {
-        case 'character-create':
-          await executeCharacterCreate(interaction);
-          return;
-        case 'change-party':
-          await executeChangeParty(interaction);
-          return;
-        default:
-          await interaction.reply({
-            embeds: [errorEmbed(`Unknown admin subcommand: \`/player admin ${sub}\``)],
-            ephemeral: true,
-          });
-          return;
-      }
-    }
-
-    switch (sub) {
-      case 'roster':
-        await executeRoster(interaction);
-        return;
-      case 'whois':
-        await executeWhois(interaction);
-        return;
-      case 'history':
-        await executeHistory(interaction);
-        return;
-      case 'events':
-        await executeEvents(interaction);
-        return;
-      case 'health':
-        await executeHealth(interaction);
-        return;
-      default:
-        await interaction.reply({
-          embeds: [errorEmbed(`Unknown subcommand: \`/player ${sub}\``)],
-          ephemeral: true,
-        });
-    }
+    await dispatchSubcommand(interaction, handlers, { admin: adminHandlers });
   },
 };
 

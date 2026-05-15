@@ -20,24 +20,25 @@ import {
   unregisterAwaitingInteraction,
 } from '../../utils/awaitingInteractions.js';
 import type { Command } from '../../client.js';
+import { dispatchSubcommand } from '../../utils/parentCommand.js';
 import { SHORT_BILL_TEXT_MAX_LENGTH } from './display.js';
 import { extractDocId } from './shared.js';
 import { STATUS_CHOICES } from './list.js';
-import { execute as viewExecute } from './view.js';
-import { execute as listExecute } from './list.js';
-import { execute as searchExecute } from './search.js';
-import { execute as editExecute } from './edit.js';
-import { execute as statusExecute } from './status.js';
-import { execute as enactExecute } from './enact.js';
-import { execute as repealExecute } from './repeal.js';
-import { execute as amendExecute } from './amend.js';
-import { execute as amendEffectsExecute } from './amendEffects.js';
-import { execute as votersExecute } from './voters.js';
-import { execute as reraiseExecute } from './reraise.js';
-import { execute as withdrawExecute } from './withdraw.js';
-import { execute as recacheExecute } from './recache.js';
-import { execute as submitForExecute } from './submitFor.js';
-import { execute as npcVoteExecute } from './npcVote.js';
+import * as view from './view.js';
+import * as list from './list.js';
+import * as search from './search.js';
+import * as edit from './edit.js';
+import * as status from './status.js';
+import * as enact from './enact.js';
+import * as repeal from './repeal.js';
+import * as amend from './amend.js';
+import * as amendEffects from './amendEffects.js';
+import * as voters from './voters.js';
+import * as reraise from './reraise.js';
+import * as withdraw from './withdraw.js';
+import * as recache from './recache.js';
+import * as submitFor from './submitFor.js';
+import * as npcVote from './npcVote.js';
 
 type BillSubmissionType = 'google_doc' | 'short';
 
@@ -610,58 +611,24 @@ const command: Command = {
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const subcommand = interaction.options.getSubcommand();
-
-    switch (subcommand) {
-      case 'submit':
-        await executeSubmit(interaction);
-        return;
-      case 'submit-for':
-        await submitForExecute(interaction);
-        return;
-      case 'view':
-        await viewExecute(interaction);
-        return;
-      case 'list':
-        await listExecute(interaction);
-        return;
-      case 'search':
-        await searchExecute(interaction);
-        return;
-      case 'edit':
-        await editExecute(interaction);
-        return;
-      case 'status':
-        await statusExecute(interaction);
-        return;
-      case 'enact':
-        await enactExecute(interaction);
-        return;
-      case 'repeal':
-        await repealExecute(interaction);
-        return;
-      case 'amend':
-        await amendExecute(interaction);
-        return;
-      case 'amend-effects':
-        await amendEffectsExecute(interaction);
-        return;
-      case 'voters':
-        await votersExecute(interaction);
-        return;
-      case 'reraise':
-        await reraiseExecute(interaction);
-        return;
-      case 'withdraw':
-        await withdrawExecute(interaction);
-        return;
-      case 'recache':
-        await recacheExecute(interaction);
-        return;
-      case 'npc-vote':
-        await npcVoteExecute(interaction);
-        return;
-    }
+    await dispatchSubcommand(interaction, {
+      submit: { execute: executeSubmit },
+      'submit-for': submitFor,
+      view,
+      list,
+      search,
+      edit,
+      status,
+      enact,
+      repeal,
+      amend,
+      'amend-effects': amendEffects,
+      voters,
+      reraise,
+      withdraw,
+      recache,
+      'npc-vote': npcVote,
+    });
   },
 };
 

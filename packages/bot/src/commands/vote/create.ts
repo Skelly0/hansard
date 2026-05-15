@@ -39,25 +39,26 @@ import {
   buildLinkedBillSourceDisplay,
   type BillSourceDisplay,
 } from './billSourceDisplay.js';
-import { execute as castExecute } from './cast.js';
-import { execute as closeExecute } from './close.js';
-import { execute as openExecute } from './open.js';
-import { execute as listExecute } from './list.js';
-import { execute as infoExecute } from './info.js';
-import { execute as resultsExecute } from './results.js';
-import { execute as tallyExecute } from './tally.js';
-import { execute as certifyExecute } from './certify.js';
-import { execute as cancelExecute } from './cancel.js';
-import { execute as historyExecute } from './history.js';
-import { execute as scheduleExecute } from './schedule.js';
-import { execute as eligibilityExecute } from './eligibility.js';
-import { execute as roundsExecute } from './rounds.js';
-import { execute as runoffExecute } from './runoff.js';
-import { execute as turnoutExecute } from './turnout.js';
-import { execute as electExecute } from './elect.js';
-import { execute as candidateSubmitExecute } from './candidateSubmit.js';
-import { execute as candidateListExecute } from './candidateList.js';
-import { execute as npcConfirmExecute } from './npcConfirm.js';
+import { dispatchSubcommand } from '../../utils/parentCommand.js';
+import * as cast from './cast.js';
+import * as close from './close.js';
+import * as open from './open.js';
+import * as list from './list.js';
+import * as info from './info.js';
+import * as results from './results.js';
+import * as tally from './tally.js';
+import * as certify from './certify.js';
+import * as cancel from './cancel.js';
+import * as history from './history.js';
+import * as schedule from './schedule.js';
+import * as eligibility from './eligibility.js';
+import * as rounds from './rounds.js';
+import * as runoff from './runoff.js';
+import * as turnout from './turnout.js';
+import * as elect from './elect.js';
+import * as candidateSubmit from './candidateSubmit.js';
+import * as candidateList from './candidateList.js';
+import * as npcConfirm from './npcConfirm.js';
 
 const CHANCELLOR_ONLY_TYPES = new Set([
   'legislative_vote',
@@ -679,75 +680,28 @@ const command: Command = {
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    const sub = interaction.options.getSubcommand();
-
-    switch (sub) {
-      case 'create':
-        await handleCreateSubcommand(interaction);
-        return;
-      case 'cast':
-        await castExecute(interaction);
-        return;
-      case 'close':
-        await closeExecute(interaction);
-        return;
-      case 'open':
-        await openExecute(interaction);
-        return;
-      case 'list':
-        await listExecute(interaction);
-        return;
-      case 'info':
-        await infoExecute(interaction);
-        return;
-      case 'results':
-        await resultsExecute(interaction);
-        return;
-      case 'tally':
-        await tallyExecute(interaction);
-        return;
-      case 'certify':
-        await certifyExecute(interaction);
-        return;
-      case 'cancel':
-        await cancelExecute(interaction);
-        return;
-      case 'history':
-        await historyExecute(interaction);
-        return;
-      case 'schedule':
-        await scheduleExecute(interaction);
-        return;
-      case 'eligibility':
-        await eligibilityExecute(interaction);
-        return;
-      case 'rounds':
-        await roundsExecute(interaction);
-        return;
-      case 'runoff':
-        await runoffExecute(interaction);
-        return;
-      case 'turnout':
-        await turnoutExecute(interaction);
-        return;
-      case 'elect':
-        await electExecute(interaction);
-        return;
-      case 'candidate-submit':
-        await candidateSubmitExecute(interaction);
-        return;
-      case 'candidate-list':
-        await candidateListExecute(interaction);
-        return;
-      case 'npc-confirm':
-        await npcConfirmExecute(interaction);
-        return;
-      default:
-        await interaction.reply({
-          embeds: [errorEmbed(`Unknown subcommand: \`/vote ${sub}\``)],
-          ephemeral: true,
-        });
-    }
+    await dispatchSubcommand(interaction, {
+      create: { execute: handleCreateSubcommand },
+      cast,
+      close,
+      open,
+      list,
+      info,
+      results,
+      tally,
+      certify,
+      cancel,
+      history,
+      schedule,
+      eligibility,
+      rounds,
+      runoff,
+      turnout,
+      elect,
+      'candidate-submit': candidateSubmit,
+      'candidate-list': candidateList,
+      'npc-confirm': npcConfirm,
+    });
   },
 };
 

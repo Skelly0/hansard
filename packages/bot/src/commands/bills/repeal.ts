@@ -4,9 +4,17 @@ import { db } from '../../db.js';
 import { bills, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
-import { postLegislationEmbed } from '../../utils/legislationChannel.js';
+import {
+  editLegislationEmbed,
+  postLegislationEmbed,
+} from '../../utils/legislationChannel.js';
 import { BillStatus } from '@hansard/shared';
 import { repealBill } from './repealFlow.js';
+import {
+  buildRepealEditEmbed,
+  buildRepealFallbackEmbed,
+  type RepealEmbedInput,
+} from './repealEmbeds.js';
 
 /**
  * Resolve a bill by either bill number (e.g. "B-001", "1") or title.
@@ -149,41 +157,59 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       now,
     });
 
-    const padded = String(bill.billNumber).padStart(3, '0');
-    const repealedTimestamp = Math.floor(now.getTime() / 1000);
-    const summaryBlock = bill.summary
-      ? `\n\n> ${bill.summary.replace(/\n/g, '\n> ')}`
-      : '';
-    const sourceLink = bill.googleDocUrl
-      ? `\n\n[\u{1F4D6} Read the full text](${bill.googleDocUrl})`
-      : '';
+    const embedInput: RepealEmbedInput = {
+      bill,
+      authorDisplay,
+      previousStatus: oldStatus,
+      actorDiscordId: interaction.user.id,
+      now,
+    };
 
-    const fields: { name: string; value: string; inline?: boolean }[] = [
-      { name: 'Author', value: authorDisplay, inline: true },
-      { name: 'Previous status', value: `\`${oldStatus}\``, inline: true },
-    ];
-    if (bill.tags?.length) {
-      fields.push({ name: 'Tags', value: bill.tags.join(' · '), inline: true });
-    }
-    if (bill.policyAreas?.length) {
-      fields.push({ name: 'Policy Areas', value: bill.policyAreas.join(' · '), inline: true });
-    }
-
-    const embed = createEmbed({
-      title: bill.title,
-      url: bill.googleDocUrl ?? undefined,
-      system: 'bills',
-      description: [
-        `\u{1F6AB} **Bill #B-${padded}** has been **repealed** and is no longer law.${summaryBlock}${sourceLink}`,
-        '',
-        `*Repealed by <@${interaction.user.id}> · <t:${repealedTimestamp}:F>*`,
-      ].join('\n'),
-      fields,
+    // Prefer editing the original /bill enact post in place so the legislation
+    // channel reads as a continuous historical record. Fall back to posting a
+    // fresh notice when the bill predates message-id capture or when the edit
+    // fails (channel deleted, message purged, permissions missing, etc.).
+    const editResult = await editLegislationEmbed({
+      client: interaction.client,
+      embed: buildRepealEditEmbed(embedInput),
+      channelId: bill.legislationChannelId,
+      messageId: bill.legislationMessageId,
     });
 
-    await postLegislationEmbed({ client: interaction.client, embed });
+    let postedFresh = false;
+    if (editResult.status !== 'edited') {
+      await postLegislationEmbed({
+        client: interaction.client,
+        embed: buildRepealFallbackEmbed(embedInput),
+      });
+      postedFresh = true;
+    }
 
-    await interaction.editReply({ embeds: [embed] });
+    const padded = String(bill.billNumber).padStart(3, '0');
+    const repealedTimestamp = Math.floor(now.getTime() / 1000);
+    const channelOutcome = editResult.status === 'edited'
+      ? `Edited the original enactment post in the legislation channel.`
+      : postedFresh
+        ? `No stored enactment post; posted a fresh repeal notice in the legislation channel.`
+        : `Skipped legislation channel update.`;
+
+    const replyEmbed = createEmbed({
+      title: 'Bill Repealed',
+      system: 'bills',
+      description: [
+        `**${bill.title}** (Bill #\`B-${padded}\`)`,
+        '',
+        `\u{1F6AB} This bill has been **repealed**.`,
+        '',
+        `**Previous status:** ${oldStatus}`,
+        `**Repealed by:** <@${interaction.user.id}>`,
+        `**Repealed at:** <t:${repealedTimestamp}:F>`,
+        '',
+        `_${channelOutcome}_`,
+      ].join('\n'),
+    });
+
+    await interaction.editReply({ embeds: [replyEmbed] });
   } catch (error) {
     console.error('Failed to repeal bill:', error);
     await interaction.editReply({

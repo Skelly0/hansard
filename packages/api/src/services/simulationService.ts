@@ -937,8 +937,8 @@ export async function generateObituary(db: Database, playerId: string) {
 
   return {
     characterName: player.characterName ?? 'Unknown',
-    birthDate: player.birthDate ?? 'unknown',
-    deathDate: player.deathDate ?? 'unknown',
+    birthDate: player.birthDate,
+    deathDate: player.deathDate,
     age: ageAtDeath,
     causeOfDeath: player.causeOfDeath ?? 'unknown causes',
     ailments,

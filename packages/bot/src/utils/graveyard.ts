@@ -37,11 +37,25 @@ function formatDeathAilments(ailments: { condition: string; severity: string }[]
   return ailments.map(a => `${a.condition} (${a.severity})`).join(', ');
 }
 
+function formatObituaryTitle(obituary: Obituary): string {
+  const prefix = `\u26B0\uFE0F ${obituary.characterName}`;
+  if (obituary.birthDate && obituary.deathDate) {
+    return `${prefix} (${obituary.birthDate} \u2014 ${obituary.deathDate})`;
+  }
+  if (obituary.deathDate) {
+    return `${prefix} (d. ${obituary.deathDate})`;
+  }
+  if (obituary.birthDate) {
+    return `${prefix} (b. ${obituary.birthDate})`;
+  }
+  return prefix;
+}
+
 export function buildObituaryEmbed(obituary: Obituary): EmbedBuilder {
   const embed = new EmbedBuilder()
-    .setTitle(`\u26B0\uFE0F ${obituary.characterName} (${obituary.birthDate} \u2014 ${obituary.deathDate})`)
+    .setTitle(formatObituaryTitle(obituary))
     .setColor(GRAVEYARD_COLOUR)
-    .setFooter({ text: `Rest in peace. \u2022 ${obituary.deathDate}` })
+    .setFooter({ text: obituary.deathDate ? `Rest in peace. \u2022 ${obituary.deathDate}` : 'Rest in peace.' })
     .setTimestamp();
 
   if (obituary.narrative) {

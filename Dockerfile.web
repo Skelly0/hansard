@@ -26,9 +26,13 @@ COPY --from=build /app/packages/web/dist /usr/share/nginx/html
 # Files in /etc/nginx/templates/*.template are processed by the official nginx
 # image's entrypoint with envsubst, so ${API_UPSTREAM} is substituted at
 # container start (set on the Railway web service to the API's internal URL).
-# Filter limits substitution to API_UPSTREAM so nginx's own variables
+# NGINX_LOCAL_RESOLVERS is set by /docker-entrypoint.d/15-local-resolvers.envsh
+# from /etc/resolv.conf so the template's `resolver` directive picks up the
+# platform DNS server — needed so the upstream hostname is re-resolved at
+# runtime (Railway rotates the internal IP on every API redeploy).
+# Filter limits substitution to those two so nginx's own variables
 # ($host, $scheme, etc.) cannot be accidentally clobbered by unrelated env vars.
-ENV NGINX_ENVSUBST_FILTER=^API_UPSTREAM$
+ENV NGINX_ENVSUBST_FILTER=^(API_UPSTREAM|NGINX_LOCAL_RESOLVERS)$
 COPY packages/web/nginx.conf.template /etc/nginx/templates/default.conf.template
 
 EXPOSE 80

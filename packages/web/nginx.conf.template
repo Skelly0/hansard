@@ -17,6 +17,16 @@ server {
     # Character portrait uploads and other JSON payloads — match Fastify's defaults.
     client_max_body_size 10M;
 
+    # Re-resolve the API upstream hostname at runtime instead of caching the
+    # IP nginx saw at startup. Railway's private networking rotates the
+    # internal IP for `api.railway.internal` on every API redeploy, and the
+    # default proxy_pass with a literal hostname pins the boot-time IP forever
+    # — every API redeploy then causes 504s on the web container until it is
+    # itself redeployed. ${NGINX_LOCAL_RESOLVERS} is populated from
+    # /etc/resolv.conf by /docker-entrypoint.d/15-local-resolvers.envsh in the
+    # nginx:alpine image, then envsubst'd in at container start.
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
+
     # Same-origin API proxy. ${API_UPSTREAM} is substituted by the nginx image's
     # entrypoint (envsubst on /etc/nginx/templates/*.template) at container start.
     # Set it on the web service to the API's internal address, e.g.
@@ -27,7 +37,14 @@ server {
     # OAuth. The session cookie is set on the user-facing web origin via this
     # proxy rather than on the API host directly.
     location /api/ {
-        proxy_pass ${API_UPSTREAM};
+        # Hold the upstream in a variable so proxy_pass triggers nginx's
+        # runtime resolver (see the `resolver` directive above) per request
+        # rather than freezing the IP at config load. The $request_uri suffix
+        # preserves the literal-form behaviour of passing the full original
+        # URI through to the upstream (variable-form proxy_pass otherwise
+        # drops the location-matched prefix handling).
+        set $api_upstream ${API_UPSTREAM};
+        proxy_pass $api_upstream$request_uri;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

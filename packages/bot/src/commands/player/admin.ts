@@ -17,6 +17,7 @@ import {
 } from '@hansard/api/services/favourService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
+import { clearPartyLeaderIfMatches } from '../party/shared.js';
 
 export const ADMIN_MIN_AGE = 18;
 export const ADMIN_MAX_AGE = 90;
@@ -308,15 +309,22 @@ export async function executeChangeParty(interaction: ChatInputCommandInteractio
     return;
   }
 
-  // Old party name for log
+  // Old party name + role for log and Discord sync
   let oldPartyName: string | null = null;
+  let oldPartyRoleId: string | null = null;
   if (target.partyId) {
-    const [oldParty] = await db.select({ name: parties.name }).from(parties).where(eq(parties.id, target.partyId)).limit(1);
+    const [oldParty] = await db
+      .select({ name: parties.name, discordRoleId: parties.discordRoleId })
+      .from(parties)
+      .where(eq(parties.id, target.partyId))
+      .limit(1);
     oldPartyName = oldParty?.name ?? null;
+    oldPartyRoleId = oldParty?.discordRoleId ?? null;
   }
 
   let newPartyId: string | null = null;
   let newPartyName: string | null = null;
+  let newPartyRoleId: string | null = null;
 
   if (partyArg.toLowerCase() === 'independent' || partyArg.toLowerCase() === 'none') {
     newPartyId = null;
@@ -331,6 +339,7 @@ export async function executeChangeParty(interaction: ChatInputCommandInteractio
     }
     newPartyId = party.id;
     newPartyName = party.name;
+    newPartyRoleId = party.discordRoleId;
   }
 
   if (newPartyId === target.partyId) {
@@ -342,6 +351,8 @@ export async function executeChangeParty(interaction: ChatInputCommandInteractio
     .update(players)
     .set({ partyId: newPartyId })
     .where(eq(players.id, target.id));
+
+  await clearPartyLeaderIfMatches(target.partyId, target.id);
 
   await db.insert(playerEventLog).values({
     playerId: target.id,
@@ -356,6 +367,18 @@ export async function executeChangeParty(interaction: ChatInputCommandInteractio
     triggeredById: staffPlayer.id,
   });
 
+  let roleSyncWarning: string | null = null;
+  if (interaction.guild && (oldPartyRoleId || newPartyRoleId)) {
+    try {
+      const targetMember = await interaction.guild.members.fetch(targetUser.id);
+      if (oldPartyRoleId) await targetMember.roles.remove(oldPartyRoleId);
+      if (newPartyRoleId) await targetMember.roles.add(newPartyRoleId);
+    } catch (error) {
+      console.warn(`Failed to sync party roles for ${target.characterName}:`, error);
+      roleSyncWarning = 'Discord role sync failed; check the bot role hierarchy.';
+    }
+  }
+
   const embed = createEmbed({
     title: 'Party Changed (Staff)',
     system: 'players',
@@ -364,6 +387,7 @@ export async function executeChangeParty(interaction: ChatInputCommandInteractio
       { name: 'From', value: oldPartyName ?? '*Independent*', inline: true },
       { name: 'To', value: newPartyName ?? '*Independent*', inline: true },
       { name: 'Staff', value: interaction.user.toString(), inline: true },
+      ...(roleSyncWarning ? [{ name: 'Warning', value: roleSyncWarning, inline: false }] : []),
     ],
   });
 

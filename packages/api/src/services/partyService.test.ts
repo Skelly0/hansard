@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createParty, updateParty } from './partyService';
+import { createParty, updateParty, dissolveParty } from './partyService';
 
 describe('createParty', () => {
   it('rejects malformed colour', async () => {
@@ -118,5 +118,55 @@ describe('updateParty', () => {
     const result = await updateParty(db, 'p1', { isInviteOnly: true });
     expect(result?.isInviteOnly).toBe(true);
     expect(set).toHaveBeenCalledWith(expect.objectContaining({ isInviteOnly: true }));
+  });
+});
+
+describe('dissolveParty', () => {
+  it('nulls leaderId so a dissolved party does not keep displaying a departed leader', async () => {
+    const existing = {
+      id: 'p1', name: 'Old', shortName: null, factionId: null, leaderId: 'former-leader',
+      ideology: null, colour: null, discordRoleId: null, isInviteOnly: false, isActive: true,
+      foundedAt: new Date(), dissolvedAt: null,
+    };
+
+    const setCalls: Array<Record<string, unknown>> = [];
+
+    // tx.select(...).from(parties|players)... returns either the party row or empty member list
+    let selectCallIndex = 0;
+    const select = vi.fn().mockImplementation(() => {
+      const index = selectCallIndex++;
+      return {
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation(() => {
+            if (index === 0) {
+              // party lookup with .limit(1)
+              return { limit: vi.fn().mockResolvedValue([existing]) };
+            }
+            // member rows is awaited directly (no limit)
+            return Promise.resolve([]);
+          }),
+        }),
+      };
+    });
+
+    const update = vi.fn().mockImplementation(() => ({
+      set: vi.fn().mockImplementation((values: Record<string, unknown>) => {
+        setCalls.push(values);
+        return {
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([{ ...existing, isActive: false, leaderId: null, dissolvedAt: new Date() }]),
+          }),
+        };
+      }),
+    }));
+
+    const tx: any = { select, update, insert: vi.fn() };
+    const db: any = {
+      transaction: vi.fn().mockImplementation(async (fn: (tx: any) => Promise<unknown>) => fn(tx)),
+    };
+
+    const result = await dissolveParty(db, 'p1', null);
+    expect(result?.party.isActive).toBe(false);
+    expect(setCalls).toContainEqual(expect.objectContaining({ leaderId: null, isActive: false }));
   });
 });

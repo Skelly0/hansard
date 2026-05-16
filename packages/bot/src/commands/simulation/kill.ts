@@ -1,7 +1,7 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../../db.js';
-import { players, playerEventLog, simulationClock, officeHolders, offices } from '@hansard/db';
+import { players, playerEventLog, simulationClock, officeHolders, offices, parties } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { postObituaryToGraveyard } from '../../utils/graveyard.js';
 import { isStaff } from '../../utils/permissions.js';
@@ -54,6 +54,9 @@ async function processPlayerDeath(
   await db.update(players).set({
     isAlive: false, deathDate, causeOfDeath, healthStatus: 'deceased',
   }).where(eq(players.id, playerId));
+
+  // A dead character cannot lead a party; clear any leaderId pointing at them.
+  await db.update(parties).set({ leaderId: null }).where(eq(parties.leaderId, playerId));
 
   await db.insert(playerEventLog).values({
     playerId, eventType: 'death',

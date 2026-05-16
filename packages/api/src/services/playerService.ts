@@ -418,6 +418,7 @@ export async function changeParty(
 ): Promise<PlayerProfile | null> {
   const existing = await getPlayer(db, playerId);
   if (!existing) return null;
+  if (existing.partyId === newPartyId) return existing; // no-op: already in this party
 
   // Fetch party names for the event log
   let oldPartyName: string | null = null;
@@ -443,6 +444,15 @@ export async function changeParty(
     .set({ partyId: newPartyId })
     .where(eq(players.id, playerId))
     .returning();
+
+  // If the player was leading their old party, clear that stale leaderId
+  // so the old party doesn't keep displaying the now-departed member as leader.
+  if (existing.partyId) {
+    await db
+      .update(parties)
+      .set({ leaderId: null })
+      .where(and(eq(parties.id, existing.partyId), eq(parties.leaderId, playerId)));
+  }
 
   // Log the event
   await db.insert(playerEventLog).values({
@@ -482,6 +492,12 @@ export async function leaveParty(
     .set({ partyId: null })
     .where(eq(players.id, playerId))
     .returning();
+
+  // Clear stale leaderId if the leaving player was the party's leader.
+  await db
+    .update(parties)
+    .set({ leaderId: null })
+    .where(and(eq(parties.id, existing.partyId), eq(parties.leaderId, playerId)));
 
   await db.insert(playerEventLog).values({
     playerId,

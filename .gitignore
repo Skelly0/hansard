@@ -7,6 +7,7 @@ dist/
 *.tsbuildinfo
 .DS_Store
 coverage/
+db-backups/
 .claude/ralph-loop.local.md
 
 # Local-only — refactor backups and Claude plugin state

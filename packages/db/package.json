@@ -19,6 +19,7 @@
     "migrate:sessions-table": "tsx scripts/migrate-sessions-table.ts",
     "fix:bill-5-status": "tsx scripts/fix-bill-5-status.ts",
     "fix:character-birth-dates": "tsx scripts/fix-character-birth-dates.ts",
+    "cleanup:backfill-phone-test-players": "tsx scripts/cleanup-backfill-phone-test-players.ts",
     "push": "drizzle-kit push",
     "studio": "drizzle-kit studio",
     "build": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",

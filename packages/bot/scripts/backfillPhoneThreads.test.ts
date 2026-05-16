@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PermissionFlagsBits } from 'discord.js';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql as drizzleSql } from 'drizzle-orm';
 import {
   phoneCalls,
   phoneMessages,
@@ -93,6 +93,15 @@ describe('backfillPhoneThreads — preflight', () => {
   });
 });
 
+describe('backfillPhoneThreads — fixture guards', () => {
+  it('marks seeded player rows so cleanup cannot match real player data by accident', () => {
+    expect(fixturePlayerValues('P5B', '1')).toMatchObject({
+      discordUsername: 'P5B',
+      profileData: { testFixture: BACKFILL_FIXTURE_PROFILE_MARKER },
+    });
+  });
+});
+
 // === Integration tests against a real Postgres ===
 //
 // These exercise the full backfill loop against the test database wired through
@@ -109,12 +118,17 @@ describe('backfillPhoneThreads — preflight', () => {
 const sql = HAS_REAL_DB ? postgres(REAL_DB_URL!, { max: 1 }) : null!;
 const db = HAS_REAL_DB ? drizzle(sql) : null!;
 
+const BACKFILL_FIXTURE_PROFILE_MARKER = 'backfillPhoneThreads.test';
+const BACKFILL_FIXTURE_PROFILE_DATA = { testFixture: BACKFILL_FIXTURE_PROFILE_MARKER };
+
 async function clearPhoneTables() {
   await db.delete(phoneThreads);
   await db.delete(phoneMessages);
   await db.delete(phoneCalls);
   await db.delete(phoneNumbers);
-  // Players are seeded by other tests; only delete rows we own.
+  await db.delete(players).where(
+    drizzleSql`${players.profileData}->>'testFixture' = ${BACKFILL_FIXTURE_PROFILE_MARKER}`,
+  );
 }
 
 let seedSeq = 0;
@@ -132,6 +146,16 @@ function uniqueName(base: string): string {
   return `${base}-${process.pid}-${Date.now().toString(36)}-${nameSeq}`;
 }
 
+function fixturePlayerValues(base: string, snowflakePrefix: string) {
+  return {
+    characterName: uniqueName(base),
+    discordId: uniqueSnowflake(snowflakePrefix),
+    discordUsername: base,
+    isAlive: true,
+    profileData: { ...BACKFILL_FIXTURE_PROFILE_DATA },
+  };
+}
+
 async function seedCall(opts: {
   callerName: string;
   recipientName: string;
@@ -143,18 +167,8 @@ async function seedCall(opts: {
   backfilledAt?: Date | null;
   staffThreadId?: string | null;
 }): Promise<{ callId: string; callerId: string; recipientId: string }> {
-  const [caller] = await db.insert(players).values({
-    characterName: uniqueName(opts.callerName),
-    discordId: uniqueSnowflake('1'),
-    discordUsername: opts.callerName,
-    isAlive: true,
-  }).returning();
-  const [recipient] = await db.insert(players).values({
-    characterName: uniqueName(opts.recipientName),
-    discordId: uniqueSnowflake('2'),
-    discordUsername: opts.recipientName,
-    isAlive: true,
-  }).returning();
+  const [caller] = await db.insert(players).values(fixturePlayerValues(opts.callerName, '1')).returning();
+  const [recipient] = await db.insert(players).values(fixturePlayerValues(opts.recipientName, '2')).returning();
   const callerRaw = opts.callerNumberRaw ?? '+15550101';
   const recipientRaw = opts.recipientNumberRaw ?? '+15550102';
   const [callerNum] = await db.insert(phoneNumbers).values({
@@ -232,6 +246,10 @@ const integrationDescribe = HAS_REAL_DB ? describe : describe.skip;
 integrationDescribe('backfillPhoneThreads — core loop', () => {
   beforeEach(async () => {
     process.env.PHONE_LOG_CHANNEL_ID = '1504812456042561587';
+    await clearPhoneTables();
+  });
+
+  afterEach(async () => {
     await clearPhoneTables();
   });
 
@@ -338,12 +356,8 @@ integrationDescribe('backfillPhoneThreads — core loop', () => {
   });
 
   it('test 3 — two fresh calls between the same pair share one thread, ping once', async () => {
-    const [caller] = await db.insert(players).values({
-      characterName: uniqueName('P3A'), discordId: uniqueSnowflake('1'), discordUsername: 'P3A', isAlive: true,
-    }).returning();
-    const [recipient] = await db.insert(players).values({
-      characterName: uniqueName('P3B'), discordId: uniqueSnowflake('2'), discordUsername: 'P3B', isAlive: true,
-    }).returning();
+    const [caller] = await db.insert(players).values(fixturePlayerValues('P3A', '1')).returning();
+    const [recipient] = await db.insert(players).values(fixturePlayerValues('P3B', '2')).returning();
     const [callerNum] = await db.insert(phoneNumbers).values({
       playerId: caller.id, numberRaw: '+15551001', numberNormalized: '+15551001', isActive: true,
     }).returning();
@@ -386,8 +400,8 @@ integrationDescribe('backfillPhoneThreads — core loop', () => {
   });
 
   it('test 4 — pair with one pre-backfilled call: fresh call reuses the existing thread without re-pinging', async () => {
-    const [caller] = await db.insert(players).values({ characterName: uniqueName('P4A'), discordId: uniqueSnowflake('1'), discordUsername: 'P4A', isAlive: true }).returning();
-    const [recipient] = await db.insert(players).values({ characterName: uniqueName('P4B'), discordId: uniqueSnowflake('2'), discordUsername: 'P4B', isAlive: true }).returning();
+    const [caller] = await db.insert(players).values(fixturePlayerValues('P4A', '1')).returning();
+    const [recipient] = await db.insert(players).values(fixturePlayerValues('P4B', '2')).returning();
     const [callerNum] = await db.insert(phoneNumbers).values({ playerId: caller.id, numberRaw: '+15552001', numberNormalized: '+15552001', isActive: true }).returning();
     const [recipientNum] = await db.insert(phoneNumbers).values({ playerId: recipient.id, numberRaw: '+15552002', numberNormalized: '+15552002', isActive: true }).returning();
     // Existing thread row from a prior run.
@@ -526,8 +540,8 @@ integrationDescribe('backfillPhoneThreads — core loop', () => {
   }, 30_000);
 
   it('test 5 — pair with a live call: historic call reuses the live-created thread', async () => {
-    const [caller] = await db.insert(players).values({ characterName: uniqueName('P5A'), discordId: uniqueSnowflake('1'), discordUsername: 'P5A', isAlive: true }).returning();
-    const [recipient] = await db.insert(players).values({ characterName: uniqueName('P5B'), discordId: uniqueSnowflake('2'), discordUsername: 'P5B', isAlive: true }).returning();
+    const [caller] = await db.insert(players).values(fixturePlayerValues('P5A', '1')).returning();
+    const [recipient] = await db.insert(players).values(fixturePlayerValues('P5B', '2')).returning();
     const [callerNum] = await db.insert(phoneNumbers).values({ playerId: caller.id, numberRaw: '+15553001', numberNormalized: '+15553001', isActive: true }).returning();
     const [recipientNum] = await db.insert(phoneNumbers).values({ playerId: recipient.id, numberRaw: '+15553002', numberNormalized: '+15553002', isActive: true }).returning();
     const liveThreadId = '900000000000000301';
@@ -565,6 +579,10 @@ integrationDescribe('backfillPhoneThreads — core loop', () => {
 integrationDescribe('backfillPhoneThreads — flags', () => {
   beforeEach(async () => {
     process.env.PHONE_LOG_CHANNEL_ID = '1504812456042561587';
+    await clearPhoneTables();
+  });
+
+  afterEach(async () => {
     await clearPhoneTables();
   });
 

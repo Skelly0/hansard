@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { desc } from 'drizzle-orm';
-import { simulationClock, timeAdvanceLog, players, playerEventLog, officeHolders } from '@hansard/db';
+import { simulationClock, timeAdvanceLog, players, playerEventLog, officeHolders, parties } from '@hansard/db';
 import { advanceTime, DEFAULT_AGING_CONFIG, getHistory, sanitizeTimeAdvanceLog } from './simulationService';
 
 function makePlayer(overrides: Record<string, unknown> = {}): any {
@@ -43,6 +43,7 @@ function makeClock(overrides: Record<string, unknown> = {}) {
 function makeSimulationDb(clock: any, playerRows: any[]) {
   const eventLog: any[] = [];
   const timeLog: any[] = [];
+  const partyUpdates: any[] = [];
 
   const db: any = {
     select: vi.fn(() => ({
@@ -82,6 +83,9 @@ function makeSimulationDb(clock: any, playerRows: any[]) {
           if (table === simulationClock) {
             Object.assign(clock, values);
           }
+          if (table === parties) {
+            partyUpdates.push(values);
+          }
           return [];
         }),
       })),
@@ -96,7 +100,7 @@ function makeSimulationDb(clock: any, playerRows: any[]) {
     transaction: vi.fn(async (callback) => callback(db)),
   };
 
-  return { db, eventLog, timeLog };
+  return { db, eventLog, timeLog, partyUpdates };
 }
 
 afterEach(() => {
@@ -146,7 +150,7 @@ describe('advanceTime death grace period', () => {
 
     const clock = makeClock();
     const player = makePlayer();
-    const { db, eventLog } = makeSimulationDb(clock, [player]);
+    const { db, eventLog, partyUpdates } = makeSimulationDb(clock, [player]);
 
     const firstAdvance = await advanceTime(db, 1, 'staff-1');
 
@@ -205,6 +209,11 @@ describe('advanceTime death grace period', () => {
         { condition: 'stroke', severity: 'critical' },
       ],
     });
+
+    // A dead character must not stay listed as a party leader. The pending-death
+    // first pass should not touch parties (player is still alive); the second
+    // pass that finalizes death must run the leader cleanup.
+    expect(partyUpdates).toEqual([{ leaderId: null }]);
   });
 });
 

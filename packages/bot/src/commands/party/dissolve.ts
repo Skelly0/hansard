@@ -67,7 +67,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
     await db
       .update(parties)
-      .set({ isActive: false, dissolvedAt: sql`now()` })
+      .set({ isActive: false, dissolvedAt: sql`now()`, leaderId: null })
       .where(eq(parties.id, target.id));
 
     await interaction.editReply({

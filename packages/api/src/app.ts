@@ -80,15 +80,17 @@ export async function buildApp() {
   // restarts/redeploys. The default in-memory store drops every session
   // whenever the process recycles (frequent on Railway), which logged web
   // users out every few minutes.
-  // Cross-site cookies (web ↔ api on different subdomains) require
-  // sameSite: 'none' + secure: true. Lax is fine when same-site or proxied (dev).
+  // Web is served same-origin in production via an nginx reverse proxy
+  // (packages/web/nginx.conf.template). Same-origin lets us keep
+  // sameSite: 'lax' everywhere — stricter than the previous cross-site
+  // 'none' + Brave-defaults problem that bounced users back to /login.
   await fastify.register(session, {
     secret: process.env.SESSION_SECRET || DEV_SESSION_SECRET,
     store: new DrizzleSessionStore(fastify.db),
     cookie: {
       secure: isProd,
       httpOnly: true,
-      sameSite: isProd ? 'none' : 'lax',
+      sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     },
     saveUninitialized: false,

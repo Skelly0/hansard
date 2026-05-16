@@ -5,7 +5,11 @@ import react from '@vitejs/plugin-react';
 // /api segment is conventional) and as the dev-proxy target (where it is not,
 // because Vite preserves the matched /api prefix). Strip a trailing /api so the
 // proxy works whether the env var includes it or not.
-const proxyTarget = (process.env.VITE_API_URL || 'http://localhost:3001')
+// In the production same-origin shape, VITE_API_URL is a relative path like
+// "/api" so nginx reverse-proxies on the user-facing origin — dev doesn't go
+// through nginx, so a relative value falls back to the local API for proxying.
+const rawApiUrl = process.env.VITE_API_URL || '';
+const proxyTarget = (/^https?:\/\//.test(rawApiUrl) ? rawApiUrl : 'http://localhost:3001')
   .replace(/\/+$/, '')
   .replace(/\/api$/, '');
 

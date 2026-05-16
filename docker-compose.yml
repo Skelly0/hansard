@@ -44,7 +44,12 @@ services:
       context: .
       dockerfile: Dockerfile.web
       args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:3001/api}
+        # Same-origin: nginx in the web container reverse-proxies /api/* to
+        # API_UPSTREAM below, so the SPA fetches its own origin.
+        VITE_API_URL: ${VITE_API_URL:-/api}
+    environment:
+      # Resolved by Docker's internal DNS on the compose network.
+      API_UPSTREAM: ${API_UPSTREAM:-http://api:3001}
     ports:
       - '${WEB_PORT:-5173}:80'
     depends_on:

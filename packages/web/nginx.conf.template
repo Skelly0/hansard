@@ -1,0 +1,51 @@
+# Forward whichever scheme reached the outermost proxy (Railway sets
+# X-Forwarded-Proto: https before forwarding HTTP into the container).
+# Falls back to nginx's own $scheme when no upstream proxy is present
+# (local docker compose, direct access).
+map $http_x_forwarded_proto $forwarded_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Character portrait uploads and other JSON payloads — match Fastify's defaults.
+    client_max_body_size 10M;
+
+    # Same-origin API proxy. ${API_UPSTREAM} is substituted by the nginx image's
+    # entrypoint (envsubst on /etc/nginx/templates/*.template) at container start.
+    # Set it on the web service to the API's internal address, e.g.
+    # API_UPSTREAM=http://api.railway.internal:3001
+    #
+    # Same-origin removes the cross-site cookie problem that Brave (and stricter
+    # browser modes elsewhere) trip on, so /login no longer bounces after Discord
+    # OAuth. The session cookie is set on the user-facing web origin via this
+    # proxy rather than on the API host directly.
+    location /api/ {
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Forward Railway's X-Forwarded-Proto (https) rather than nginx's own
+        # $scheme (which is http after Railway's TLS terminator). Without this,
+        # Fastify's trustProxy sees http and silently drops the `secure: true`
+        # session cookie — which would reproduce the original Brave-login bug
+        # this commit was meant to fix. Falls back to $scheme when no upstream
+        # proxy is in play (local docker compose, direct nginx access).
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_pass_request_headers on;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

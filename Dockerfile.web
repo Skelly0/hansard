@@ -1,0 +1,35 @@
+FROM node:20-alpine AS build
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+WORKDIR /app
+
+# VITE_API_URL is baked in at build time (Vite inlines env vars). Defaults to
+# the same-origin relative path "/api" so the production nginx layer below can
+# reverse-proxy /api/* to the API service — see packages/web/nginx.conf.template
+# and the API_UPSTREAM runtime env var.
+ARG VITE_API_URL=/api
+ENV VITE_API_URL=$VITE_API_URL
+
+# Install dependencies
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+COPY packages/web/package.json packages/web/
+RUN pnpm install --frozen-lockfile
+
+# Copy source and build
+COPY tsconfig.base.json ./
+COPY packages/web/ packages/web/
+RUN pnpm --filter @hansard/web build
+
+# Serve with nginx + same-origin /api reverse proxy.
+FROM nginx:alpine
+COPY --from=build /app/packages/web/dist /usr/share/nginx/html
+
+# Files in /etc/nginx/templates/*.template are processed by the official nginx
+# image's entrypoint with envsubst, so ${API_UPSTREAM} is substituted at
+# container start (set on the Railway web service to the API's internal URL).
+# Filter limits substitution to API_UPSTREAM so nginx's own variables
+# ($host, $scheme, etc.) cannot be accidentally clobbered by unrelated env vars.
+ENV NGINX_ENVSUBST_FILTER=^API_UPSTREAM$
+COPY packages/web/nginx.conf.template /etc/nginx/templates/default.conf.template
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+*.log
+.turbo/
+.vite/
+*.tsbuildinfo
+.DS_Store
+coverage/
+.claude/ralph-loop.local.md
+
+# Local-only — refactor backups and Claude plugin state
+TRASH/
+TRASH-FILES.md
+.superpowers/

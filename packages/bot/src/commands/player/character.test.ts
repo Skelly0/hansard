@@ -1,0 +1,653 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import command from './character.js';
+
+const mocks = vi.hoisted(() => ({
+  select: vi.fn(),
+  transaction: vi.fn(),
+}));
+
+vi.mock('../../db.js', () => ({
+  db: {
+    select: mocks.select,
+    transaction: mocks.transaction,
+  },
+}));
+
+function selectLimitResult(rows: unknown[], onLimit?: () => void) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        limit: vi.fn().mockImplementation(async () => {
+          onLimit?.();
+          return rows;
+        }),
+      }),
+    }),
+  };
+}
+
+function selectWhereResult(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue(rows),
+    }),
+  };
+}
+
+function selectInnerJoinWhereResult(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      innerJoin: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(rows),
+      }),
+    }),
+  };
+}
+
+function selectLimitOnlyResult(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      limit: vi.fn().mockResolvedValue(rows),
+    }),
+  };
+}
+
+function selectRejectingLimit(error: Error) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        limit: vi.fn().mockRejectedValue(error),
+      }),
+    }),
+  };
+}
+
+function containsText(value: unknown, pattern: RegExp, seen = new Set<object>()): boolean {
+  if (typeof value === 'string') return pattern.test(value);
+  if (!value || typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+
+  for (const key of Reflect.ownKeys(value)) {
+    if (key === 'timestamp') continue;
+    const child = (value as Record<PropertyKey, unknown>)[key];
+    if (containsText(child, pattern, seen)) return true;
+  }
+
+  return false;
+}
+
+describe('/character create', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('keeps direct-upload portrait messages because the portrait URL depends on the source attachment', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const uploadedMsg = {
+      author: { id: 'discord-user-1' },
+      attachments: {
+        first: vi.fn(() => ({
+          contentType: 'image/png',
+          url: 'https://cdn.discordapp.com/attachments/111/222/Portrait_(1).png?ex=65d903de&is=65c68ede&hm=abc123&',
+        })),
+      },
+      content: '',
+      delete: vi.fn(),
+    };
+
+    const messageCollector = {
+      on: vi.fn((event: string, handler: (msg: typeof uploadedMsg) => void) => {
+        if (event === 'collect') {
+          queueMicrotask(() => handler(uploadedMsg));
+        }
+        return messageCollector;
+      }),
+      stop: vi.fn(),
+    };
+
+    const buttonCollector = {
+      on: vi.fn(() => buttonCollector),
+      stop: vi.fn(),
+    };
+
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => buttonCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({
+          customId: 'char_cancel_discord-user-1',
+          update: vi.fn(),
+        }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      channel: {
+        createMessageCollector: vi.fn(() => messageCollector),
+      },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const confirmPayload = modalSubmit.editReply.mock.calls
+      .map(([payload]) => payload)
+      .find((payload) => containsText(payload, /Character Summary/));
+
+    expect(uploadedMsg.delete).not.toHaveBeenCalled();
+    expect(containsText(confirmPayload, /\[View Image\]\(https:\/\/cdn\.discordapp\.com\/attachments\/111\/222\/Portrait_%281%29\.png\)/)).toBe(true);
+    expect(containsText(confirmPayload, /ex=65d903de|hm=abc123/)).toBe(false);
+  });
+
+  it('accepts character names with straight quotes (the case the user reported)', async () => {
+    let selectCall = 0;
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    let endHandler: (() => void) | undefined;
+    const portraitCollector = {
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'end') {
+          endHandler = handler;
+          queueMicrotask(() => endHandler?.());
+        }
+        return portraitCollector;
+      }),
+      stop: vi.fn(),
+    };
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => portraitCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({
+          customId: 'char_cancel_discord-user-1',
+          update: vi.fn(),
+        }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Edmund "The Cruel" Blackwood',
+          character_bio: '',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: null,
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    // Should NOT have errored on the quotes — should reach the confirmation step
+    // (and only stop there because we wire the test to cancel).
+    expect(editPayloads.some((payload) => containsText(payload, /cannot contain|invisible|Invalid character name/i))).toBe(false);
+    expect(editPayloads.some((payload) => containsText(payload, /Character Summary/))).toBe(true);
+    // Quotes survive the round-trip unchanged.
+    expect(editPayloads.some((payload) => containsText(payload, /Edmund "The Cruel" Blackwood/))).toBe(true);
+  });
+
+  it('rejects character names containing @ with a specific error before any DB call', async () => {
+    let selectCall = 0;
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      throw new Error(`Unexpected select call ${selectCall} (validation should reject before name uniqueness check)`);
+    });
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: '@everyone is alerted',
+          character_bio: '',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    expect(editPayloads.some((payload) => containsText(payload, /cannot contain/i))).toBe(true);
+    // No "database error" fallback — error should be the validation message.
+    expect(editPayloads.some((payload) => containsText(payload, /database error/i))).toBe(false);
+  });
+
+  it('rejects empty character names with a specific error', async () => {
+    mocks.select.mockImplementation(() => selectLimitResult([]));
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: '   ',
+          character_bio: '',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    expect(editPayloads.some((payload) => containsText(payload, /empty/i))).toBe(true);
+  });
+
+  it('acknowledges the submitted modal before checking character name uniqueness', async () => {
+    const events: string[] = [];
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) {
+        return selectLimitResult([{ id: 'existing-player' }], () => {
+          events.push('name uniqueness check');
+        });
+      }
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(async () => {
+        events.push('defer reply');
+      }),
+      editReply: vi.fn(),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    expect(events).toEqual(['defer reply', 'name uniqueness check']);
+    expect(modalSubmit.reply).not.toHaveBeenCalled();
+    expect(modalSubmit.editReply).toHaveBeenCalledWith({
+      embeds: expect.any(Array),
+    });
+  });
+
+  it('keeps the success response when post-commit Discord role metadata lookup fails', async () => {
+    const roleLookupError = new Error('role lookup failed after character commit');
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      if (selectCall === 6) return selectLimitResult([]);
+      if (selectCall === 7) return selectLimitResult([]);
+      if (selectCall === 8) return selectLimitOnlyResult([]);
+      if (selectCall === 9) return selectRejectingLimit(roleLookupError);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    let txInsertCall = 0;
+    const tx = {
+      insert: vi.fn(() => {
+        txInsertCall += 1;
+        if (txInsertCall === 1) {
+          return {
+            values: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([{ id: 'player-1' }]),
+            }),
+          };
+        }
+        return {
+          values: vi.fn().mockResolvedValue(undefined),
+        };
+      }),
+    };
+    mocks.transaction.mockImplementation(async (fn: (transaction: typeof tx) => Promise<unknown>) => fn(tx));
+
+    let endHandler: (() => void) | undefined;
+    const portraitCollector = {
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'end') {
+          endHandler = handler;
+          queueMicrotask(() => endHandler?.());
+        }
+        return portraitCollector;
+      }),
+      stop: vi.fn(),
+    };
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => portraitCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({ customId: 'char_confirm_discord-user-1', deferUpdate: vi.fn() }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: {
+        members: {
+          cache: { get: vi.fn(() => ({ roles: { add: vi.fn() } })) },
+          fetch: vi.fn(),
+        },
+      },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    expect(editPayloads.some((payload) => containsText(payload, /Character Created!/))).toBe(true);
+    expect(editPayloads.some((payload) => containsText(payload, /Failed to create character/))).toBe(false);
+  });
+
+  it('does not offer invite-only parties during self-service character creation', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([
+        { id: 'party-open', name: 'Open League', shortName: 'OPEN', isInviteOnly: false },
+        { id: 'party-private', name: 'Private Caucus', shortName: 'PRV', isInviteOnly: true },
+      ]);
+      if (selectCall === 5) return selectWhereResult([
+        { id: 'party-open', name: 'Open League', shortName: 'OPEN', isInviteOnly: false },
+        { id: 'party-private', name: 'Private Caucus', shortName: 'PRV', isInviteOnly: true },
+      ]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    let endHandler: (() => void) | undefined;
+    const portraitCollector = {
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'end') {
+          endHandler = handler;
+          queueMicrotask(() => endHandler?.());
+        }
+        return portraitCollector;
+      }),
+      stop: vi.fn(),
+    };
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => portraitCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({ values: ['none'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({
+          customId: 'char_cancel_discord-user-1',
+          update: vi.fn(),
+        }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: null,
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const partyPayload = modalSubmit.editReply.mock.calls
+      .map(([payload]) => payload)
+      .find((payload) => containsText(payload, /Choose Your Party/));
+
+    expect(partyPayload).toBeDefined();
+    expect(containsText(partyPayload, /Open League/)).toBe(true);
+    expect(containsText(partyPayload, /Private Caucus/)).toBe(false);
+  });
+
+  it('does not overwrite an existing character if a concurrent create finishes first', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      if (selectCall === 6) return selectLimitResult([]);
+      if (selectCall === 7) return selectLimitResult([{ id: 'player-1' }]);
+      if (selectCall === 8) return selectLimitOnlyResult([]);
+      if (selectCall === 9) return selectLimitResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const tx = {
+      update: vi.fn(() => ({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn().mockResolvedValue(undefined),
+      })),
+    };
+    mocks.transaction.mockImplementation(async (fn: (transaction: typeof tx) => Promise<unknown>) => fn(tx));
+
+    let endHandler: (() => void) | undefined;
+    const portraitCollector = {
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'end') {
+          endHandler = handler;
+          queueMicrotask(() => endHandler?.());
+        }
+        return portraitCollector;
+      }),
+      stop: vi.fn(),
+    };
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => portraitCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({ customId: 'char_confirm_discord-user-1', deferUpdate: vi.fn() }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: null,
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    expect(editPayloads.some((payload) => containsText(payload, /already has a character/i))).toBe(true);
+    expect(editPayloads.some((payload) => containsText(payload, /Character Created!/))).toBe(false);
+  });
+});
+
+describe('/character view', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not expose favour balances in the character dossier', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) {
+        return selectLimitResult([{
+          id: 'player-1',
+          characterName: 'Ada Vance',
+          characterBio: 'A parliamentary comet.',
+          characterPortraitUrl: null,
+          currentAge: 32,
+          startingAge: 30,
+          factionId: 'faction-1',
+          partyId: 'party-1',
+          healthStatus: 'healthy',
+          ailments: [],
+          isAlive: true,
+          causeOfDeath: null,
+        }]);
+      }
+      if (selectCall === 2) return selectLimitResult([{ name: 'Commons' }]);
+      if (selectCall === 3) return selectLimitResult([{ name: 'Reform League' }]);
+      if (selectCall === 4) return selectInnerJoinWhereResult([]);
+      if (selectCall === 5) {
+        return selectInnerJoinWhereResult([{
+          categoryName: 'Court Influence',
+          categoryEmoji: 'CI',
+          balance: 42,
+        }]);
+      }
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const interaction = {
+      user: { id: 'discord-user-1', displayName: 'Ada' },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('view'),
+        getSubcommandGroup: vi.fn().mockReturnValue(null),
+        getUser: vi.fn().mockReturnValue(null),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    const replyPayload = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(replyPayload).toBeDefined();
+    expect(containsText(replyPayload, /Favours/i)).toBe(false);
+    expect(containsText(replyPayload, /Court Influence|42/)).toBe(false);
+  });
+});

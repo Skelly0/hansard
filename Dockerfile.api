@@ -1,0 +1,22 @@
+FROM node:20-alpine AS base
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+WORKDIR /app
+
+# Install dependencies
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+COPY packages/db/package.json packages/db/
+COPY packages/shared/package.json packages/shared/
+COPY packages/api/package.json packages/api/
+RUN pnpm install --frozen-lockfile
+
+# Copy source
+COPY tsconfig.base.json ./
+COPY packages/db/ packages/db/
+COPY packages/shared/ packages/shared/
+COPY packages/api/ packages/api/
+
+# Expose
+EXPOSE 3001
+
+# Run
+CMD ["pnpm", "dev:api"]

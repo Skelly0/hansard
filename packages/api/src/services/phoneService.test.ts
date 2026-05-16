@@ -269,6 +269,34 @@ describe('PhoneService.listDirectory', () => {
       }),
     ]);
   });
+
+  it('shows inherited numbers under the successor character name', async () => {
+    const db = makeDb({
+      selectQueues: [[
+        {
+          id: 'n1',
+          playerId: 'p1',
+          numberRaw: '555-0101',
+          numberNormalized: '5550101',
+          label: 'Office',
+          cachedCharacterName: 'Ada Mortalis',
+          characterName: 'Beatrice Vance',
+          discordUsername: 'ada',
+        },
+      ]],
+    });
+
+    const svc = new PhoneService(db);
+    const rows = await svc.listDirectory();
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        playerId: 'p1',
+        numberRaw: '555-0101',
+        characterName: 'Beatrice Vance',
+      }),
+    ]);
+  });
 });
 
 describe('PhoneService.initiateCall', () => {
@@ -362,6 +390,39 @@ describe('PhoneService.initiateCall', () => {
     const svc = new PhoneService(db);
     await expect(svc.initiateCall({ callerPlayerId: 'p1', callerNumberId: 'n1', recipientNumberId: 'n2' }))
       .rejects.toMatchObject({ code: 'recipient_busy' });
+  });
+
+  it('lets a successor use an active number registered by their previous character', async () => {
+    const insertedCall = {
+      id: 'call-1',
+      callerNumberId: 'n1',
+      recipientNumberId: 'n2',
+      callerPlayerId: 'p1',
+      recipientPlayerId: 'p2',
+      status: 'ringing',
+    };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'n1', playerId: 'p1', isActive: true, cachedCharacterName: 'Ada Mortalis' }],
+        [{ id: 'n2', playerId: 'p2', isActive: true, cachedCharacterName: 'Bram Pike' }],
+        [{ id: 'p1', characterName: 'Beatrice Vance', discordId: '1', isAlive: true }],
+        [{ id: 'p2', characterName: 'Bram Pike', discordId: '2', isAlive: true }],
+        [],
+        [],
+      ],
+      insertReturning: [[insertedCall]],
+    });
+    const svc = new PhoneService(db);
+
+    const result = await svc.initiateCall({
+      callerPlayerId: 'p1',
+      callerNumberId: 'n1',
+      recipientNumberId: 'n2',
+    });
+
+    expect(result.call).toEqual(insertedCall);
+    expect(result.callerNumber.playerId).toBe('p1');
+    expect(result.callerPlayer.characterName).toBe('Beatrice Vance');
   });
 });
 

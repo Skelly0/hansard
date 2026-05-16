@@ -355,7 +355,7 @@ export class VoteService {
     const npcHouseActive = result.passed ? await this.isNpcHouseActive(tx) : false;
     const playerVoteResult = result.passed ? 'passed' : 'rejected';
     const toStatus = result.passed
-      ? npcHouseActive ? BillStatus.NPC_PENDING : BillStatus.PLAYER_PASSED
+      ? npcHouseActive ? BillStatus.NPC_PENDING : BillStatus.ENACTED
       : BillStatus.PLAYER_REJECTED;
 
     await tx
@@ -366,6 +366,8 @@ export class VoteService {
         playerVoteAt: talliedAt,
         npcVoteRequired: npcHouseActive,
         npcVote: npcHouseActive ? { status: 'pending' as const } : null,
+        enactedAt: result.passed && !npcHouseActive ? talliedAt : undefined,
+        effectiveAt: result.passed && !npcHouseActive ? talliedAt : undefined,
         updatedAt: talliedAt,
       })
       .where(eq(bills.id, election.relatedBillId));
@@ -378,7 +380,7 @@ export class VoteService {
       notes: result.passed
         ? npcHouseActive
           ? `Player house vote passed (election ${election.id}); NPC house review is pending`
-          : `Player house vote passed (election ${election.id}); NPC house is inactive`
+          : `Player house vote passed (election ${election.id}); NPC house is inactive; bill auto-enacted`
         : `Player house vote rejected (election ${election.id})`,
     });
   }

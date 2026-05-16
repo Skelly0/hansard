@@ -800,8 +800,7 @@ async function handleView(interaction: ChatInputCommandInteraction): Promise<voi
     .select({ officeName: offices.name, officeTier: offices.tier })
     .from(officeHolders)
     .innerJoin(offices, eq(officeHolders.officeId, offices.id))
-    .where(eq(officeHolders.playerId, player.id));
-  // TODO: filter where endDate IS NULL once Drizzle isNull is wired
+    .where(and(eq(officeHolders.playerId, player.id), isNull(officeHolders.endDate)));
 
   // Health details are private to the player and staff.
   const healthDisplay = canViewPrivate

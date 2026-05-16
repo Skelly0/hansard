@@ -34,6 +34,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       });
       return;
     }
+    if (!player.characterName) {
+      await interaction.editReply({
+        embeds: [errorEmbed('You need to create a character before standing as a candidate.')],
+      });
+      return;
+    }
+    if (!player.isAlive) {
+      await interaction.editReply({
+        embeds: [errorEmbed('Dead characters cannot stand as candidates.')],
+      });
+      return;
+    }
 
     // 2. Look up the election by title or ID.
     const { election, errorMessage } = await findElectionByReference(db, electionRef);

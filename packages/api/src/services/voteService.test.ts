@@ -379,6 +379,19 @@ describe('VoteService character registration guards', () => {
 
     expect(db.insert).not.toHaveBeenCalled();
   });
+
+  it('does not allow dead character rows to register as candidates', async () => {
+    const db = makeRegisterCandidateDb({
+      playerRows: [{ id: 'dead-player', characterName: 'Ada Vance', isAlive: false }],
+    });
+
+    await expect(new VoteService(db as any).registerCandidate({
+      electionId: 'election-1',
+      playerId: 'dead-player',
+    })).rejects.toThrow('Dead characters cannot stand as candidates');
+
+    expect(db.insert).not.toHaveBeenCalled();
+  });
 });
 
 describe('VoteService dead voter tally handling', () => {

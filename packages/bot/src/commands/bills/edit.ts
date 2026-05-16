@@ -4,6 +4,7 @@ import { db } from '../../db.js';
 import { bills, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
+import { SHORT_BILL_TEXT_MAX_LENGTH } from './display.js';
 
 /**
  * Resolve a bill by either bill number (e.g. "B-001", "1") or title.
@@ -51,7 +52,7 @@ async function resolveBill(input: string): Promise<
   return byPartial ?? null;
 }
 
-type EditableField = 'title' | 'summary' | 'policy_areas' | 'tags';
+type EditableField = 'title' | 'summary' | 'text' | 'policy_areas' | 'tags';
 
 /** Split a comma-separated value into a clean string array. */
 function splitCsv(value: string): string[] {
@@ -103,7 +104,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   // Build update payload
-  const setValues: Record<string, unknown> = { updatedAt: new Date() };
+  const now = new Date();
+  const setValues: Record<string, unknown> = { updatedAt: now };
   let displayValue: string;
 
   switch (field) {
@@ -123,6 +125,27 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       const trimmed = value.trim();
       setValues.summary = trimmed.length > 0 ? trimmed : null;
       displayValue = trimmed.length > 0 ? trimmed : '_(cleared)_';
+      break;
+    }
+    case 'text': {
+      if (bill.billType !== 'short') {
+        await interaction.editReply({
+          embeds: [errorEmbed('Only short text-only bills can have their text edited with `/bill edit`. For Google Doc bills, edit the Google Doc and run `/bill recache`.')],
+        });
+        return;
+      }
+
+      const trimmed = value.trim();
+      if (trimmed.length === 0 || trimmed.length > SHORT_BILL_TEXT_MAX_LENGTH) {
+        await interaction.editReply({
+          embeds: [errorEmbed(`Short bill text must be between 1 and ${SHORT_BILL_TEXT_MAX_LENGTH} characters.`)],
+        });
+        return;
+      }
+
+      setValues.cachedContent = trimmed;
+      setValues.cachedAt = now;
+      displayValue = trimmed;
       break;
     }
     case 'policy_areas': {

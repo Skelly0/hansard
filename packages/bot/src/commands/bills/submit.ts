@@ -416,7 +416,7 @@ const command: Command = {
     .addSubcommand((sub) =>
       sub
         .setName('edit')
-        .setDescription('Edit bill metadata (author or staff). Content lives in the Google Doc.')
+        .setDescription('Edit bill fields (author or staff)')
         .addStringOption((opt) =>
           opt
             .setName('bill')
@@ -431,6 +431,7 @@ const command: Command = {
             .addChoices(
               { name: 'title', value: 'title' },
               { name: 'summary', value: 'summary' },
+              { name: 'text (short bills only)', value: 'text' },
               { name: 'policy_areas (comma-separated)', value: 'policy_areas' },
               { name: 'tags (comma-separated)', value: 'tags' },
             ),
@@ -438,9 +439,9 @@ const command: Command = {
         .addStringOption((opt) =>
           opt
             .setName('value')
-            .setDescription('New value (for list fields, comma-separated)')
+            .setDescription('New value (comma-separated for list fields)')
             .setRequired(true)
-            .setMaxLength(2000),
+            .setMaxLength(SHORT_BILL_TEXT_MAX_LENGTH),
         ),
     )
     .addSubcommand((sub) =>

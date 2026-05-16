@@ -9,27 +9,40 @@ vi.mock('@hansard/api/services/simulationService', () => ({
 }));
 
 import {
+  buildObituaryEmbed,
   DEFAULT_GRAVEYARD_CHANNEL_ID,
   getGraveyardChannelId,
   postObituaryToGraveyard,
 } from './graveyard.js';
 
+function makeObituary(overrides: Record<string, unknown> = {}) {
+  return {
+    characterName: 'Adrian DuPont',
+    birthDate: '2037-01-01',
+    deathDate: '2075-01-01',
+    age: 38,
+    causeOfDeath: 'Heart Attack from a failed coup',
+    ailments: [],
+    partyHistory: [],
+    officesHeld: [],
+    narrative: 'Adrian DuPont lived to the age of 38.',
+    portraitUrl: null,
+    ...overrides,
+  } as Parameters<typeof buildObituaryEmbed>[0];
+}
+
 describe('graveyard obituary posting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.GRAVEYARD_CHANNEL_ID;
-    mocks.generateObituary.mockResolvedValue({
+    mocks.generateObituary.mockResolvedValue(makeObituary({
       characterName: 'Isabella Grech',
       birthDate: '1956-01-01',
-      deathDate: 'unknown',
+      deathDate: '2026-04-12',
       age: 70,
       causeOfDeath: 'Many things!',
-      ailments: [],
-      partyHistory: [],
-      officesHeld: [],
       narrative: 'Isabella Grech lived to the age of 70.',
-      portraitUrl: null,
-    });
+    }));
   });
 
   it('uses the SCORP3 graveyard channel when no env override is configured', () => {
@@ -40,6 +53,28 @@ describe('graveyard obituary posting', () => {
     process.env.GRAVEYARD_CHANNEL_ID = ' 123456789012345678 ';
 
     expect(getGraveyardChannelId()).toBe('123456789012345678');
+  });
+
+  it('renders both dates in the title when birthDate is known', () => {
+    const embed = buildObituaryEmbed(makeObituary());
+
+    expect(embed.data.title).toBe('⚰️ Adrian DuPont (2037-01-01 — 2075-01-01)');
+    expect(embed.data.footer?.text).toBe('Rest in peace. • 2075-01-01');
+  });
+
+  it('omits the dash and falls back to "d. <deathDate>" when birthDate is null', () => {
+    const embed = buildObituaryEmbed(makeObituary({ birthDate: null }));
+
+    expect(embed.data.title).toBe('⚰️ Adrian DuPont (d. 2075-01-01)');
+    expect(embed.data.title).not.toContain('unknown');
+    expect(embed.data.footer?.text).toBe('Rest in peace. • 2075-01-01');
+  });
+
+  it('drops the date suffix entirely when both birthDate and deathDate are null', () => {
+    const embed = buildObituaryEmbed(makeObituary({ birthDate: null, deathDate: null }));
+
+    expect(embed.data.title).toBe('⚰️ Adrian DuPont');
+    expect(embed.data.footer?.text).toBe('Rest in peace.');
   });
 
   it('posts a generated obituary embed to the configured graveyard channel', async () => {

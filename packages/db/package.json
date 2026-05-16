@@ -1,0 +1,40 @@
+{
+  "name": "@hansard/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "generate": "drizzle-kit generate",
+    "migrate": "drizzle-kit migrate",
+    "migrate:short-bills": "tsx scripts/migrate-short-bills.ts",
+    "migrate:invite-only-parties": "tsx scripts/migrate-invite-only-parties.ts",
+    "migrate:npc-house-active": "tsx scripts/migrate-npc-house-active.ts",
+    "migrate:phones": "tsx scripts/migrate-phones.ts",
+    "migrate:phone-backfill-marker": "tsx scripts/migrate-phone-backfill-marker.ts",
+    "migrate:bill-legislation-message": "tsx scripts/migrate-bill-legislation-message.ts",
+    "migrate:aging-config": "tsx scripts/migrate-aging-config.ts",
+    "migrate:sessions-table": "tsx scripts/migrate-sessions-table.ts",
+    "fix:bill-5-status": "tsx scripts/fix-bill-5-status.ts",
+    "fix:character-birth-dates": "tsx scripts/fix-character-birth-dates.ts",
+    "push": "drizzle-kit push",
+    "studio": "drizzle-kit studio",
+    "build": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@hansard/shared": "workspace:*",
+    "drizzle-orm": "^0.38.0",
+    "postgres": "^3.4.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.30.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.5",
+    "@types/node": "^22.0.0"
+  }
+}

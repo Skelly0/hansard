@@ -14,6 +14,7 @@ const PUBLIC_PLAYER_EVENT_TYPES: PlayerEventType[] = [
   PlayerEventType.OFFICE_LEFT,
   PlayerEventType.DEATH,
   PlayerEventType.REGISTRATION,
+  PlayerEventType.REINCARNATION,
   PlayerEventType.NAME_CHANGE,
 ];
 
@@ -27,6 +28,7 @@ const EVENT_TYPE_EMOJI: Record<string, string> = {
   ailment_recovered: '\u{1F49A}',
   health_changed: '\u{2764}\u{FE0F}',
   death: '\u{26B0}\u{FE0F}',
+  reincarnation: '\u{1F504}',
   name_change: '\u{1F4AC}',
   suspension: '\u{26D4}',
   unsuspension: '\u{2705}',

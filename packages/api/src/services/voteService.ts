@@ -684,6 +684,7 @@ export class VoteService {
       .select({
         id: players.id,
         characterName: players.characterName,
+        isAlive: players.isAlive,
       })
       .from(players)
       .where(eq(players.id, input.playerId))
@@ -694,6 +695,9 @@ export class VoteService {
     }
     if (!player.characterName) {
       throw new Error('Character registration is required');
+    }
+    if (!player.isAlive) {
+      throw new Error('Dead characters cannot stand as candidates');
     }
 
     const [candidate] = await this.db

@@ -34,11 +34,16 @@ function selectWhereResult(rows: unknown[]) {
   };
 }
 
-function selectInnerJoinWhereResult(rows: unknown[]) {
+function selectInnerJoinWhereResult(
+  rows: unknown[],
+  onWhere?: (whereArg: unknown) => unknown[] | Promise<unknown[]>,
+) {
   return {
     from: vi.fn().mockReturnValue({
       innerJoin: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue(rows),
+        where: vi.fn().mockImplementation((whereArg: unknown) =>
+          Promise.resolve(onWhere ? onWhere(whereArg) : rows),
+        ),
       }),
     }),
   };
@@ -591,11 +596,191 @@ describe('/character create', () => {
     expect(editPayloads.some((payload) => containsText(payload, /already has a character/i))).toBe(true);
     expect(editPayloads.some((payload) => containsText(payload, /Character Created!/))).toBe(false);
   });
+
+  it('lets a player register a successor after their previous character died', async () => {
+    const oldCharacter = {
+      id: 'player-1',
+      discordId: 'discord-user-1',
+      discordUsername: 'ada',
+      characterName: 'Ada Mortalis',
+      characterBio: 'The old guard.',
+      characterPortraitUrl: null,
+      factionId: 'faction-old',
+      partyId: 'party-old',
+      birthDate: '1840-01-01',
+      startingAge: 60,
+      currentAge: 80,
+      deathDate: '1920-01-01',
+      causeOfDeath: 'natural causes',
+      isAlive: false,
+      healthStatus: 'deceased',
+      ailments: [],
+      startingFavoursGranted: true,
+      isActive: true,
+      isStaff: false,
+      staffRole: null,
+      registeredAt: new Date('2026-01-01T00:00:00.000Z'),
+      lastActiveAt: null,
+      profileData: { pronouns: 'she/her' },
+    };
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) {
+        return selectLimitResult([{
+          id: oldCharacter.id,
+          characterName: oldCharacter.characterName,
+          isAlive: oldCharacter.isAlive,
+        }]);
+      }
+      if (selectCall === 2) return selectLimitResult([{ id: oldCharacter.id, discordId: oldCharacter.discordId }]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      if (selectCall === 6) return selectLimitResult([{ id: oldCharacter.id, discordId: oldCharacter.discordId }]);
+      if (selectCall === 7) return selectLimitResult([oldCharacter]);
+      if (selectCall === 8) return selectLimitOnlyResult([{ currentDate: '1930-01-01' }]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const tx = {
+      update: vi.fn(() => ({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([{ id: oldCharacter.id }]),
+          }),
+        }),
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn().mockResolvedValue(undefined),
+      })),
+    };
+    mocks.transaction.mockImplementation(async (fn: (transaction: typeof tx) => Promise<unknown>) => fn(tx));
+
+    let endHandler: (() => void) | undefined;
+    const portraitCollector = {
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'end') {
+          endHandler = handler;
+          queueMicrotask(() => endHandler?.());
+        }
+        return portraitCollector;
+      }),
+      stop: vi.fn(),
+    };
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => portraitCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({ customId: 'char_confirm_discord-user-1', deferUpdate: vi.fn() }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Beatrice Vance',
+          character_bio: 'A new claimant.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: null,
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    expect(interaction.showModal).toHaveBeenCalled();
+    const updateSet = tx.update.mock.results[0]?.value.set;
+    expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({
+      characterName: 'Beatrice Vance',
+      isAlive: true,
+      healthStatus: 'healthy',
+      deathDate: null,
+      causeOfDeath: null,
+    }));
+    expect(updateSet.mock.calls[0][0].profileData.previousCharacters[0]).toMatchObject({
+      characterName: 'Ada Mortalis',
+      deathDate: '1920-01-01',
+      healthStatus: 'deceased',
+    });
+
+    const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
+    expect(editPayloads.some((payload) => containsText(payload, /Successor Character Registered/))).toBe(true);
+    expect(editPayloads.some((payload) => containsText(payload, /Beatrice Vance/))).toBe(true);
+    expect(editPayloads.some((payload) => containsText(payload, /Ada Mortalis/))).toBe(true);
+  });
 });
 
 describe('/character view', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('shows only current offices after a deceased character is replaced by a successor', async () => {
+    let selectCall = 0;
+    const officeRows = [
+      { officeName: 'Former Chancellor', officeTier: 'cabinet' },
+      { officeName: 'Current Delegate', officeTier: 'legislature' },
+    ];
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) {
+        return selectLimitResult([{
+          id: 'player-1',
+          characterName: 'Beatrice Vance',
+          characterBio: 'A fresh claimant to the bench.',
+          characterPortraitUrl: null,
+          currentAge: 28,
+          startingAge: 28,
+          factionId: null,
+          partyId: null,
+          healthStatus: 'healthy',
+          ailments: [],
+          isAlive: true,
+          causeOfDeath: null,
+        }]);
+      }
+      if (selectCall === 2) {
+        return selectInnerJoinWhereResult(officeRows, (whereArg) =>
+          containsText(whereArg, /is null/i)
+            ? [officeRows[1]]
+            : officeRows,
+        );
+      }
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const interaction = {
+      user: { id: 'discord-user-1', displayName: 'Beatrice' },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('view'),
+        getSubcommandGroup: vi.fn().mockReturnValue(null),
+        getUser: vi.fn().mockReturnValue(null),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    const replyPayload = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(replyPayload).toBeDefined();
+    expect(containsText(replyPayload, /Beatrice Vance/)).toBe(true);
+    expect(containsText(replyPayload, /Current Delegate/)).toBe(true);
+    expect(containsText(replyPayload, /Former Chancellor/)).toBe(false);
   });
 
   it('does not expose favour balances in the character dossier', async () => {

@@ -97,6 +97,7 @@ export const PUBLIC_PLAYER_EVENT_TYPES = [
   PlayerEventType.OFFICE_LEFT,
   PlayerEventType.DEATH,
   PlayerEventType.REGISTRATION,
+  PlayerEventType.REINCARNATION,
   PlayerEventType.NAME_CHANGE,
 ];
 

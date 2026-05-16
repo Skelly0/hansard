@@ -19,6 +19,7 @@ const PUBLIC_PLAYER_EVENT_TYPES: PlayerEventType[] = [
   PlayerEventType.OFFICE_LEFT,
   PlayerEventType.DEATH,
   PlayerEventType.REGISTRATION,
+  PlayerEventType.REINCARNATION,
   PlayerEventType.NAME_CHANGE,
 ];
 
@@ -33,6 +34,7 @@ const EVENT_TYPE_EMOJI: Record<string, string> = {
   ailment_recovered: '\u{1F49A}',   // green heart
   health_changed: '\u{2764}\u{FE0F}\u{200D}\u{1FA79}', // mending heart
   death: '\u{26B0}\u{FE0F}',        // coffin
+  reincarnation: '\u{1F504}',       // anticlockwise arrows
   name_change: '\u{1F4AC}',         // speech bubble
   profile_edit: '\u{270F}\u{FE0F}', // pencil
   suspension: '\u{26D4}',           // no entry

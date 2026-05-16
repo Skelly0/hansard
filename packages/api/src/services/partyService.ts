@@ -272,7 +272,7 @@ export async function dissolveParty(
 
     const [row] = await tx
       .update(parties)
-      .set({ isActive: false, dissolvedAt: new Date() })
+      .set({ isActive: false, dissolvedAt: new Date(), leaderId: null })
       .where(eq(parties.id, id))
       .returning();
 

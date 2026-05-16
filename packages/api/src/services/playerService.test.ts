@@ -5,6 +5,7 @@ import {
   aggregatePermissionsForPlayer,
   listPlayers,
   changeParty,
+  leaveParty,
   getPlayerVotingRecord,
   sanitizePlayerEvents,
   sanitizePlayerProfile,
@@ -278,6 +279,158 @@ describe('changeParty invite-only guard', () => {
     await expect(changeParty(db, existing.id, 'party-private', existing.id)).rejects.toThrow(/invite-only/i);
     expect(update).not.toHaveBeenCalled();
     expect(insert).not.toHaveBeenCalled();
+  });
+});
+
+describe('party departure clears stale party leadership', () => {
+  function playerRow(overrides: Partial<Record<string, any>> = {}) {
+    return {
+      id: 'player-1',
+      discordId: '111',
+      discordUsername: 'aldrick',
+      characterName: 'Aldrick Vance',
+      characterBio: null,
+      characterPortraitUrl: null,
+      factionId: null,
+      partyId: null,
+      birthDate: '1990-01-01',
+      startingAge: 35,
+      currentAge: 35,
+      deathDate: null,
+      causeOfDeath: null,
+      isAlive: true,
+      healthStatus: 'healthy',
+      ailments: [],
+      startingFavoursGranted: false,
+      isActive: true,
+      isStaff: false,
+      staffRole: null,
+      registeredAt: new Date('2026-01-01T00:00:00.000Z'),
+      lastActiveAt: null,
+      profileData: null,
+      ...overrides,
+    };
+  }
+
+  type SetCall = { table: 'players' | 'parties' | 'unknown'; values: Record<string, unknown> };
+
+  function makeDb({
+    existing,
+    oldParty,
+    newParty,
+    updated,
+  }: {
+    existing: Record<string, unknown>;
+    oldParty: Record<string, unknown> | null;
+    newParty: Record<string, unknown> | null;
+    updated: Record<string, unknown>;
+  }) {
+    const setCalls: SetCall[] = [];
+    const selectChains: any[] = [
+      // getPlayer: select players where id = playerId
+      {
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([existing]),
+          }),
+        }),
+      },
+    ];
+    if (existing.partyId) {
+      // select old party row (for name)
+      selectChains.push({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue(oldParty ? [oldParty] : []),
+          }),
+        }),
+      });
+    }
+    if (newParty) {
+      // select new party row (changeParty only)
+      selectChains.push({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([newParty]),
+          }),
+        }),
+      });
+    }
+    const select = vi.fn();
+    selectChains.forEach((chain) => select.mockReturnValueOnce(chain));
+
+    const update = vi.fn().mockImplementation((table: unknown) => {
+      // drizzle Symbol-based introspection is overkill for tests; rely on the
+      // set keys to disambiguate which table is being updated.
+      const tableName = (table as any)?.[Symbol.for('drizzle:Name')]
+        ?? (table as any)?._?.name
+        ?? (table as any)?.name
+        ?? 'unknown';
+      return {
+        set: vi.fn().mockImplementation((values: Record<string, unknown>) => {
+          const t = tableName === 'players' || tableName === 'parties' ? tableName : 'unknown';
+          setCalls.push({ table: t, values });
+          return {
+            where: vi.fn().mockReturnValue({
+              returning: vi.fn().mockResolvedValue([updated]),
+            }),
+          };
+        }),
+      };
+    });
+
+    const insert = vi.fn().mockReturnValue({
+      values: vi.fn().mockResolvedValue(undefined),
+    });
+
+    return { db: { select, update, insert } as any, setCalls };
+  }
+
+  it('changeParty clears the old party leaderId when the leaving player led that party', async () => {
+    const existing = playerRow({ partyId: 'old-party-1' });
+    const updated = playerRow({ partyId: 'new-party-1' });
+    const { db, setCalls } = makeDb({
+      existing,
+      oldParty: { id: 'old-party-1', name: 'Old Party' },
+      newParty: { id: 'new-party-1', name: 'New Party', isInviteOnly: false },
+      updated,
+    });
+
+    await changeParty(db, existing.id, 'new-party-1', existing.id);
+
+    expect(setCalls).toContainEqual(expect.objectContaining({ values: { partyId: 'new-party-1' } }));
+    expect(setCalls).toContainEqual(expect.objectContaining({ values: { leaderId: null } }));
+  });
+
+  it('changeParty does not touch parties.leaderId when the player has no old party', async () => {
+    const existing = playerRow({ partyId: null });
+    const updated = playerRow({ partyId: 'new-party-1' });
+    const { db, setCalls } = makeDb({
+      existing,
+      oldParty: null,
+      newParty: { id: 'new-party-1', name: 'New Party', isInviteOnly: false },
+      updated,
+    });
+
+    await changeParty(db, existing.id, 'new-party-1', existing.id);
+
+    expect(setCalls.some((c) => 'leaderId' in c.values)).toBe(false);
+  });
+
+  it('leaveParty clears the old party leaderId when the leaving player led that party', async () => {
+    const existing = playerRow({ partyId: 'old-party-1' });
+    const updated = playerRow({ partyId: null });
+    const { db, setCalls } = makeDb({
+      existing,
+      oldParty: { id: 'old-party-1', name: 'Old Party' },
+      newParty: null,
+      updated,
+    });
+
+    await leaveParty(db, existing.id);
+
+    expect(setCalls).toContainEqual(expect.objectContaining({ values: { partyId: null } }));
+    expect(setCalls).toContainEqual(expect.objectContaining({ values: { leaderId: null } }));
   });
 });
 

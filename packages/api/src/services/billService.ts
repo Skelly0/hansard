@@ -66,6 +66,11 @@ export interface BillVoterViewer {
   isStaff: boolean;
 }
 
+const ENACTABLE_STATUSES = new Set<string>([
+  BillStatus.PLAYER_PASSED,
+  BillStatus.NPC_PASSED,
+]);
+
 // ============================================================
 // Slug Generation
 // ============================================================
@@ -817,6 +822,12 @@ export async function enactBill(
   }
 
   const oldStatus = bill.status;
+  if (!ENACTABLE_STATUSES.has(oldStatus)) {
+    throw new Error(
+      `Bill #B-${String(bill.billNumber).padStart(3, '0')} is in status \`${oldStatus}\` and cannot be enacted (must be \`player_passed\` or \`npc_passed\`).`,
+    );
+  }
+
   const now = new Date();
 
   // Status flip + audit row must land together; amendment application happens

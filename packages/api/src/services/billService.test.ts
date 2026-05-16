@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createVoteOnBill, getVoters, listBills } from './billService';
+import { createVoteOnBill, enactBill, getVoters, listBills } from './billService';
 
 const baseDate = new Date('2026-01-01T00:00:00.000Z');
 
@@ -268,5 +268,23 @@ describe('createVoteOnBill transactional safety', () => {
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(topLevelInsert).not.toHaveBeenCalled();
     expect(topLevelUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('enactBill lifecycle guard', () => {
+  it('rejects bills that have not passed a player or NPC vote', async () => {
+    const billLimit = vi.fn().mockResolvedValue([billRow({ status: 'submitted' })]);
+    const billWhere = vi.fn().mockReturnValue({ limit: billLimit });
+    const billFrom = vi.fn().mockReturnValue({ where: billWhere });
+    const db: any = {
+      select: vi.fn().mockReturnValue({ from: billFrom }),
+      transaction: vi.fn(async () => {
+        throw new Error('transaction should not run');
+      }),
+    };
+
+    await expect(enactBill(db, 'transit-reform-act', 'actor-1'))
+      .rejects.toThrow(/cannot be enacted/);
+    expect(db.transaction).not.toHaveBeenCalled();
   });
 });

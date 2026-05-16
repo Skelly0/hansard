@@ -1,12 +1,22 @@
 import 'dotenv/config';
 
+import { pathToFileURL } from 'node:url';
+import type { Database } from '@hansard/db';
 import { closeDb } from '@hansard/db';
+import { VoteService } from '@hansard/api/services/voteService';
 import { db } from '../db.js';
 import { closeDueVotes, listDueOpenVotes } from '../services/voteAutoClose.js';
 
-const args = new Set(process.argv.slice(2));
+type CloseDueVotesScriptLogger = Pick<Console, 'log' | 'error'>;
 
-async function getReactionRenderer() {
+export interface RunCloseDueVotesScriptOptions {
+  args?: string[];
+  database?: Database;
+  logger?: CloseDueVotesScriptLogger;
+  closeDatabase?: (database: Database) => Promise<void>;
+}
+
+async function getReactionRenderer(args: Set<string>) {
   if (!args.has('--render-discord')) return undefined;
 
   const token = process.env.DISCORD_BOT_TOKEN;
@@ -42,60 +52,78 @@ async function getReactionRenderer() {
   };
 }
 
-async function main() {
-  if (args.has('--dry-run')) {
-    const dueVotes = await listDueOpenVotes(db);
-    if (dueVotes.length === 0) {
-      console.log('No overdue open votes found.');
+export async function runCloseDueVotesScript(
+  options: RunCloseDueVotesScriptOptions = {},
+): Promise<void> {
+  const args = new Set(options.args ?? process.argv.slice(2));
+  const database = options.database ?? db;
+  const logger = options.logger ?? console;
+  const closeDatabase = options.closeDatabase ?? closeDb;
+  let renderer: Awaited<ReturnType<typeof getReactionRenderer>> | undefined;
+
+  try {
+    if (args.has('--dry-run')) {
+      const dueVotes = await listDueOpenVotes(database);
+      if (dueVotes.length === 0) {
+        logger.log('No overdue open votes found.');
+        return;
+      }
+
+      logger.log(`Would close ${dueVotes.length} overdue open vote(s):`);
+      for (const vote of dueVotes) {
+        const closesAt = vote.votingClosesAt.toISOString();
+        logger.log(`- ${vote.title} (${vote.id}) closed at ${closesAt}`);
+      }
       return;
     }
 
-    console.log(`Would close ${dueVotes.length} overdue open vote(s):`);
-    for (const vote of dueVotes) {
-      const closesAt = vote.votingClosesAt.toISOString();
-      console.log(`- ${vote.title} (${vote.id}) closed at ${closesAt}`);
-    }
-    return;
-  }
-
-  const renderer = await getReactionRenderer();
-  try {
-    const result = await closeDueVotes(db, {
-      logger: console,
+    renderer = await getReactionRenderer(args);
+    const voteService = new VoteService(database);
+    const result = await closeDueVotes(database, {
+      logger,
       renderReactionResult: renderer?.renderReactionResult,
+      tallyElection: async (election) => {
+        await voteService.tallyVotes(election.id);
+      },
     });
 
     if (result.closed.length === 0) {
-      console.log('No overdue open votes found.');
+      logger.log('No overdue open votes found.');
     } else {
-      console.log(`Closed ${result.closed.length} overdue open vote(s):`);
+      logger.log(`Closed ${result.closed.length} overdue open vote(s):`);
       for (const vote of result.closed) {
-        console.log(`- ${vote.title} (${vote.id})`);
+        logger.log(`- ${vote.title} (${vote.id})`);
       }
     }
 
     if (result.renderFailed.length > 0) {
-      console.error(`Closed ${result.renderFailed.length} reaction vote(s) but failed to render Discord results:`);
+      logger.error(`Closed ${result.renderFailed.length} reaction vote(s) but failed to render Discord results:`);
       for (const vote of result.renderFailed) {
-        console.error(`- ${vote.title} (${vote.id}): ${vote.error}`);
+        logger.error(`- ${vote.title} (${vote.id}): ${vote.error}`);
       }
       process.exitCode = 1;
     }
 
     if (result.failed.length > 0) {
-      console.error(`Failed to close ${result.failed.length} overdue vote(s):`);
+      logger.error(`Failed to close ${result.failed.length} overdue vote(s):`);
       for (const vote of result.failed) {
-        console.error(`- ${vote.title} (${vote.id}): ${vote.error}`);
+        logger.error(`- ${vote.title} (${vote.id}): ${vote.error}`);
       }
       process.exitCode = 1;
     }
   } finally {
     renderer?.destroy();
+    await closeDatabase(database);
   }
 }
 
-try {
-  await main();
-} finally {
-  await closeDb(db);
+function isDirectRun(): boolean {
+  return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);
+}
+
+if (isDirectRun()) {
+  runCloseDueVotesScript().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
 }

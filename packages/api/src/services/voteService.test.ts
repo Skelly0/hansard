@@ -694,7 +694,7 @@ describe('VoteService legislative bill status updates', () => {
     castAt,
   };
 
-  it('marks a linked bill player-passed when the NPC house is inactive', async () => {
+  it('auto-enacts a linked passed bill when the NPC house is inactive', async () => {
     const { db, updateValues, statusLogValues } = makeLegislativeTallyDb({
       npcHouseActive: false,
       aliveBallotRows: [yeaBallot, yeaBallot, nayBallot],
@@ -712,15 +712,17 @@ describe('VoteService legislative bill status updates', () => {
     await new VoteService(db as any).tallyVotes('election-1');
 
     expect(updateValues[1]).toMatchObject({
-      status: 'player_passed',
+      status: 'enacted',
       playerVoteResult: 'passed',
       npcVoteRequired: false,
     });
     expect(updateValues[1]).toHaveProperty('playerVoteAt');
+    expect(updateValues[1]).toHaveProperty('enactedAt');
+    expect(updateValues[1]).toHaveProperty('effectiveAt');
     expect(statusLogValues[0]).toMatchObject({
       billId: 'bill-1',
       fromStatus: 'voting',
-      toStatus: 'player_passed',
+      toStatus: 'enacted',
       changedById: 'creator-player',
     });
   });

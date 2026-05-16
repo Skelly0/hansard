@@ -418,6 +418,7 @@ export async function changeParty(
 ): Promise<PlayerProfile | null> {
   const existing = await getPlayer(db, playerId);
   if (!existing) return null;
+  if (existing.partyId === newPartyId) return existing; // no-op: already in this party
 
   // Fetch party names for the event log
   let oldPartyName: string | null = null;

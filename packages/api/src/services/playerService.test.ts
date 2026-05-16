@@ -417,6 +417,23 @@ describe('party departure clears stale party leadership', () => {
     expect(setCalls.some((c) => 'leaderId' in c.values)).toBe(false);
   });
 
+  it('changeParty is a no-op when the player is already in the target party', async () => {
+    const existing = playerRow({ partyId: 'party-current' });
+    const { db, setCalls } = makeDb({
+      existing,
+      // No oldParty/newParty lookups expected; service should bail before any select beyond getPlayer
+      oldParty: null,
+      newParty: null,
+      updated: existing,
+    });
+
+    await changeParty(db, existing.id, 'party-current', existing.id);
+
+    // No writes at all — must not strip leadership from a player who didn't actually move.
+    expect(setCalls).toEqual([]);
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
   it('leaveParty clears the old party leaderId when the leaving player led that party', async () => {
     const existing = playerRow({ partyId: 'old-party-1' });
     const updated = playerRow({ partyId: null });

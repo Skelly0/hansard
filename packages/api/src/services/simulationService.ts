@@ -7,6 +7,7 @@ import {
   playerEventLog,
   officeHolders,
   offices,
+  parties,
 } from '@hansard/db';
 import {
   advanceDateByTicks,
@@ -1024,6 +1025,13 @@ async function processPlayerDeath(
       ...(profileData !== undefined ? { profileData } : {}),
     })
     .where(eq(players.id, playerId));
+
+  // A dead character cannot lead a party; clear any leaderId pointing at them
+  // so the party isn't stuck displaying a deceased leader.
+  await db
+    .update(parties)
+    .set({ leaderId: null })
+    .where(eq(parties.leaderId, playerId));
 
   // Log death event
   await db.insert(playerEventLog).values({

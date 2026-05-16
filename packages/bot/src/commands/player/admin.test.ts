@@ -168,4 +168,26 @@ describe('/player admin change-party', () => {
     expect(interaction.targetMember.roles.remove).toHaveBeenCalledWith('role-old');
     expect(interaction.targetMember.roles.add).not.toHaveBeenCalled();
   });
+
+  it('only adds the new Discord role when staff moves an independent player into a party', async () => {
+    const interaction = fakeChangePartyInteraction();
+    mocks.selectRows = [
+      [{
+        id: 'target-player',
+        discordId: 'target-discord',
+        characterName: 'Aldrick Vance',
+        partyId: null,
+      }],
+      [{ id: 'staff-player' }],
+      [{ id: 'party-new', name: 'Reform Party', shortName: 'REF', discordRoleId: 'role-new', isActive: true }],
+    ];
+
+    await executeChangeParty(interaction);
+
+    expect(mocks.updateSets).toContainEqual(expect.objectContaining({ partyId: 'party-new' }));
+    // No old party to clear leadership from.
+    expect(mocks.updateSets.some((s) => 'leaderId' in s)).toBe(false);
+    expect(interaction.targetMember.roles.remove).not.toHaveBeenCalled();
+    expect(interaction.targetMember.roles.add).toHaveBeenCalledWith('role-new');
+  });
 });

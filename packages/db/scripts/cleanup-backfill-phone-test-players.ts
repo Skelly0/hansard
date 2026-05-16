@@ -18,7 +18,20 @@ const confirm = process.argv.includes('--confirm');
 const BACKFILL_FIXTURE_BASE_PATTERN = '(P[345][AB]|[AB]([1-9]|1[0-4]|10_[0-4]))';
 const BACKFILL_FIXTURE_USERNAME_PATTERN = `^${BACKFILL_FIXTURE_BASE_PATTERN}$`;
 const BACKFILL_FIXTURE_CHARACTER_NAME_PATTERN = `^${BACKFILL_FIXTURE_BASE_PATTERN}-[0-9]+-[0-9a-z]+-[0-9]+$`;
+const BACKFILL_FIXTURE_PROFILE_MARKER = 'backfillPhoneThreads.test';
 const BACKUP_DIR = process.env.DB_BACKUP_DIR ?? 'db-backups';
+
+function describeDatabaseUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const dbName = parsed.pathname.replace(/^\//, '') || '<no database>';
+    const user = parsed.username || '<no user>';
+    const host = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+    return `${host}/${dbName} (user: ${user})`;
+  } catch {
+    return '<unparseable DATABASE_URL>';
+  }
+}
 
 type CandidatePlayer = {
   id: string;
@@ -62,13 +75,19 @@ async function main() {
     process.exit(1);
   }
 
+  console.log(`Target DB: ${describeDatabaseUrl(url)}`);
+  console.log(`Mode: ${confirm ? 'CONFIRM (will back up + delete)' : 'dry-run'}`);
+
   const sql = postgres(url, { max: 1 });
   try {
     const candidates = await sql<CandidatePlayer[]>`
       SELECT id, discord_username, character_name, registered_at
       FROM players
-      WHERE discord_username ~ ${BACKFILL_FIXTURE_USERNAME_PATTERN}
+      WHERE (
+        discord_username ~ ${BACKFILL_FIXTURE_USERNAME_PATTERN}
         AND character_name ~ ${BACKFILL_FIXTURE_CHARACTER_NAME_PATTERN}
+      )
+      OR profile_data->>'testFixture' = ${BACKFILL_FIXTURE_PROFILE_MARKER}
       ORDER BY registered_at DESC
     `;
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PermissionFlagsBits } from 'discord.js';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { eq, inArray, sql as drizzleSql } from 'drizzle-orm';
+import { eq, inArray, or, sql as drizzleSql } from 'drizzle-orm';
 import {
   phoneCalls,
   phoneMessages,
@@ -122,10 +122,43 @@ const BACKFILL_FIXTURE_PROFILE_MARKER = 'backfillPhoneThreads.test';
 const BACKFILL_FIXTURE_PROFILE_DATA = { testFixture: BACKFILL_FIXTURE_PROFILE_MARKER };
 
 async function clearPhoneTables() {
-  await db.delete(phoneThreads);
-  await db.delete(phoneMessages);
-  await db.delete(phoneCalls);
-  await db.delete(phoneNumbers);
+  // Scope all deletes to marker-tagged players. The `TEST_DATABASE_URL !== DATABASE_URL`
+  // guard at the top of the file protects against the obvious "URL identity" mistake, but
+  // a stale or misconfigured TEST_DATABASE_URL that simply happens to point at a real DB
+  // could still wipe every phone_* row if these deletes stayed unconditional. Tying the
+  // delete to the marker means the worst case of a misdirected TEST_DATABASE_URL is
+  // "no-op" rather than "lose all phone data."
+  const markedPlayers = await db
+    .select({ id: players.id })
+    .from(players)
+    .where(
+      drizzleSql`${players.profileData}->>'testFixture' = ${BACKFILL_FIXTURE_PROFILE_MARKER}`,
+    );
+  const markedPlayerIds = markedPlayers.map((row) => row.id);
+  if (markedPlayerIds.length === 0) return;
+
+  const callRows = await db
+    .select({ id: phoneCalls.id })
+    .from(phoneCalls)
+    .where(
+      or(
+        inArray(phoneCalls.callerPlayerId, markedPlayerIds),
+        inArray(phoneCalls.recipientPlayerId, markedPlayerIds),
+      ),
+    );
+  const callIds = callRows.map((row) => row.id);
+
+  await db.delete(phoneThreads).where(
+    or(
+      inArray(phoneThreads.playerAId, markedPlayerIds),
+      inArray(phoneThreads.playerBId, markedPlayerIds),
+    ),
+  );
+  if (callIds.length > 0) {
+    await db.delete(phoneMessages).where(inArray(phoneMessages.callId, callIds));
+    await db.delete(phoneCalls).where(inArray(phoneCalls.id, callIds));
+  }
+  await db.delete(phoneNumbers).where(inArray(phoneNumbers.playerId, markedPlayerIds));
   await db.delete(players).where(
     drizzleSql`${players.profileData}->>'testFixture' = ${BACKFILL_FIXTURE_PROFILE_MARKER}`,
   );

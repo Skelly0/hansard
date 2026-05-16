@@ -7,6 +7,8 @@ import { hasPermission } from '../../utils/permissions.js';
 import {
   editLegislationEmbed,
   postLegislationEmbed,
+  type LegislationEditResult,
+  type LegislationPostResult,
 } from '../../utils/legislationChannel.js';
 import { BillStatus } from '@hansard/shared';
 import { repealBill } from './repealFlow.js';
@@ -70,6 +72,41 @@ const REPEALABLE_STATUSES = new Set<string>([
   BillStatus.NPC_PASSED,
   BillStatus.PLAYER_PASSED,
 ]);
+
+function formatFallbackPostOutcome(postResult: LegislationPostResult | null): string {
+  if (!postResult) {
+    return 'skipped legislation channel fallback post.';
+  }
+
+  if (postResult.status === 'sent') {
+    return 'posted a fresh repeal notice in the legislation channel.';
+  }
+
+  return `could not post a fresh repeal notice in the legislation channel (${postResult.status}).`;
+}
+
+function formatChannelOutcome(
+  editResult: LegislationEditResult,
+  fallbackPostResult: LegislationPostResult | null,
+): string {
+  if (editResult.status === 'edited') {
+    return 'Edited the original enactment post in the legislation channel.';
+  }
+
+  const fallbackOutcome = formatFallbackPostOutcome(fallbackPostResult);
+
+  switch (editResult.status) {
+    case 'no_message':
+    case 'not_configured':
+      return `No stored enactment post; ${fallbackOutcome}`;
+    case 'message_missing':
+      return `Could not edit the stored enactment post because the stored message was missing; ${fallbackOutcome}`;
+    case 'not_sendable':
+      return `Could not edit the stored enactment post because the stored channel was not fetchable; ${fallbackOutcome}`;
+    case 'failed':
+      return `Could not edit the stored enactment post; ${fallbackOutcome}`;
+  }
+}
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const member = interaction.guild?.members.cache.get(interaction.user.id);
@@ -176,22 +213,17 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       messageId: bill.legislationMessageId,
     });
 
-    let postedFresh = false;
+    let fallbackPostResult: LegislationPostResult | null = null;
     if (editResult.status !== 'edited') {
-      await postLegislationEmbed({
+      fallbackPostResult = await postLegislationEmbed({
         client: interaction.client,
         embed: buildRepealFallbackEmbed(embedInput),
       });
-      postedFresh = true;
     }
 
     const padded = String(bill.billNumber).padStart(3, '0');
     const repealedTimestamp = Math.floor(now.getTime() / 1000);
-    const channelOutcome = editResult.status === 'edited'
-      ? `Edited the original enactment post in the legislation channel.`
-      : postedFresh
-        ? `No stored enactment post; posted a fresh repeal notice in the legislation channel.`
-        : `Skipped legislation channel update.`;
+    const channelOutcome = formatChannelOutcome(editResult, fallbackPostResult);
 
     const replyEmbed = createEmbed({
       title: 'Bill Repealed',

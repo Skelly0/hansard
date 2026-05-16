@@ -26,10 +26,15 @@ COPY --from=build /app/packages/web/dist /usr/share/nginx/html
 # Files in /etc/nginx/templates/*.template are processed by the official nginx
 # image's entrypoint with envsubst, so ${API_UPSTREAM} is substituted at
 # container start (set on the Railway web service to the API's internal URL).
-# NGINX_LOCAL_RESOLVERS is set by /docker-entrypoint.d/15-local-resolvers.envsh
-# from /etc/resolv.conf so the template's `resolver` directive picks up the
-# platform DNS server — needed so the upstream hostname is re-resolved at
-# runtime (Railway rotates the internal IP on every API redeploy).
+# NGINX_LOCAL_RESOLVERS is populated from /etc/resolv.conf by the nginx:alpine
+# image's /docker-entrypoint.d/15-local-resolvers.envsh so the template's
+# `resolver` directive picks up the platform DNS server — needed so the upstream
+# hostname is re-resolved at runtime (Railway rotates the internal IP on every
+# API redeploy). That script is **opt-in**: it returns early unless
+# NGINX_ENTRYPOINT_LOCAL_RESOLVERS is set to a non-empty value, otherwise the
+# var stays unset, envsubst leaves the literal ${NGINX_LOCAL_RESOLVERS} in the
+# rendered config, and nginx crashes at boot with "host not found in resolver".
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
 # Filter limits substitution to those two so nginx's own variables
 # ($host, $scheme, etc.) cannot be accidentally clobbered by unrelated env vars.
 ENV NGINX_ENVSUBST_FILTER=^(API_UPSTREAM|NGINX_LOCAL_RESOLVERS)$

@@ -6,6 +6,11 @@ import { jsonResult, safeHandler, type RegisterToolsFn } from './types.js';
 const TICKET_STATUS_VALUES = Object.values(TicketStatus) as [string, ...string[]];
 const TICKET_PRIORITY_VALUES = Object.values(TicketPriority) as [string, ...string[]];
 
+interface GetTicketArgs {
+  ticketId?: string;
+  number?: number;
+}
+
 export const registerTicketTools: RegisterToolsFn = (server, ctx) => {
   server.registerTool(
     'list_tickets',
@@ -34,6 +39,32 @@ export const registerTicketTools: RegisterToolsFn = (server, ctx) => {
         { userId: session.playerId, isStaff: session.isStaff },
       );
       return jsonResult({ count: tickets.length, total, tickets });
+    }),
+  );
+
+  server.registerTool(
+    'get_ticket',
+    {
+      description:
+        'Get one visible ticket, including replies/messages and staff-visible audit history. Provide either ticketId or number.',
+      inputSchema: {
+        ticketId: z.string().uuid().optional().describe('Ticket UUID.'),
+        number: z.number().int().positive().optional().describe('Human-readable ticket number, e.g. 42 for #42.'),
+      },
+    },
+    safeHandler(async (args: GetTicketArgs) => {
+      if ((args.ticketId && args.number !== undefined) || (!args.ticketId && args.number === undefined)) {
+        throw new Error('Provide exactly one of ticketId or number.');
+      }
+
+      const session = await ctx.session.get();
+      const svc = new TicketService(ctx.db);
+      const viewer = { userId: session.playerId, isStaff: session.isStaff };
+      const ticket = args.ticketId
+        ? await svc.getTicket(args.ticketId, viewer)
+        : await svc.getTicketByNumber(args.number!, viewer);
+
+      return jsonResult({ ticket });
     }),
   );
 };

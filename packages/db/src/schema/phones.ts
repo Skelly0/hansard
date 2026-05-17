@@ -21,6 +21,7 @@ export const phoneNumbers = pgTable('phone_numbers', {
 
   label: varchar('label', { length: 64 }),
   cachedCharacterName: varchar('cached_character_name', { length: 128 }),
+  pseudonym: varchar('pseudonym', { length: 128 }),
 
   voicemailEnabled: boolean('voicemail_enabled').default(false).notNull(),
   voicemailIntroMessage: text('voicemail_intro_message'),

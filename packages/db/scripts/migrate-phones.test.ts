@@ -158,6 +158,11 @@ describe('migrate-phones', () => {
     expect(script).toContain('ALTER TABLE "phone_calls" ADD COLUMN IF NOT EXISTS "voicemail_peep_claimed_at" timestamptz');
   });
 
+  it('adds an optional phone-number pseudonym for anonymous caller identity', () => {
+    expect(script).toContain('"pseudonym" varchar(128)');
+    expect(script).toContain('ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "pseudonym" varchar(128)');
+  });
+
   it('constrains phone_tap_audit_log.action to the documented enum values', () => {
     expect(script).toContain('phone_tap_audit_log_action_check');
     expect(script).toContain(

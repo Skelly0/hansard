@@ -33,6 +33,7 @@ const statements: string[] = [
     "number_normalized" varchar(32) NOT NULL,
     "label" varchar(64),
     "cached_character_name" varchar(128),
+    "pseudonym" varchar(128),
     "voicemail_enabled" boolean NOT NULL DEFAULT false,
     "voicemail_intro_message" text,
     "voicemail_post_beep_message" text,
@@ -40,6 +41,7 @@ const statements: string[] = [
     "created_at" timestamptz NOT NULL DEFAULT now(),
     "deactivated_at" timestamptz
   );`,
+  `ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "pseudonym" varchar(128);`,
   `ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_enabled" boolean NOT NULL DEFAULT false;`,
   `ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_intro_message" text;`,
   `ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_post_beep_message" text;`,

@@ -2,6 +2,7 @@ import {
   ChannelType,
   DiscordAPIError,
   EmbedBuilder,
+  escapeMarkdown,
   type Client,
   type Guild,
   type TextChannel,
@@ -63,6 +64,18 @@ function chunkForDm(text: string): string[] {
 function chunkForEmbed(text: string): string[] {
   return chunkText(text, EMBED_DESC_BUDGET);
 }
+
+function publicNumberLabel(number: PhoneNumber): string {
+  return number.pseudonym ? `${escapeMarkdown(number.pseudonym)} (${number.numberRaw})` : number.numberRaw;
+}
+
+function staffNumberLabel(name: string | null, number: PhoneNumber): string {
+  const realName = name ?? 'Unknown';
+  return number.pseudonym
+    ? `${realName} as ${number.pseudonym} (${number.numberRaw})`
+    : `${realName} (${number.numberRaw})`;
+}
+
 function chunkText(text: string, budget: number): string[] {
   if (text.length <= budget) return [text];
   const chunks: string[] = [];
@@ -493,7 +506,8 @@ async function sendToRecipient(
     const user = await client.users.fetch(recipientDiscordId);
     for (let i = 0; i < chunks.length; i++) {
       const piece = chunks[i];
-      const prefix = chunks.length > 1 ? `**${senderNumber.numberRaw}** [${i + 1}/${chunks.length}]: ` : `**${senderNumber.numberRaw}:** `;
+      const label = publicNumberLabel(senderNumber);
+      const prefix = chunks.length > 1 ? `**${label}** [${i + 1}/${chunks.length}]: ` : `**${label}:** `;
       // Suppress mention parsing on user-content forwarding even though DMs cannot notify
       // bystanders — defense in depth, matches the staff thread mirror at postToStaffThread.
       const dm = await user.send({ content: `${prefix}${piece}`, allowedMentions: { parse: [] } });
@@ -517,8 +531,9 @@ async function postToStaffThread(
   content: string,
 ): Promise<string | null> {
   const recipient = sender.id === context.callerPlayer.id ? context.recipientPlayer : context.callerPlayer;
-  const senderName = sender.characterName ?? 'Unknown';
-  const recipientName = recipient.characterName ?? 'Unknown';
+  const recipientNumber = sender.id === context.callerPlayer.id ? context.recipientNumber : context.callerNumber;
+  const senderName = staffNumberLabel(sender.characterName, senderNumber);
+  const recipientName = staffNumberLabel(recipient.characterName, recipientNumber);
   const chunks = chunkForEmbed(content);
   let firstId: string | null = null;
   try {
@@ -529,8 +544,8 @@ async function postToStaffThread(
         .setAuthor({
           name:
             chunks.length > 1
-              ? `${senderName} (${senderNumber.numberRaw}) [${i + 1}/${chunks.length}]`
-              : `${senderName} (${senderNumber.numberRaw})`,
+              ? `${senderName} [${i + 1}/${chunks.length}]`
+              : senderName,
         })
         .setDescription(piece)
         .setFooter({ text: `to ${recipientName}` })
@@ -564,8 +579,9 @@ async function deliverTapCopy(
     return;
   }
   const recipient = sender.id === context.callerPlayer.id ? context.recipientPlayer : context.callerPlayer;
-  const senderName = sender.characterName ?? 'Unknown';
-  const recipientName = recipient.characterName ?? 'Unknown';
+  const recipientNumber = sender.id === context.callerPlayer.id ? context.recipientNumber : context.callerNumber;
+  const senderName = staffNumberLabel(sender.characterName, senderNumber);
+  const recipientName = staffNumberLabel(recipient.characterName, recipientNumber);
   // Use full content here too — taps are an audit channel, fidelity is the whole point.
   const chunks = chunkForEmbed(message.content);
 
@@ -580,8 +596,8 @@ async function deliverTapCopy(
       .setAuthor({
         name:
           chunks.length > 1
-            ? `\u{1F575}\u{FE0F} Wiretap — ${senderName} (${senderNumber.numberRaw}) [${i + 1}/${chunks.length}]`
-            : `\u{1F575}\u{FE0F} Wiretap — ${senderName} (${senderNumber.numberRaw})`,
+            ? `\u{1F575}\u{FE0F} Wiretap — ${senderName} [${i + 1}/${chunks.length}]`
+            : `\u{1F575}\u{FE0F} Wiretap — ${senderName}`,
       })
       .setDescription(piece)
       .setFooter({ text: `to ${recipientName} \u{2022} call ${context.call.id.slice(0, 8)}` })
@@ -735,8 +751,8 @@ export async function postCallOpenedToStaffThread(
     .setTitle('\u{1F4DE} Call connected')
     .setColor(STAFF_PALETTE)
     .addFields(
-      { name: 'Caller', value: `${context.callerPlayer.characterName ?? '?'} (${context.callerNumber.numberRaw})`, inline: true },
-      { name: 'Recipient', value: `${context.recipientPlayer.characterName ?? '?'} (${context.recipientNumber.numberRaw})`, inline: true },
+      { name: 'Caller', value: staffNumberLabel(context.callerPlayer.characterName, context.callerNumber), inline: true },
+      { name: 'Recipient', value: staffNumberLabel(context.recipientPlayer.characterName, context.recipientNumber), inline: true },
     )
     .setTimestamp(new Date());
   try {
@@ -752,6 +768,8 @@ export const __internal = {
   chunkForDm,
   chunkForEmbed,
   isDmClosedError,
+  publicNumberLabel,
+  staffNumberLabel,
   sendToRecipient,
   validateTapMirrorChannel,
 };

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   findElectionByReference: vi.fn(),
   hasPermission: vi.fn(),
   tallyVotes: vi.fn(),
+  autoEnactPassedBillFromElection: vi.fn(),
 }));
 
 vi.mock('drizzle-orm', () => ({
@@ -66,6 +67,10 @@ vi.mock('@hansard/api/services/voteService', () => ({
   VoteService: class {
     tallyVotes = mocks.tallyVotes;
   },
+}));
+
+vi.mock('../bills/autoEnact.js', () => ({
+  autoEnactPassedBillFromElection: mocks.autoEnactPassedBillFromElection,
 }));
 
 import { execute } from './close';
@@ -144,6 +149,8 @@ describe('/vote close reaction-mode embeds', () => {
       errorMessage: null,
       reference: { kind: 'title', value: openElection.title },
     });
+    mocks.tallyVotes.mockResolvedValue({ passed: true });
+    mocks.autoEnactPassedBillFromElection.mockResolvedValue({ status: 'enacted' });
     mocks.db.update.mockReturnValue(updateReturning([{
       ...openElection,
       status: 'voting_closed',
@@ -246,6 +253,11 @@ describe('/vote close reaction-mode embeds', () => {
     await execute(makeInteraction() as any);
 
     expect(mocks.tallyVotes).toHaveBeenCalledWith(election.id);
+    expect(mocks.autoEnactPassedBillFromElection).toHaveBeenCalledWith(expect.objectContaining({
+      client: mocks.client,
+      database: mocks.db,
+      election,
+    }));
   });
 
   it('does not tally legislative votes that have no linked bill', async () => {

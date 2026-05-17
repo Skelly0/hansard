@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Collection, Events, SlashCommandBuilder } from 'discord.js';
 
 process.env.DATABASE_URL ??= 'postgres://user:pass@localhost:5432/hansard';
+
+const mocks = vi.hoisted(() => ({
+  tallyVotes: vi.fn(),
+  VoteService: vi.fn(),
+  autoEnactPassedBillFromElection: vi.fn(),
+}));
 
 vi.mock('../services/voteAutoClose.js', () => ({
   startVoteAutoCloseWorker: vi.fn(() => ({ unref: vi.fn() })),
@@ -11,9 +17,18 @@ vi.mock('../services/phoneRingTimeout.js', () => ({
   startPhoneRingTimeoutWorker: vi.fn(() => ({ unref: vi.fn() })),
 }));
 
+vi.mock('@hansard/api/services/voteService', () => ({
+  VoteService: mocks.VoteService,
+}));
+
+vi.mock('../commands/bills/autoEnact.js', () => ({
+  autoEnactPassedBillFromElection: mocks.autoEnactPassedBillFromElection,
+}));
+
 const { registerReadyEvent, stopBackgroundWorkers } = await import('./ready.js');
 const { commands } = await import('../client.js');
 const { startPhoneRingTimeoutWorker } = await import('../services/phoneRingTimeout.js');
+const { startVoteAutoCloseWorker } = await import('../services/voteAutoClose.js');
 
 function makeCommand(name: string) {
   return {
@@ -55,6 +70,15 @@ async function runReady(readyClient: Record<string, unknown>) {
 }
 
 describe('ready command registration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.tallyVotes.mockResolvedValue({});
+    mocks.autoEnactPassedBillFromElection.mockResolvedValue({ status: 'enacted' });
+    mocks.VoteService.mockImplementation(class {
+      tallyVotes = mocks.tallyVotes;
+    } as any);
+  });
+
   it('registers /phone globally and excludes it from the guild command sweep', async () => {
     stopBackgroundWorkers();
     vi.mocked(startPhoneRingTimeoutWorker).mockClear();
@@ -82,6 +106,15 @@ describe('ready command registration', () => {
 });
 
 describe('ready background workers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.tallyVotes.mockResolvedValue({});
+    mocks.autoEnactPassedBillFromElection.mockResolvedValue({ status: 'enacted' });
+    mocks.VoteService.mockImplementation(class {
+      tallyVotes = mocks.tallyVotes;
+    } as any);
+  });
+
   it('starts the phone ring-timeout worker on an unsharded client', async () => {
     stopBackgroundWorkers();
     vi.mocked(startPhoneRingTimeoutWorker).mockClear();
@@ -122,5 +155,25 @@ describe('ready background workers', () => {
     await runReady(readyClient);
 
     expect(startPhoneRingTimeoutWorker).not.toHaveBeenCalled();
+  });
+
+  it('wires the vote auto-close callback to tally then auto-enact with the ready client', async () => {
+    stopBackgroundWorkers();
+    commands.clear();
+    commands.set('phone', makeCommand('phone'));
+
+    const { readyClient } = buildReadyClient();
+    await runReady(readyClient);
+
+    const options = vi.mocked(startVoteAutoCloseWorker).mock.calls[0]?.[1] as any;
+    const election = { id: 'election-1', type: 'legislative_vote', relatedBillId: 'bill-1' };
+    await options.tallyElection(election);
+
+    expect(mocks.tallyVotes).toHaveBeenCalledWith('election-1');
+    expect(mocks.autoEnactPassedBillFromElection).toHaveBeenCalledWith({
+      database: expect.anything(),
+      client: readyClient,
+      election,
+    });
   });
 });

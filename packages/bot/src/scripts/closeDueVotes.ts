@@ -6,6 +6,7 @@ import { closeDb } from '@hansard/db';
 import { VoteService } from '@hansard/api/services/voteService';
 import { db } from '../db.js';
 import { closeDueVotes, listDueOpenVotes } from '../services/voteAutoClose.js';
+import { autoEnactPassedBillFromElection } from '../commands/bills/autoEnact.js';
 
 type CloseDueVotesScriptLogger = Pick<Console, 'log' | 'error'>;
 
@@ -16,19 +17,19 @@ export interface RunCloseDueVotesScriptOptions {
   closeDatabase?: (database: Database) => Promise<void>;
 }
 
-async function getReactionRenderer(args: Set<string>) {
-  if (!args.has('--render-discord')) return undefined;
-
+async function getDiscordAutomationClient(args: Set<string>) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) {
-    throw new Error('DISCORD_BOT_TOKEN is required when using --render-discord');
+    throw new Error('DISCORD_BOT_TOKEN is required to close due votes because passed legislative votes may auto-enact');
   }
 
-  const [{ Events }, { client }, { renderReactionResult }] = await Promise.all([
+  const [{ Events }, { client }] = await Promise.all([
     import('discord.js'),
     import('../client.js'),
-    import('../commands/vote/close.js'),
   ]);
+  const renderReactionResult = args.has('--render-discord')
+    ? (await import('../commands/vote/close.js')).renderReactionResult
+    : undefined;
 
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -47,6 +48,7 @@ async function getReactionRenderer(args: Set<string>) {
   });
 
   return {
+    client,
     renderReactionResult,
     destroy: () => client.destroy(),
   };
@@ -59,7 +61,7 @@ export async function runCloseDueVotesScript(
   const database = options.database ?? db;
   const logger = options.logger ?? console;
   const closeDatabase = options.closeDatabase ?? closeDb;
-  let renderer: Awaited<ReturnType<typeof getReactionRenderer>> | undefined;
+  let discordAutomation: Awaited<ReturnType<typeof getDiscordAutomationClient>> | undefined;
 
   try {
     if (args.has('--dry-run')) {
@@ -77,13 +79,19 @@ export async function runCloseDueVotesScript(
       return;
     }
 
-    renderer = await getReactionRenderer(args);
+    discordAutomation = await getDiscordAutomationClient(args);
+    const activeDiscordAutomation = discordAutomation;
     const voteService = new VoteService(database);
     const result = await closeDueVotes(database, {
       logger,
-      renderReactionResult: renderer?.renderReactionResult,
+      renderReactionResult: activeDiscordAutomation.renderReactionResult,
       tallyElection: async (election) => {
         await voteService.tallyVotes(election.id);
+        await autoEnactPassedBillFromElection({
+          database,
+          client: activeDiscordAutomation.client,
+          election,
+        });
       },
     });
 
@@ -112,7 +120,7 @@ export async function runCloseDueVotesScript(
       process.exitCode = 1;
     }
   } finally {
-    renderer?.destroy();
+    discordAutomation?.destroy();
     await closeDatabase(database);
   }
 }

@@ -32,6 +32,14 @@ describe('/phone command metadata', () => {
     ]));
   });
 
+  it('contains a voicemail subcommand group with set/show/disable', () => {
+    const groups = json.options?.filter((o) => o.type === 2) ?? []; // SUB_COMMAND_GROUP
+    expect(groups.map((g) => g.name)).toContain('voicemail');
+    const voicemailGroup = groups.find((g) => g.name === 'voicemail');
+    const voicemailSubs = (voicemailGroup as { options?: Array<{ name: string }> }).options?.map((o) => o.name) ?? [];
+    expect(voicemailSubs).toEqual(expect.arrayContaining(['set', 'show', 'disable']));
+  });
+
   it('is available in DMs (BotDM context) so /phone hangup works from a call DM', () => {
     expect(json.contexts).toContain(1); // InteractionContextType.BotDM
   });

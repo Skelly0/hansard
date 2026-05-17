@@ -9,6 +9,8 @@ export interface EnactBillInput {
   changedById: string;
   actorDiscordId?: string;
   auditNote?: string;
+  legislationChannelId?: string;
+  legislationMessageId?: string;
   now?: Date;
 }
 
@@ -43,6 +45,12 @@ export async function enactBill(
         status: BillStatus.ENACTED,
         enactedAt: now,
         effectiveAt: now,
+        ...(input.legislationChannelId && input.legislationMessageId
+          ? {
+              legislationChannelId: input.legislationChannelId,
+              legislationMessageId: input.legislationMessageId,
+            }
+          : {}),
         updatedAt: now,
       })
       .where(and(

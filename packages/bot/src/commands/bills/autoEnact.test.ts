@@ -71,7 +71,6 @@ describe('autoEnactPassedBillFromElection', () => {
   });
 
   it('enacts a player-passed linked bill, posts the legislation embed, and stores the message id', async () => {
-    const updateValues: unknown[] = [];
     const bill = {
       id: 'bill-1',
       title: 'Bridge Security Act',
@@ -90,7 +89,7 @@ describe('autoEnactPassedBillFromElection', () => {
         .mockReturnValueOnce(selectLimit([bill]))
         .mockReturnValueOnce(selectLimit([author]))
         .mockReturnValueOnce(selectLimit([actor])),
-      update: vi.fn(() => updateSet(updateValues)),
+      update: vi.fn(),
     };
     const client = { channels: { fetch: vi.fn() } };
     mocks.enactBill.mockResolvedValue({ bill: { ...bill, status: BillStatus.ENACTED }, previousStatus: BillStatus.PLAYER_PASSED });
@@ -114,14 +113,101 @@ describe('autoEnactPassedBillFromElection', () => {
       expectedStatus: BillStatus.PLAYER_PASSED,
       changedById: 'creator-player',
       actorDiscordId: 'creator-discord',
+      legislationChannelId: 'law-channel',
+      legislationMessageId: 'law-message',
       now,
     }));
+    expect(mocks.postLegislationEmbed.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.enactBill.mock.invocationCallOrder[0]);
     expect(mocks.postLegislationEmbed).toHaveBeenCalledWith(expect.objectContaining({
       client,
     }));
     const embed = mocks.postLegislationEmbed.mock.calls[0]?.[0]?.embed;
     expect(embed.data.description).toContain('**Bill #B-012** has been enacted and is now law.');
     expect(embed.data.description).toContain('Enacted automatically after player-house passage');
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('does not mark the bill enacted when the legislation post fails', async () => {
+    const bill = {
+      id: 'bill-1',
+      title: 'Bridge Security Act',
+      billNumber: 12,
+      status: BillStatus.PLAYER_PASSED,
+      authorId: 'author-1',
+      summary: null,
+      googleDocUrl: null,
+      tags: [],
+      policyAreas: [],
+    };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(selectLimit([bill]))
+        .mockReturnValueOnce(selectLimit([{ characterName: 'Ada Vance', discordId: null }]))
+        .mockReturnValueOnce(selectLimit([{ discordId: 'creator-discord' }])),
+      update: vi.fn(),
+    };
+    mocks.postLegislationEmbed.mockResolvedValue({ status: 'failed', channelId: 'law-channel' });
+
+    await expect(autoEnactPassedBillFromElection({
+      database: db as any,
+      client: { channels: { fetch: vi.fn() } } as any,
+      election: {
+        id: 'election-1',
+        type: ElectionType.LEGISLATIVE_VOTE,
+        relatedBillId: 'bill-1',
+        createdById: 'creator-player',
+      },
+      now,
+    })).rejects.toThrow(/failed to post legislation message/i);
+
+    expect(mocks.enactBill).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('repairs an already-enacted linked bill that is missing its legislation post', async () => {
+    const updateValues: unknown[] = [];
+    const enactedAt = new Date('2026-05-17T19:13:36.198Z');
+    const bill = {
+      id: 'bill-1',
+      title: 'Industrial Peace Ordinance',
+      billNumber: 37,
+      status: BillStatus.ENACTED,
+      authorId: 'author-1',
+      summary: null,
+      googleDocUrl: null,
+      tags: [],
+      policyAreas: [],
+      enactedAt,
+      legislationChannelId: null,
+      legislationMessageId: null,
+    };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(selectLimit([bill]))
+        .mockReturnValueOnce(selectLimit([{ characterName: 'Ada Vance', discordId: 'author-discord' }]))
+        .mockReturnValueOnce(selectLimit([{ discordId: 'creator-discord' }])),
+      update: vi.fn(() => updateSet(updateValues)),
+    };
+    mocks.postLegislationEmbed.mockResolvedValue({ status: 'sent', channelId: 'law-channel', messageId: 'law-message' });
+
+    const result = await autoEnactPassedBillFromElection({
+      database: db as any,
+      client: { channels: { fetch: vi.fn() } } as any,
+      election: {
+        id: 'election-1',
+        type: ElectionType.LEGISLATIVE_VOTE,
+        relatedBillId: 'bill-1',
+        createdById: 'creator-player',
+      },
+      now,
+    });
+
+    expect(result).toMatchObject({ status: 'repaired', billId: 'bill-1' });
+    expect(mocks.enactBill).not.toHaveBeenCalled();
+    const embed = mocks.postLegislationEmbed.mock.calls[0]?.[0]?.embed;
+    expect(embed.data.description).toContain('Enacted automatically after player-house passage');
+    expect(embed.data.description).toContain(`<t:${Math.floor(enactedAt.getTime() / 1000)}:F>`);
     expect(updateValues[0]).toMatchObject({
       legislationChannelId: 'law-channel',
       legislationMessageId: 'law-message',

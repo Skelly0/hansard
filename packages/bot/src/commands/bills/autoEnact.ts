@@ -32,7 +32,22 @@ export type AutoEnactResult =
       status: 'enacted';
       billId: string;
       postResult: LegislationPostResult;
+    }
+  | {
+      status: 'repaired';
+      billId: string;
+      postResult: LegislationPostResult;
     };
+
+export class LegislationPostError extends Error {
+  constructor(
+    message: string,
+    readonly result: LegislationPostResult,
+  ) {
+    super(message);
+    this.name = 'LegislationPostError';
+  }
+}
 
 function formatAuthorDisplay(author: { characterName: string | null; discordId: string | null } | undefined): string {
   const authorName = author?.characterName ?? 'Unknown';
@@ -57,6 +72,23 @@ function buildEnactedByLine({
   return actorDiscordId
     ? `*Enacted automatically after player-house passage · triggered by <@${actorDiscordId}> · <t:${timestamp}:F>*`
     : `*Enacted automatically after player-house passage · <t:${timestamp}:F>*`;
+}
+
+function hasStoredLegislationPost(bill: EnactableBill): boolean {
+  return !!bill.legislationChannelId && !!bill.legislationMessageId;
+}
+
+function requireSentLegislationPost(postResult: LegislationPostResult): asserts postResult is LegislationPostResult & {
+  status: 'sent';
+  channelId: string;
+  messageId: string;
+} {
+  if (postResult.status !== 'sent' || !postResult.channelId || !postResult.messageId) {
+    throw new LegislationPostError(
+      `Failed to post legislation message before enactment (${postResult.status}).`,
+      postResult,
+    );
+  }
 }
 
 export function buildBillEnactmentEmbed({
@@ -114,7 +146,6 @@ export async function enactAndPostBill({
   now = new Date(),
   automatic = false,
   auditNote,
-  logger = console,
 }: {
   database: Database;
   client: LegislationClient;
@@ -125,17 +156,7 @@ export async function enactAndPostBill({
   now?: Date;
   automatic?: boolean;
   auditNote?: string;
-  logger?: Pick<Console, 'error'>;
 }): Promise<{ embed: EmbedBuilder; postResult: LegislationPostResult }> {
-  await enactBill(database, {
-    billId: bill.id,
-    expectedStatus: bill.status,
-    changedById,
-    actorDiscordId: actorDiscordId ?? undefined,
-    auditNote,
-    now,
-  });
-
   const embed = buildBillEnactmentEmbed({
     bill,
     authorDisplay,
@@ -145,6 +166,51 @@ export async function enactAndPostBill({
   });
 
   const postResult = await postLegislationEmbed({ client, embed });
+  requireSentLegislationPost(postResult);
+
+  await enactBill(database, {
+    billId: bill.id,
+    expectedStatus: bill.status,
+    changedById,
+    actorDiscordId: actorDiscordId ?? undefined,
+    auditNote,
+    legislationChannelId: postResult.channelId,
+    legislationMessageId: postResult.messageId,
+    now,
+  });
+
+  return { embed, postResult };
+}
+
+export async function postExistingEnactedBill({
+  database,
+  client,
+  bill,
+  authorDisplay,
+  actorDiscordId,
+  now = bill.enactedAt ?? new Date(),
+  automatic = false,
+  logger = console,
+}: {
+  database: Database;
+  client: LegislationClient;
+  bill: EnactableBill;
+  authorDisplay: string;
+  actorDiscordId?: string | null;
+  now?: Date;
+  automatic?: boolean;
+  logger?: Pick<Console, 'error'>;
+}): Promise<{ embed: EmbedBuilder; postResult: LegislationPostResult }> {
+  const embed = buildBillEnactmentEmbed({
+    bill,
+    authorDisplay,
+    actorDiscordId,
+    automatic,
+    now,
+  });
+
+  const postResult = await postLegislationEmbed({ client, embed });
+  requireSentLegislationPost(postResult);
 
   if (postResult.status === 'sent' && postResult.messageId && postResult.channelId) {
     try {
@@ -190,6 +256,35 @@ export async function autoEnactPassedBillFromElection({
   }
 
   if (bill.status !== BillStatus.PLAYER_PASSED) {
+    if (bill.status === BillStatus.ENACTED && !hasStoredLegislationPost(bill)) {
+      const [author] = await database
+        .select({
+          characterName: players.characterName,
+          discordId: players.discordId,
+        })
+        .from(players)
+        .where(eq(players.id, bill.authorId))
+        .limit(1);
+
+      const [actor] = await database
+        .select({ discordId: players.discordId })
+        .from(players)
+        .where(eq(players.id, election.createdById))
+        .limit(1);
+
+      const { postResult } = await postExistingEnactedBill({
+        database,
+        client,
+        bill,
+        authorDisplay: formatAuthorDisplay(author),
+        actorDiscordId: actor?.discordId ?? null,
+        automatic: true,
+        now: bill.enactedAt ?? now,
+      });
+
+      return { status: 'repaired', billId: bill.id, postResult };
+    }
+
     return { status: 'skipped', reason: `bill_status_${bill.status}`, billId: bill.id };
   }
 

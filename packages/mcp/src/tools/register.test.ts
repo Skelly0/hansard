@@ -2,12 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ticketServiceMocks = vi.hoisted(() => ({
   listTickets: vi.fn(),
+  getTicket: vi.fn(),
+  getTicketByNumber: vi.fn(),
 }));
 
 vi.mock('@hansard/api/services/ticketService', () => ({
   TicketService: vi.fn(function TicketService() {
     return {
       listTickets: ticketServiceMocks.listTickets,
+      getTicket: ticketServiceMocks.getTicket,
+      getTicketByNumber: ticketServiceMocks.getTicketByNumber,
     };
   }),
 }));
@@ -48,21 +52,22 @@ function createServer() {
 }
 
 describe('MCP ticket tools', () => {
+  const session = {
+    playerId: '00000000-0000-4000-8000-000000000001',
+    discordId: '123',
+    username: 'clerk',
+    characterName: 'The Clerk',
+    isStaff: false,
+    staffRole: null,
+    permissions: [],
+  };
+
   it('registers list_tickets and lists visible tickets for the authenticated session', async () => {
     ticketServiceMocks.listTickets.mockResolvedValue({
       tickets: [{ id: 'ticket-1', title: 'Missing cabinet papers' }],
       total: 1,
     });
     const { server, tools } = createServer();
-    const session = {
-      playerId: '00000000-0000-4000-8000-000000000001',
-      discordId: '123',
-      username: 'clerk',
-      characterName: 'The Clerk',
-      isStaff: false,
-      staffRole: null,
-      permissions: [],
-    };
 
     registerAllTools(server as never, {
       db: {} as never,
@@ -103,6 +108,63 @@ describe('MCP ticket tools', () => {
       count: 1,
       total: 1,
       tickets: [{ id: 'ticket-1', title: 'Missing cabinet papers' }],
+    });
+  });
+
+  it('registers get_ticket and returns visible ticket history by ticket number', async () => {
+    ticketServiceMocks.getTicketByNumber.mockResolvedValue({
+      id: 'ticket-1',
+      number: 42,
+      title: 'Missing cabinet papers',
+      messages: [
+        {
+          id: 'message-1',
+          content: 'Initial request',
+          isInternal: false,
+        },
+        {
+          id: 'message-2',
+          content: 'Public reply',
+          isInternal: false,
+        },
+      ],
+      auditLog: [],
+    });
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(session) } as never,
+    });
+
+    const tool = tools.get('get_ticket');
+    expect(tool).toBeDefined();
+
+    const result = await tool!.handler({ number: 42 });
+
+    expect(ticketServiceMocks.getTicketByNumber).toHaveBeenCalledWith(
+      42,
+      { userId: session.playerId, isStaff: false },
+    );
+    expect(ticketServiceMocks.getTicket).not.toHaveBeenCalled();
+    expect(JSON.parse((result as { content: [{ text: string }] }).content[0].text)).toEqual({
+      ticket: {
+        id: 'ticket-1',
+        number: 42,
+        title: 'Missing cabinet papers',
+        messages: [
+          {
+            id: 'message-1',
+            content: 'Initial request',
+            isInternal: false,
+          },
+          {
+            id: 'message-2',
+            content: 'Public reply',
+            isInternal: false,
+          },
+        ],
+        auditLog: [],
+      },
     });
   });
 });

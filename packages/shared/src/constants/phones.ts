@@ -39,6 +39,15 @@ export const PHONE_FORCE_END_REASON_PREFIX = 'force_ended_by_staff:';
 /** How many consecutive failed deliveries before the relay auto-disables a tap. */
 export const PHONE_TAP_FAILURE_THRESHOLD = 5;
 
+/** Max length for each configured voicemail line message. */
+export const PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH = 1000;
+
+/** How long a caller has after the peep before an unanswered voicemail session is closed. */
+export const PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** How long a claimed-but-unstamped voicemail peep can sit before another worker may retry it. */
+export const PHONE_VOICEMAIL_PEEP_CLAIM_STALE_MS = 2 * 60 * 1000;
+
 /**
  * Number normalization regex. After stripping all non-digit characters (preserving an
  * optional leading `+`), the result must match this pattern.
@@ -109,6 +118,8 @@ export function formatPhoneEndedReason(reason: string | null | undefined): strin
     case 'relay_failed': return 'Relay failed';
     case 'session_reset': return 'Bot restart';
     case 'number_deactivated': return 'Line retired';
+    case 'voicemail_left': return 'Voicemail left';
+    case 'voicemail_abandoned': return 'Voicemail abandoned';
     default: return reason;
   }
 }
@@ -122,6 +133,7 @@ export function formatPhoneCallStatus(status: string): string {
     case 'declined': return 'Declined';
     case 'missed': return 'Missed';
     case 'cancelled': return 'Cancelled';
+    case 'voicemail': return 'Voicemail';
     default: return status;
   }
 }

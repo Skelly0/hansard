@@ -22,6 +22,10 @@ export const phoneNumbers = pgTable('phone_numbers', {
   label: varchar('label', { length: 64 }),
   cachedCharacterName: varchar('cached_character_name', { length: 128 }),
 
+  voicemailEnabled: boolean('voicemail_enabled').default(false).notNull(),
+  voicemailIntroMessage: text('voicemail_intro_message'),
+  voicemailPostBeepMessage: text('voicemail_post_beep_message'),
+
   isActive: boolean('is_active').default(true).notNull(),
 
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
@@ -52,7 +56,8 @@ export const phoneCalls = pgTable('phone_calls', {
   recipientPlayerId: uuid('recipient_player_id').references(() => players.id).notNull(),
 
   status: varchar('status', { length: 16 }).default('ringing').notNull(),
-  // CHECK constrained at DB level: 'ringing' | 'active' | 'ended' | 'declined' | 'missed' | 'cancelled'
+  // CHECK constrained at DB level:
+  // 'ringing' | 'active' | 'voicemail' | 'ended' | 'declined' | 'missed' | 'cancelled'
 
   endedReason: varchar('ended_reason', { length: 80 }),
   // 'hangup_caller' | 'hangup_recipient' | 'ring_timeout' | 'dm_closed' | 'relay_failed'
@@ -61,6 +66,14 @@ export const phoneCalls = pgTable('phone_calls', {
 
   ringDiscordMessageId: varchar('ring_discord_message_id', { length: 20 }),
   staffThreadId: varchar('staff_thread_id', { length: 20 }),
+
+  // Snapshot copied from the recipient number at dial time. The mailbox owner can change
+  // their greeting later without rewriting in-flight calls or historic transcripts.
+  voicemailEnabled: boolean('voicemail_enabled').default(false).notNull(),
+  voicemailIntroMessage: text('voicemail_intro_message'),
+  voicemailPostBeepMessage: text('voicemail_post_beep_message'),
+  voicemailPeepClaimedAt: timestamp('voicemail_peep_claimed_at', { withTimezone: true, mode: 'date' }),
+  voicemailBeepedAt: timestamp('voicemail_beeped_at', { withTimezone: true, mode: 'date' }),
 
   ringExpiresAt: timestamp('ring_expires_at', { withTimezone: true, mode: 'date' }),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
@@ -84,13 +97,13 @@ export const phoneCalls = pgTable('phone_calls', {
   // Same-role duplicate protection for open calls.
   oneOpenCaller: uniqueIndex('phone_calls_one_open_caller')
     .on(table.callerPlayerId)
-    .where(sql`status IN ('ringing','active')`),
+    .where(sql`status IN ('ringing','active','voicemail')`),
   oneOpenRecipient: uniqueIndex('phone_calls_one_open_recipient')
     .on(table.recipientPlayerId)
     .where(sql`status IN ('ringing','active')`),
   // Cross-role protection is handled in PhoneService with transaction-scoped advisory locks
   // and a participant-wide open-call lookup before insert.
-  statusCheck: check('phone_calls_status_check', sql`status IN ('ringing','active','ended','declined','missed','cancelled')`),
+  statusCheck: check('phone_calls_status_check', sql`status IN ('ringing','active','voicemail','ended','declined','missed','cancelled')`),
   callerHistoryIdx: index('phone_calls_caller_history_idx').on(table.callerPlayerId, table.startedAt),
   recipientHistoryIdx: index('phone_calls_recipient_history_idx').on(table.recipientPlayerId, table.startedAt),
   // Supports the startup `sweepStrandedActiveCalls` query, which must filter by

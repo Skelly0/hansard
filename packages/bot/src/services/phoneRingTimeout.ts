@@ -6,7 +6,7 @@ import {
   type PhoneMessageTapDelivery,
 } from '@hansard/api/services/phoneService';
 import { PHONE_RING_WORKER_INTERVAL_MS } from '@hansard/shared';
-import { hangUpAndNotify } from '../utils/phoneRelay.js';
+import { disableRingDmButtons, hangUpAndNotify, sendVoicemailBeep } from '../utils/phoneRelay.js';
 
 export type PhoneRingWorkerOptions = {
   intervalMs?: number;
@@ -39,15 +39,139 @@ export async function expireRingingCalls(
 
   if (options.client && expired.length > 0) {
     await Promise.all(
-      expired.map((call) =>
-        hangUpAndNotify(options.client!, call.id, 'ring_timeout').catch((err: unknown) => {
+      expired.map(async (call) => {
+        try {
+          if (call.status === 'voicemail') {
+            return;
+          }
+          await hangUpAndNotify(options.client!, call.id, 'ring_timeout');
+        } catch (err: unknown) {
           logger.error(`[phone:worker] failed to notify ${call.id}:`, err);
+        }
+      }),
+    );
+  }
+
+  return { expired };
+}
+
+export async function processPendingVoicemailBeeps(
+  db: Database,
+  options: { now?: Date; client?: Client; logger?: Pick<Console, 'error'> } = {},
+): Promise<{ processed: PhoneCall[] }> {
+  const svc = new PhoneService(db);
+  const now = options.now ?? new Date();
+  const logger = options.logger ?? console;
+
+  let pending: PhoneCall[] = [];
+  try {
+    pending = await svc.findPendingVoicemailBeeps();
+  } catch (error) {
+    logger.error('[phone:worker] failed to load pending voicemail peeps:', error);
+    return { processed: [] };
+  }
+
+  if (!options.client || pending.length === 0) return { processed: [] };
+
+  await Promise.all(
+    pending.map(async (call) => {
+      let claimed: PhoneCall | null = null;
+      try {
+        claimed = await svc.claimVoicemailPeep(call.id, now);
+      } catch (err: unknown) {
+        logger.error(`[phone:worker] failed to claim voicemail peep ${call.id}:`, err);
+        return;
+      }
+      if (!claimed) return;
+
+      try {
+        await sendVoicemailBeep(options.client!, call.id);
+      } catch (err: unknown) {
+        logger.error(`[phone:worker] failed to send voicemail peep ${call.id}:`, err);
+        try {
+          await svc.systemEndCall(call.id, 'dm_closed');
+        } catch (innerErr: unknown) {
+          logger.error(`[phone:worker] failed to end unreachable voicemail ${call.id}:`, innerErr);
+        }
+        try {
+          await disableRingDmButtons(options.client!, call.id, 'The caller could not be reached via DM.');
+        } catch (innerErr: unknown) {
+          logger.error(`[phone:worker] failed to disable unreachable voicemail ring buttons ${call.id}:`, innerErr);
+        }
+        return;
+      }
+
+      try {
+        await svc.markVoicemailPeeped(call.id, now);
+      } catch (err: unknown) {
+        logger.error(`[phone:worker] failed to stamp voicemail peep ${call.id}:`, err);
+      }
+
+      try {
+        await disableRingDmButtons(options.client!, call.id, 'The caller was sent to voicemail.');
+      } catch (err: unknown) {
+        logger.error(`[phone:worker] failed to disable voicemail ring buttons ${call.id}:`, err);
+      }
+    }),
+  );
+
+  return { processed: pending };
+}
+
+export async function sweepClaimedVoicemailBeeps(
+  db: Database,
+  options: { now?: Date; maxAgeMs?: number; client?: Client; logger?: Pick<Console, 'error' | 'log'> } = {},
+): Promise<{ recovered: PhoneCall[] }> {
+  const svc = new PhoneService(db);
+  const logger = options.logger ?? console;
+
+  let recovered: PhoneCall[] = [];
+  try {
+    recovered = await svc.sweepClaimedVoicemailBeeps({ now: options.now, maxAgeMs: options.maxAgeMs });
+  } catch (error) {
+    logger.error('[phone:worker] failed to recover claimed voicemail peeps:', error);
+    return { recovered: [] };
+  }
+
+  if (options.client && recovered.length > 0) {
+    await Promise.all(
+      recovered.map((call) =>
+        disableRingDmButtons(options.client!, call.id, 'The caller was sent to voicemail.').catch((err: unknown) => {
+          logger.error(`[phone:worker] failed to disable recovered voicemail ring buttons ${call.id}:`, err);
         }),
       ),
     );
   }
 
-  return { expired };
+  return { recovered };
+}
+
+export async function sweepAbandonedVoicemails(
+  db: Database,
+  options: { now?: Date; maxAgeMs?: number; client?: Client; logger?: Pick<Console, 'error' | 'log'> } = {},
+): Promise<{ ended: PhoneCall[] }> {
+  const svc = new PhoneService(db);
+  const logger = options.logger ?? console;
+
+  let ended: PhoneCall[] = [];
+  try {
+    ended = await svc.sweepAbandonedVoicemails({ now: options.now, maxAgeMs: options.maxAgeMs });
+  } catch (error) {
+    logger.error('[phone:worker] failed to sweep abandoned voicemails:', error);
+    return { ended: [] };
+  }
+
+  if (options.client && ended.length > 0) {
+    await Promise.all(
+      ended.map((call) =>
+        hangUpAndNotify(options.client!, call.id, 'voicemail_abandoned').catch((err: unknown) => {
+          logger.error(`[phone:worker] failed to notify abandoned voicemail ${call.id}:`, err);
+        }),
+      ),
+    );
+  }
+
+  return { ended };
 }
 
 /**
@@ -128,9 +252,22 @@ export function startPhoneRingTimeoutWorker(
     if (running) return;
     running = true;
     try {
-      const { expired } = await expireRingingCalls(db, { client: options.client, logger });
+      const now = new Date();
+      const { expired } = await expireRingingCalls(db, { now, client: options.client, logger });
       if (expired.length > 0) {
         logger.log(`[phone:worker] expired ${expired.length} unanswered call(s)`);
+      }
+      const { processed } = await processPendingVoicemailBeeps(db, { now, client: options.client, logger });
+      if (processed.length > 0) {
+        logger.log(`[phone:worker] processed ${processed.length} pending voicemail peep(s)`);
+      }
+      const { recovered } = await sweepClaimedVoicemailBeeps(db, { now, client: options.client, logger });
+      if (recovered.length > 0) {
+        logger.log(`[phone:worker] recovered ${recovered.length} claimed voicemail peep(s)`);
+      }
+      const { ended } = await sweepAbandonedVoicemails(db, { now, client: options.client, logger });
+      if (ended.length > 0) {
+        logger.log(`[phone:worker] ended ${ended.length} abandoned voicemail session(s)`);
       }
       // Reconcile any tap-delivery placeholders left pending by a crashed/throwing relay.
       await sweepStaleTapDeliveries(db, { logger });

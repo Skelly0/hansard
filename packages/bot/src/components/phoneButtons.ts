@@ -10,7 +10,7 @@ import {
   PhoneService,
   PhoneServiceError,
 } from '@hansard/api/services/phoneService';
-import { hangUpAndNotify, postCallOpenedToStaffThread } from '../utils/phoneRelay.js';
+import { hangUpAndNotify, postCallOpenedToStaffThread, sendVoicemailBeep } from '../utils/phoneRelay.js';
 import { errorEmbed } from '../utils/embeds.js';
 import { resolvePhonePlayer } from '../commands/phone/playerLookup.js';
 
@@ -39,16 +39,54 @@ export function buildIncomingCallActions(callId: string): ActionRowBuilder<Butto
 }
 
 function isExpiredRingError(err: PhoneServiceError): boolean {
-  return err.code === 'invalid_state' && err.message === 'Call is no longer ringing.';
+  return err.code === 'invalid_state' && (err.message === 'Call is no longer ringing.' || err.message === 'Call is already voicemail.');
 }
 
 async function handleExpiredRingButton(
   interaction: ButtonInteraction,
   svc: PhoneService,
   callId: string,
+  alreadyVoicemail = false,
 ): Promise<void> {
-  const ended = await svc.systemEndCall(callId, 'ring_timeout');
-  if (ended) {
+  let transitioned = alreadyVoicemail
+    ? (await svc.getCallParticipants(callId)).call
+    : await svc.expireRingingCall(callId, new Date());
+  let description = 'The recipient did not answer in time.';
+
+  if (transitioned?.status === 'voicemail') {
+    description = 'The caller was sent to voicemail.';
+    if (!transitioned.voicemailBeepedAt) {
+      const now = new Date();
+      let claimed = null;
+      try {
+        claimed = await svc.claimVoicemailPeep(callId, now);
+      } catch (err) {
+        console.error('[phone:button] expired ring: failed to claim voicemail peep:', err);
+      }
+      if (claimed) {
+        let sent = false;
+        try {
+          await sendVoicemailBeep(interaction.client, callId);
+          sent = true;
+        } catch (err) {
+          console.error('[phone:button] expired ring: failed to send voicemail peep:', err);
+          try {
+            await svc.systemEndCall(callId, 'dm_closed');
+          } catch (innerErr) {
+            console.error('[phone:button] expired ring: failed to end unreachable voicemail:', innerErr);
+          }
+          description = 'The caller could not be reached via DM.';
+        }
+        if (sent) {
+          try {
+            transitioned = await svc.markVoicemailPeeped(callId, new Date()) ?? transitioned;
+          } catch (err) {
+            console.error('[phone:button] expired ring: failed to stamp voicemail peep:', err);
+          }
+        }
+      }
+    }
+  } else if (transitioned) {
     await hangUpAndNotify(interaction.client, callId, 'ring_timeout');
   }
   try {
@@ -62,7 +100,7 @@ async function handleExpiredRingButton(
     const expiredEmbed = new EmbedBuilder()
       .setTitle('\u{260E} Call ended')
       .setColor(0x9c9890)
-      .setDescription('The recipient did not answer in time.');
+      .setDescription(description);
     await interaction.message.edit({ embeds: [expiredEmbed], components: [disabledRow] });
   } catch (editErr) {
     console.error('[phone:button] expired ring: failed to update ring DM:', editErr);
@@ -103,7 +141,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
     } catch (err) {
       if (err instanceof PhoneServiceError) {
         if (isExpiredRingError(err)) {
-          await handleExpiredRingButton(interaction, svc, callId);
+          await handleExpiredRingButton(interaction, svc, callId, err.message === 'Call is already voicemail.');
           return true;
         }
         await interaction.editReply({ embeds: [errorEmbed(err.message)] });
@@ -173,7 +211,7 @@ export async function handlePhoneButton(interaction: ButtonInteraction): Promise
   } catch (err) {
     if (err instanceof PhoneServiceError) {
       if (isExpiredRingError(err)) {
-        await handleExpiredRingButton(interaction, svc, callId);
+        await handleExpiredRingButton(interaction, svc, callId, err.message === 'Call is already voicemail.');
         return true;
       }
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });

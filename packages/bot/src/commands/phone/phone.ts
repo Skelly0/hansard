@@ -18,7 +18,7 @@ import {
   type PhoneDirectoryEntry,
 } from '@hansard/api/services/phoneService';
 import { buildIncomingCallActions } from '../../components/phoneButtons.js';
-import { hangUpAndNotify } from '../../utils/phoneRelay.js';
+import { hangUpAndNotify, sendVoicemailIntro } from '../../utils/phoneRelay.js';
 import { resolveStaffRoleIds } from '../../utils/staffRoles.js';
 import { clearNoCallCache } from '../../events/messageCreate.js';
 import { resolvePhonePlayer } from './playerLookup.js';
@@ -29,6 +29,8 @@ import {
   isValidPhoneNumber,
   PHONE_NUMBER_INVALID,
   PHONE_RING_TIMEOUT_MS,
+  PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH,
+  PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS,
 } from '@hansard/shared';
 import type { Command } from '../../client.js';
 
@@ -223,6 +225,102 @@ async function handleDelete(interaction: ChatInputCommandInteraction): Promise<v
   }
 }
 
+async function requireOwnedNumber(
+  interaction: ChatInputCommandInteraction,
+  player: { id: string },
+  numberInput: string,
+): Promise<Awaited<ReturnType<PhoneService['lookupNumber']>>> {
+  const row = await svc().lookupNumber(numberInput);
+  if (!row || row.playerId !== player.id) {
+    await interaction.editReply({ embeds: [errorEmbed('You do not own an active line with that number.')] });
+    return null;
+  }
+  return row;
+}
+
+async function handleVoicemailSet(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+  const numberInput = interaction.options.getString('number', true);
+  const introMessage = interaction.options.getString('intro', true);
+  const postBeepMessage = interaction.options.getString('after-peep', true);
+  const row = await requireOwnedNumber(interaction, player, numberInput);
+  if (!row) return;
+
+  try {
+    const updated = await svc().setVoicemail(row.id, player.id, { userId: player.id, isStaff: false }, {
+      enabled: true,
+      introMessage,
+      postBeepMessage,
+    });
+    await interaction.editReply({
+      embeds: [
+        successEmbed(
+          'Voicemail enabled',
+          [
+            `Line: **${updated.numberRaw}**`,
+            '',
+            `Callers hear the intro immediately. If the line is not answered before the normal ring timeout, they receive \`<peep>\` plus the after-peep message and their next DM within ${Math.round(PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS / 60_000)} minutes is delivered as voicemail.`,
+          ].join('\n'),
+        ),
+      ],
+    });
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[phone:cmd] voicemail set failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to update voicemail.')] });
+  }
+}
+
+async function handleVoicemailDisable(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+  const numberInput = interaction.options.getString('number', true);
+  const row = await requireOwnedNumber(interaction, player, numberInput);
+  if (!row) return;
+
+  try {
+    const updated = await svc().setVoicemail(row.id, player.id, { userId: player.id, isStaff: false }, {
+      enabled: false,
+    });
+    await interaction.editReply({
+      embeds: [successEmbed('Voicemail disabled', `Line **${updated.numberRaw}** will now time out normally if unanswered.`)],
+    });
+  } catch (err) {
+    if (err instanceof PhoneServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[phone:cmd] voicemail disable failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to disable voicemail.')] });
+  }
+}
+
+async function handleVoicemailShow(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+  const numberInput = interaction.options.getString('number', true);
+  const row = await requireOwnedNumber(interaction, player, numberInput);
+  if (!row) return;
+
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle(`Voicemail for ${row.numberRaw}`)
+        .setColor(CALL_COLOUR)
+        .addFields(
+          { name: 'Status', value: row.voicemailEnabled ? 'Enabled' : 'Disabled', inline: true },
+          { name: 'Intro', value: row.voicemailIntroMessage || '—', inline: false },
+          { name: 'After peep', value: row.voicemailPostBeepMessage || '—', inline: false },
+        ),
+    ],
+    allowedMentions: { parse: [] },
+  });
+}
+
 // -----------------------------------------------------------------------------
 // dial / hangup / history
 // -----------------------------------------------------------------------------
@@ -329,17 +427,21 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
   // Caller "Ringing..." DM echoes which of their numbers was used — surprising-number issue.
   try {
     const callerUser = await interaction.client.users.fetch(participants.callerPlayer.discordId);
-    await callerUser.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('\u{1F4DE} Ringing...')
-          .setColor(CALL_COLOUR)
-          .setDescription(
-            `Calling **${participants.recipientNumber.numberRaw}** from **${participants.callerNumber.numberRaw}**. You'll be notified when they pick up.\n\nUse \`/phone hangup\` to cancel before they answer.`,
-          ),
-      ],
-      allowedMentions: { parse: [] },
-    });
+    if (participants.call.voicemailEnabled && participants.call.voicemailIntroMessage?.trim()) {
+      await sendVoicemailIntro(interaction.client, participants);
+    } else {
+      await callerUser.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('\u{1F4DE} Ringing...')
+            .setColor(CALL_COLOUR)
+            .setDescription(
+              `Calling **${participants.recipientNumber.numberRaw}** from **${participants.callerNumber.numberRaw}**. You'll be notified when they pick up.\n\nUse \`/phone hangup\` to cancel before they answer.`,
+            ),
+        ],
+        allowedMentions: { parse: [] },
+      });
+    }
   } catch {
     /* caller has DMs closed — still let the slash reply confirm */
   }
@@ -759,6 +861,64 @@ const command: Command = {
     )
     .addSubcommandGroup((group) =>
       group
+        .setName('voicemail')
+        .setDescription('Configure voicemail on your phone lines')
+        .addSubcommand((sub) =>
+          sub
+            .setName('set')
+            .setDescription('Enable voicemail with an intro and an after-peep message')
+            .addStringOption((opt) =>
+              opt
+                .setName('number')
+                .setDescription('Your number to configure')
+                .setRequired(true)
+                .setMaxLength(32)
+                .setAutocomplete(true),
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName('intro')
+                .setDescription('Message sent right away, before callers know it is voicemail')
+                .setRequired(true)
+                .setMaxLength(PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH),
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName('after-peep')
+                .setDescription('Message sent immediately after <peep>')
+                .setRequired(true)
+                .setMaxLength(PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName('show')
+            .setDescription('Show voicemail settings for one of your numbers')
+            .addStringOption((opt) =>
+              opt
+                .setName('number')
+                .setDescription('Your number')
+                .setRequired(true)
+                .setMaxLength(32)
+                .setAutocomplete(true),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName('disable')
+            .setDescription('Disable voicemail for one of your numbers')
+            .addStringOption((opt) =>
+              opt
+                .setName('number')
+                .setDescription('Your number')
+                .setRequired(true)
+                .setMaxLength(32)
+                .setAutocomplete(true),
+            ),
+        ),
+    )
+    .addSubcommandGroup((group) =>
+      group
         .setName('admin')
         .setDescription('Staff-only phone administration')
         .addSubcommand((sub) =>
@@ -829,8 +989,9 @@ const command: Command = {
       return;
     }
     const sub = interaction.options.getSubcommand();
+    const group = interaction.options.getSubcommandGroup(false);
     // Autocomplete only fires for the caller's own numbers on `delete` / `dial from`.
-    if (sub !== 'delete' && !(sub === 'dial' && focused.name === 'from')) {
+    if (group !== 'voicemail' && sub !== 'delete' && !(sub === 'dial' && focused.name === 'from')) {
       await interaction.respond([]);
       return;
     }
@@ -886,6 +1047,23 @@ const command: Command = {
             break;
           default:
             await interaction.editReply({ embeds: [errorEmbed(`Unknown admin subcommand: ${sub}`)] });
+        }
+        return;
+      }
+
+      if (group === 'voicemail') {
+        switch (sub) {
+          case 'set':
+            await handleVoicemailSet(interaction);
+            break;
+          case 'show':
+            await handleVoicemailShow(interaction);
+            break;
+          case 'disable':
+            await handleVoicemailDisable(interaction);
+            break;
+          default:
+            await interaction.editReply({ embeds: [errorEmbed(`Unknown voicemail subcommand: ${sub}`)] });
         }
         return;
       }

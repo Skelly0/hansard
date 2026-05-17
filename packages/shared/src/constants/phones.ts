@@ -42,6 +42,9 @@ export const PHONE_TAP_FAILURE_THRESHOLD = 5;
 /** Max length for each configured voicemail line message. */
 export const PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH = 1000;
 
+/** Max length for a public phone-line pseudonym. */
+export const PHONE_PSEUDONYM_MAX_LENGTH = 128;
+
 /** How long a caller has after the peep before an unanswered voicemail session is closed. */
 export const PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -92,6 +95,16 @@ export function isValidPhoneNumber(input: string): boolean {
 /** Pretty-print a number for display. Leaves any user-chosen formatting alone. */
 export function formatPhoneNumber(raw: string): string {
   return raw.trim();
+}
+
+/** Clean an optional public alias for a phone line. Blank aliases are stored as null. */
+export function cleanPhonePseudonym(input: string | null | undefined): string | null {
+  const cleaned = input
+    ?.replace(/[\p{Cc}\p{Cf}]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (!cleaned) return null;
+  return cleaned.slice(0, PHONE_PSEUDONYM_MAX_LENGTH);
 }
 
 /**

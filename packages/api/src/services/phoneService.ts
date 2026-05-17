@@ -27,6 +27,7 @@ import {
   PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH,
   PHONE_VOICEMAIL_PEEP_CLAIM_STALE_MS,
   PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS,
+  cleanPhonePseudonym,
   isValidPhoneNumber,
   normalizePhoneNumber,
 } from '@hansard/shared';
@@ -62,6 +63,7 @@ export interface CallParticipantSummary {
   discordUsername: string | null;
   discordId: string | null;
   numberRaw: string | null;
+  pseudonym: string | null;
 }
 export interface EnrichedPhoneCall extends PhoneCall {
   caller: CallParticipantSummary;
@@ -74,6 +76,7 @@ export interface PhoneDirectoryEntry {
   numberRaw: string;
   numberNormalized: string;
   label: string | null;
+  pseudonym: string | null;
   characterName: string;
   discordUsername: string;
 }
@@ -87,6 +90,7 @@ export interface RegisterNumberInput {
   playerId: string;
   numberRaw: string;
   label?: string | null;
+  pseudonym?: string | null;
 }
 
 export interface VoicemailSettingsInput {
@@ -200,6 +204,7 @@ export class PhoneService {
     // player can't store zero-width joiners or bidi marks. The shape was already validated
     // above; sanitization just removes anything outside the printable phone-shape whitelist.
     const sanitizedRaw = sanitizeNumberRaw(input.numberRaw);
+    const pseudonym = cleanPhonePseudonym(input.pseudonym);
 
     return this.db.transaction(async (tx) => {
       await lockPhoneKey(tx, 'player', input.playerId);
@@ -242,6 +247,7 @@ export class PhoneService {
             numberRaw: sanitizedRaw,
             numberNormalized: normalized,
             label: input.label ?? null,
+            pseudonym,
             cachedCharacterName: player.characterName,
           })
           .returning();
@@ -271,6 +277,7 @@ export class PhoneService {
         numberRaw: phoneNumbers.numberRaw,
         numberNormalized: phoneNumbers.numberNormalized,
         label: phoneNumbers.label,
+        pseudonym: phoneNumbers.pseudonym,
         characterName: players.characterName,
         discordUsername: players.discordUsername,
       })
@@ -281,13 +288,15 @@ export class PhoneService {
         eq(players.isAlive, true),
         isNotNull(players.characterName),
       ))
-      .orderBy(asc(players.characterName), asc(phoneNumbers.numberRaw));
+      .orderBy(asc(sql`coalesce(${phoneNumbers.pseudonym}, ${players.characterName})`), asc(phoneNumbers.numberRaw));
 
     return rows.flatMap((row) =>
       row.characterName
         ? [{
             ...row,
-            characterName: row.characterName,
+            label: row.pseudonym ? null : row.label,
+            characterName: row.pseudonym ?? row.characterName,
+            discordUsername: row.pseudonym ? '' : row.discordUsername,
           }]
         : [],
     );
@@ -1459,13 +1468,13 @@ export class PhoneService {
           .from(players)
           .where(inArray(players.id, playerIds)),
         this.db
-          .select({ id: phoneNumbers.id, numberRaw: phoneNumbers.numberRaw })
+          .select({ id: phoneNumbers.id, numberRaw: phoneNumbers.numberRaw, pseudonym: phoneNumbers.pseudonym })
           .from(phoneNumbers)
           .where(inArray(phoneNumbers.id, numberIds)),
       ])
       : [[], []];
     const playerMap = new Map(playerRows.map((p) => [p.id, p]));
-    const numberMap = new Map(numberRows.map((n) => [n.id, n.numberRaw]));
+    const numberMap = new Map(numberRows.map((n) => [n.id, n]));
 
     const calls: EnrichedPhoneCall[] = rows.map((row) => ({
       ...row,
@@ -1474,14 +1483,16 @@ export class PhoneService {
         characterName: playerMap.get(row.callerPlayerId)?.characterName ?? null,
         discordUsername: playerMap.get(row.callerPlayerId)?.discordUsername ?? null,
         discordId: playerMap.get(row.callerPlayerId)?.discordId ?? null,
-        numberRaw: numberMap.get(row.callerNumberId) ?? null,
+        numberRaw: numberMap.get(row.callerNumberId)?.numberRaw ?? null,
+        pseudonym: numberMap.get(row.callerNumberId)?.pseudonym ?? null,
       },
       recipient: {
         playerId: row.recipientPlayerId,
         characterName: playerMap.get(row.recipientPlayerId)?.characterName ?? null,
         discordUsername: playerMap.get(row.recipientPlayerId)?.discordUsername ?? null,
         discordId: playerMap.get(row.recipientPlayerId)?.discordId ?? null,
-        numberRaw: numberMap.get(row.recipientNumberId) ?? null,
+        numberRaw: numberMap.get(row.recipientNumberId)?.numberRaw ?? null,
+        pseudonym: numberMap.get(row.recipientNumberId)?.pseudonym ?? null,
       },
     }));
     return { calls, total };

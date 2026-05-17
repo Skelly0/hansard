@@ -28,6 +28,7 @@ import {
   formatPhoneEndedReason,
   isValidPhoneNumber,
   PHONE_NUMBER_INVALID,
+  PHONE_PSEUDONYM_MAX_LENGTH,
   PHONE_RING_TIMEOUT_MS,
   PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH,
   PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS,
@@ -56,18 +57,34 @@ function formatInlineCode(value: string): string {
   return `\`${value.replace(/`/g, "'")}\``;
 }
 
+function formatPublicLineIdentity(line: { numberRaw: string; pseudonym?: string | null }): string {
+  if (line.pseudonym) {
+    return `**${escapeMarkdown(line.pseudonym)}** (${formatInlineCode(line.numberRaw)})`;
+  }
+  return `**${escapeMarkdown(line.numberRaw)}**`;
+}
+
+function formatOwnLineLine(line: { numberRaw: string; label?: string | null; pseudonym?: string | null }): string {
+  const details = [
+    line.label ? `*(${escapeMarkdown(line.label)})*` : null,
+    line.pseudonym ? `as **${escapeMarkdown(line.pseudonym)}**` : null,
+  ].filter(Boolean).join(' ');
+  return `• **${escapeMarkdown(line.numberRaw)}**${details ? ` ${details}` : ''}`;
+}
+
 function directoryMatches(entry: PhoneDirectoryEntry, search: string): boolean {
   const needle = search.toLowerCase();
-  return entry.characterName.toLowerCase().includes(needle)
-    || entry.discordUsername.toLowerCase().includes(needle)
+  const publicName = entry.pseudonym ?? entry.characterName;
+  return publicName.toLowerCase().includes(needle)
     || entry.numberRaw.toLowerCase().includes(needle)
     || entry.numberNormalized.toLowerCase().includes(needle)
-    || (entry.label?.toLowerCase().includes(needle) ?? false);
+    || (!entry.pseudonym && entry.discordUsername.toLowerCase().includes(needle))
+    || (!entry.pseudonym && (entry.label?.toLowerCase().includes(needle) ?? false));
 }
 
 function formatDirectoryLine(entry: PhoneDirectoryEntry): string {
-  const name = escapeMarkdown(entry.characterName);
-  const label = entry.label ? ` *(${escapeMarkdown(entry.label)})*` : '';
+  const name = escapeMarkdown(entry.pseudonym ?? entry.characterName);
+  const label = !entry.pseudonym && entry.label ? ` *(${escapeMarkdown(entry.label)})*` : '';
   return `• **${name}** — ${formatInlineCode(entry.numberRaw)}${label}`;
 }
 
@@ -94,6 +111,7 @@ async function handleRegister(interaction: ChatInputCommandInteraction): Promise
 
   const numberInput = interaction.options.getString('number', true);
   const label = interaction.options.getString('label')?.trim() || null;
+  const pseudonym = interaction.options.getString('pseudonym')?.trim() || null;
 
   if (!isValidPhoneNumber(numberInput)) {
     await interaction.editReply({ embeds: [errorEmbed(PHONE_NUMBER_INVALID)] });
@@ -101,15 +119,17 @@ async function handleRegister(interaction: ChatInputCommandInteraction): Promise
   }
 
   try {
-    const row = await svc().registerNumber({ playerId: player.id, numberRaw: numberInput, label });
+    const row = await svc().registerNumber({ playerId: player.id, numberRaw: numberInput, label, pseudonym });
     await interaction.editReply({
       embeds: [
         successEmbed(
           'Number registered',
           [
-            `\u{1F4DE} **${row.numberRaw}**${row.label ? ` *(${row.label})*` : ''}`,
+            `\u{1F4DE} **${row.numberRaw}**${row.label ? ` *(${row.label})*` : ''}${row.pseudonym ? ` as **${escapeMarkdown(row.pseudonym)}**` : ''}`,
             '',
-            'Anyone can dial this number to reach you. Make sure your Discord DMs are open.',
+            row.pseudonym
+              ? 'Anyone can dial this number to reach your pseudonymous line. Other players will see the pseudonym instead of your character name.'
+              : 'Anyone can dial this number to reach you. Make sure your Discord DMs are open.',
             '',
             'Next steps:',
             '• `/phone dial <number>` to start a call',
@@ -146,7 +166,7 @@ async function handleNumbers(interaction: ChatInputCommandInteraction): Promise<
     });
     return;
   }
-  const lines = rows.map((r) => `• **${r.numberRaw}**${r.label ? ` *(${r.label})*` : ''}`).join('\n');
+  const lines = rows.map(formatOwnLineLine).join('\n');
   await interaction.editReply({
     embeds: [
       new EmbedBuilder().setTitle('Your phone lines').setColor(CALL_COLOUR).setDescription(lines),
@@ -390,7 +410,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
       .setTitle('\u{1F4DE} Incoming call')
       .setColor(CALL_COLOUR)
       .setDescription(
-        `**${participants.callerNumber.numberRaw}** is calling you.\n\nMessages on this call are logged and cannot be edited or deleted. Answer to connect, or decline to send the caller a refusal.`,
+        `${formatPublicLineIdentity(participants.callerNumber)} is calling you.\n\nMessages on this call are logged and cannot be edited or deleted. Answer to connect, or decline to send the caller a refusal.`,
       )
       .setFooter({ text: `This ring expires in ${Math.round(PHONE_RING_TIMEOUT_MS / 1000)} seconds.` });
     const row = buildIncomingCallActions(participants.call.id);
@@ -436,7 +456,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
             .setTitle('\u{1F4DE} Ringing...')
             .setColor(CALL_COLOUR)
             .setDescription(
-              `Calling **${participants.recipientNumber.numberRaw}** from **${participants.callerNumber.numberRaw}**. You'll be notified when they pick up.\n\nUse \`/phone hangup\` to cancel before they answer.`,
+              `Calling ${formatPublicLineIdentity(participants.recipientNumber)} from ${formatPublicLineIdentity(participants.callerNumber)}. You'll be notified when they pick up.\n\nUse \`/phone hangup\` to cancel before they answer.`,
             ),
         ],
         allowedMentions: { parse: [] },
@@ -450,7 +470,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
     embeds: [
       successEmbed(
         'Dialing',
-        `Ringing **${participants.recipientNumber.numberRaw}** from **${participants.callerNumber.numberRaw}**${fromNumber ? '' : ' *(default line)*'}. Check your DMs — the call will connect there if it's answered.`,
+        `Ringing ${formatPublicLineIdentity(participants.recipientNumber)} from ${formatPublicLineIdentity(participants.callerNumber)}${fromNumber ? '' : ' *(default line)*'}. Check your DMs — the call will connect there if it's answered.`,
       ),
     ],
   });
@@ -516,11 +536,11 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
     // Discord-relative timestamp auto-localizes per viewer.
     const stamp = `<t:${Math.floor(c.startedAt.getTime() / 1000)}:f>`;
     const other = isOutbound ? c.recipient : c.caller;
-    const name = other.characterName ?? other.numberRaw ?? 'Unknown';
+    const name = other.pseudonym ?? other.characterName ?? other.numberRaw ?? 'Unknown';
     const arrow = isOutbound ? '\u{2192}' : '\u{2190}';
     const status = formatPhoneCallStatus(c.status);
     const ended = c.endedReason ? ` \u{2014} ${formatPhoneEndedReason(c.endedReason)}` : '';
-    return `${stamp} ${arrow} **${name}** (${other.numberRaw ?? '?'}) \u{2014} ${status}${ended}`;
+    return `${stamp} ${arrow} **${escapeMarkdown(name)}** (${other.numberRaw ?? '?'}) \u{2014} ${status}${ended}`;
   });
   await interaction.editReply({
     embeds: [
@@ -742,6 +762,7 @@ async function handleAdminLookup(interaction: ChatInputCommandInteraction): Prom
         .addFields(
           { name: 'Owner', value: owner ? `${owner.characterName ?? '(no character)'} (<@${owner.discordId}>)` : 'Unknown', inline: false },
           { name: 'Label', value: row.label ?? '—', inline: true },
+          { name: 'Pseudonym', value: row.pseudonym ?? '—', inline: true },
           { name: 'Registered', value: row.createdAt.toISOString().slice(0, 10), inline: true },
         ),
     ],
@@ -793,6 +814,13 @@ const command: Command = {
         )
         .addStringOption((opt) =>
           opt.setName('label').setDescription('Optional vanity name like "Burner"').setRequired(false).setMaxLength(64),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('pseudonym')
+            .setDescription('Optional public alias shown instead of your character name')
+            .setRequired(false)
+            .setMaxLength(PHONE_PSEUDONYM_MAX_LENGTH),
         ),
     )
     .addSubcommand((sub) => sub.setName('numbers').setDescription('List your active phone numbers'))
@@ -1015,7 +1043,7 @@ const command: Command = {
       )
       .slice(0, 25)
       .map((n) => ({
-        name: n.label ? `${n.numberRaw} — ${n.label}` : n.numberRaw,
+        name: [n.numberRaw, n.label, n.pseudonym ? `as ${n.pseudonym}` : null].filter(Boolean).join(' — '),
         value: n.numberRaw,
       }));
     await interaction.respond(filtered);

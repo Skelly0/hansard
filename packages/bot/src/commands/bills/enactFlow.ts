@@ -7,7 +7,8 @@ export interface EnactBillInput {
   billId: string;
   expectedStatus: string;
   changedById: string;
-  actorDiscordId: string;
+  actorDiscordId?: string;
+  auditNote?: string;
   now?: Date;
 }
 
@@ -66,7 +67,8 @@ export async function enactBill(
       fromStatus: previousStatus,
       toStatus: BillStatus.ENACTED,
       changedById: input.changedById,
-      notes: `Enacted by <@${input.actorDiscordId}>`,
+      notes: input.auditNote
+        ?? (input.actorDiscordId ? `Enacted by <@${input.actorDiscordId}>` : 'Bill enacted'),
     });
 
     return {

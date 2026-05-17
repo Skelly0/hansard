@@ -12,6 +12,7 @@ import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import { findElectionByReference } from './_electionReference.js';
+import { autoEnactPassedBillFromElection } from '../bills/autoEnact.js';
 
 const METHOD_LABELS: Record<string, string> = {
   yea_nay_abstain: 'Yea / Nay / Abstain',
@@ -136,14 +137,19 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     }
   }
 
-  // ---- Legislative votes: auto-tally so the linked bill transitions ----
-  // Without this, /vote close leaves the bill stuck in `voting` and
-  // /bill-enact rejects it. Mirrors what /vote tally would do.
+  // ---- Legislative votes: auto-tally and auto-enact when NPC review is inactive ----
+  // VoteService records the player-house outcome; the bot layer has the
+  // Discord client needed to post and capture the legislation-channel enactment.
   if (updated.type === 'legislative_vote' && updated.relatedBillId) {
     try {
       await new VoteService(db).tallyVotes(updated.id);
+      await autoEnactPassedBillFromElection({
+        database: db,
+        client,
+        election: updated,
+      });
     } catch (error) {
-      console.error('[vote-close] failed to auto-tally legislative vote:', error);
+      console.error('[vote-close] failed to auto-tally/enact legislative vote:', error);
       // Non-fatal — staff can re-run /vote tally manually.
     }
   }

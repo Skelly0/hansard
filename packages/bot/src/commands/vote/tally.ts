@@ -10,6 +10,7 @@ import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
 import { buildResultsEmbed } from './results.js';
 import { findElectionByReference } from './_electionReference.js';
+import { autoEnactPassedBillFromElection } from '../bills/autoEnact.js';
 
 /**
  * /vote tally election:<title-or-id> — staff force-tally an election.
@@ -69,12 +70,30 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       return;
     }
 
+    let autoEnactFailed = false;
+    try {
+      await autoEnactPassedBillFromElection({
+        database: db,
+        client: interaction.client,
+        election,
+      });
+    } catch (err) {
+      autoEnactFailed = true;
+      console.error('[vote-tally] failed to auto-enact linked legislative bill:', err);
+    }
+
     const embed = buildResultsEmbed({
       title: election.title,
       method: election.method,
       results,
       candidateNames: await getCandidateNames(election.id),
     });
+    if (autoEnactFailed) {
+      embed.addFields({
+        name: 'Auto-enactment',
+        value: 'The vote was tallied, but the linked bill could not be automatically enacted. Run `/bill enact` after checking logs.',
+      });
+    }
 
     await interaction.editReply({ embeds: [embed] });
 }

@@ -5,6 +5,7 @@ import { db } from '../db.js';
 import { renderReactionResult } from '../commands/vote/close.js';
 import { startVoteAutoCloseWorker } from '../services/voteAutoClose.js';
 import { startPhoneRingTimeoutWorker } from '../services/phoneRingTimeout.js';
+import { autoEnactPassedBillFromElection } from '../commands/bills/autoEnact.js';
 
 let voteAutoCloseWorker: NodeJS.Timeout | null = null;
 let phoneRingTimeoutWorker: NodeJS.Timeout | null = null;
@@ -98,6 +99,11 @@ export function registerReadyEvent(client: Client): void {
         renderReactionResult,
         tallyElection: async (election) => {
           await voteService.tallyVotes(election.id);
+          await autoEnactPassedBillFromElection({
+            database: db,
+            client: readyClient,
+            election,
+          });
         },
         logger: console,
       });

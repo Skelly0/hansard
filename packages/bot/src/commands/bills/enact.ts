@@ -5,7 +5,11 @@ import { bills, players } from '@hansard/db';
 import { errorEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { BillStatus } from '@hansard/shared';
-import { enactAndPostBill } from './autoEnact.js';
+import {
+  enactAndPostBill,
+  LegislationPostError,
+  postExistingEnactedBill,
+} from './autoEnact.js';
 
 /**
  * Resolve a bill by either bill number (e.g. "B-001", "1") or title.
@@ -63,6 +67,18 @@ const ENACTABLE_STATUSES = new Set<string>([
   BillStatus.NPC_PASSED,
 ]);
 
+function formatEnactFailure(error: unknown, mode: 'enact' | 'repair' = 'enact'): string {
+  if (error instanceof LegislationPostError) {
+    return mode === 'repair'
+      ? 'Failed to post the missing legislation message. The bill is still marked enacted.'
+      : 'Failed to post the legislation message, so the bill was not enacted.';
+  }
+
+  return mode === 'repair'
+    ? 'Failed to repair the legislation message due to a database error.'
+    : 'Failed to enact the bill due to a database error.';
+}
+
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const member = interaction.guild?.members.cache.get(interaction.user.id);
   if (!member) {
@@ -96,6 +112,40 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   }
 
   if (bill.status === BillStatus.ENACTED || bill.status === BillStatus.ACTIVE) {
+    if (!bill.legislationChannelId || !bill.legislationMessageId) {
+      const [billAuthor] = await db
+        .select({
+          characterName: players.characterName,
+          discordId: players.discordId,
+        })
+        .from(players)
+        .where(eq(players.id, bill.authorId))
+        .limit(1);
+
+      const authorName = billAuthor?.characterName ?? 'Unknown';
+      const authorDisplay = billAuthor?.discordId
+        ? `${authorName} (<@${billAuthor.discordId}>)`
+        : authorName;
+
+      try {
+        const { embed } = await postExistingEnactedBill({
+          database: db,
+          client: interaction.client,
+          bill,
+          authorDisplay,
+          now: bill.enactedAt ?? new Date(),
+        });
+
+        await interaction.editReply({ embeds: [embed] });
+      } catch (error) {
+        console.error('Failed to repair enacted bill legislation post:', error);
+        await interaction.editReply({
+          embeds: [errorEmbed(formatEnactFailure(error, 'repair'))],
+        });
+      }
+      return;
+    }
+
     await interaction.editReply({
       embeds: [errorEmbed('This bill has already been enacted.')],
     });
@@ -150,7 +200,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   } catch (error) {
     console.error('Failed to enact bill:', error);
     await interaction.editReply({
-      embeds: [errorEmbed('Failed to enact the bill due to a database error.')],
+      embeds: [errorEmbed(formatEnactFailure(error))],
     });
   }
 }

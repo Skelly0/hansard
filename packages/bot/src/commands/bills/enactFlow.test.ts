@@ -52,6 +52,8 @@ describe('enactBill', () => {
       expectedStatus: BillStatus.PLAYER_PASSED,
       changedById: 'actor-1',
       actorDiscordId: 'discord-1',
+      legislationChannelId: 'law-channel',
+      legislationMessageId: 'law-message',
       now: baseDate,
     });
 
@@ -61,6 +63,8 @@ describe('enactBill', () => {
       status: BillStatus.ENACTED,
       enactedAt: baseDate,
       effectiveAt: baseDate,
+      legislationChannelId: 'law-channel',
+      legislationMessageId: 'law-message',
       updatedAt: baseDate,
     });
     expect(insertValues[0]).toMatchObject({

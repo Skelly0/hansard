@@ -1,8 +1,45 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.DATABASE_URL ??= 'postgres://user:pass@localhost:5432/hansard';
 
-const { __internal, RecipientDmClosedError } = await import('./phoneRelay.js');
+const mocks = vi.hoisted(() => ({
+  svc: {
+    completeTapDelivery: vi.fn(),
+    countTrailingTapFailures: vi.fn(),
+    findOrReserveThread: vi.fn(),
+    getActiveTapsForNumbers: vi.fn(),
+    isTapActive: vi.fn(),
+    recordVoicemailPrompt: vi.fn(),
+    updateMessageMirrorIds: vi.fn(),
+  },
+}));
+
+vi.mock('@hansard/api/services/phoneService', () => ({
+  PhoneService: vi.fn(function PhoneService() {
+    return mocks.svc;
+  }),
+}));
+
+const {
+  __internal,
+  RecipientDmClosedError,
+  sendVoicemailBeep,
+  sendVoicemailIntro,
+} = await import('./phoneRelay.js');
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.svc.completeTapDelivery.mockResolvedValue(undefined);
+  mocks.svc.countTrailingTapFailures.mockResolvedValue(0);
+  mocks.svc.findOrReserveThread.mockResolvedValue({ thread: null, pair: ['caller-player', 'recipient-player'] });
+  mocks.svc.getActiveTapsForNumbers.mockResolvedValue([]);
+  mocks.svc.isTapActive.mockResolvedValue(true);
+  mocks.svc.recordVoicemailPrompt.mockResolvedValue({
+    message: { id: 'message-1', content: 'prompt' },
+    tapDeliveries: [],
+  });
+  mocks.svc.updateMessageMirrorIds.mockResolvedValue(undefined);
+});
 
 describe('phoneRelay.chunkText', () => {
   it('returns the input unchanged when it fits within the budget', () => {
@@ -206,6 +243,83 @@ describe('phoneRelay.sendToRecipient', () => {
     expect(sent.length).toBeGreaterThan(1);
     // Multi-chunk sends carry a [i/n] progress marker.
     expect(sent[0]).toContain('[1/');
+  });
+});
+
+describe('phoneRelay voicemail prompts', () => {
+  const context = {
+    call: {
+      id: 'call-1',
+      voicemailEnabled: true,
+      voicemailIntroMessage: 'The line keeps ringing.',
+      voicemailPostBeepMessage: 'Leave a message now.',
+      staffThreadId: null,
+    },
+    callerPlayer: { id: 'caller-player', discordId: 'caller-discord', characterName: 'Caller' },
+    recipientPlayer: { id: 'recipient-player', discordId: 'recipient-discord', characterName: 'Recipient' },
+    callerNumber: { id: 'caller-number', numberRaw: '111' },
+    recipientNumber: { id: 'recipient-number', numberRaw: '222' },
+  } as never;
+
+  function makeClient() {
+    const sent: string[] = [];
+    return {
+      sent,
+      client: {
+        channels: { fetch: vi.fn().mockResolvedValue(null) },
+        users: {
+          fetch: vi.fn().mockResolvedValue({
+            send: vi.fn(async ({ content }: { content: string }) => {
+              sent.push(content);
+              return { id: `dm-${sent.length}` };
+            }),
+          }),
+        },
+      } as never,
+    };
+  }
+
+  it('records and mirrors the intro through the call ledger before DM delivery is reconciled', async () => {
+    const { client, sent } = makeClient();
+    mocks.svc.recordVoicemailPrompt.mockResolvedValueOnce({
+      message: { id: 'message-intro', content: 'The line keeps ringing.' },
+      tapDeliveries: [],
+    });
+
+    await sendVoicemailIntro(client, context);
+
+    expect(mocks.svc.recordVoicemailPrompt).toHaveBeenCalledWith({
+      callId: 'call-1',
+      content: 'The line keeps ringing.',
+      expectedStatus: 'ringing',
+    });
+    expect(mocks.svc.updateMessageMirrorIds).toHaveBeenCalledWith('message-intro', {
+      recipientDiscordMessageId: 'dm-1',
+      staffMirrorMessageId: null,
+    });
+    expect(sent[0]).toContain('The line keeps ringing.');
+  });
+
+  it('records and mirrors the peep plus after-peep message through the call ledger', async () => {
+    const { client, sent } = makeClient();
+    mocks.svc.recordVoicemailPrompt.mockResolvedValueOnce({
+      message: { id: 'message-peep', content: '<peep>\nLeave a message now.' },
+      tapDeliveries: [],
+    });
+
+    await sendVoicemailBeep(client, context);
+
+    expect(mocks.svc.recordVoicemailPrompt).toHaveBeenCalledWith({
+      callId: 'call-1',
+      content: '<peep>\nLeave a message now.',
+      expectedStatus: 'voicemail',
+    });
+    expect(mocks.svc.updateMessageMirrorIds).toHaveBeenCalledWith('message-peep', {
+      recipientDiscordMessageId: 'dm-1',
+      staffMirrorMessageId: null,
+    });
+    expect(sent[0]).toContain('<peep>');
+    expect(sent[0]).toContain('Leave a message now.');
   });
 });
 

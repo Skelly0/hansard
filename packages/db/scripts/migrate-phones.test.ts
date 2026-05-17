@@ -146,7 +146,16 @@ describe('migrate-phones', () => {
 
   it('constrains phone_calls.status to the documented enum values', () => {
     expect(script).toContain('phone_calls_status_check');
-    expect(script).toContain("status IN ('ringing','active','ended','declined','missed','cancelled')");
+    expect(script).toContain("status IN ('ringing','active','voicemail','ended','declined','missed','cancelled')");
+  });
+
+  it('adds voicemail settings to numbers and voicemail snapshots to calls', () => {
+    expect(script).toContain('ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_enabled" boolean NOT NULL DEFAULT false');
+    expect(script).toContain('ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_intro_message" text');
+    expect(script).toContain('ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_post_beep_message" text');
+    expect(script).toContain('ALTER TABLE "phone_calls" ADD COLUMN IF NOT EXISTS "voicemail_enabled" boolean NOT NULL DEFAULT false');
+    expect(script).toContain('ALTER TABLE "phone_calls" ADD COLUMN IF NOT EXISTS "voicemail_beeped_at" timestamptz');
+    expect(script).toContain('ALTER TABLE "phone_calls" ADD COLUMN IF NOT EXISTS "voicemail_peep_claimed_at" timestamptz');
   });
 
   it('constrains phone_tap_audit_log.action to the documented enum values', () => {

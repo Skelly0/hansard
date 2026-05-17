@@ -425,6 +425,62 @@ export async function relayMessage(
   if (recipientDeliveryError) throw recipientDeliveryError;
 }
 
+export async function sendVoicemailIntro(client: Client, context: RelayContext): Promise<void> {
+  const intro = context.call.voicemailIntroMessage?.trim();
+  if (!context.call.voicemailEnabled || !intro) return;
+  await relayVoicemailPrompt(client, context, intro, 'ringing');
+}
+
+export async function sendVoicemailBeep(client: Client, callOrContext: string | RelayContext): Promise<void> {
+  const context = typeof callOrContext === 'string'
+    ? await new PhoneService(db).getCallParticipants(callOrContext)
+    : callOrContext;
+  const afterPeep = context.call.voicemailPostBeepMessage?.trim();
+  const content = ['<peep>', afterPeep].filter(Boolean).join('\n');
+  await relayVoicemailPrompt(client, context, content, 'voicemail');
+}
+
+async function relayVoicemailPrompt(
+  client: Client,
+  context: RelayContext,
+  content: string,
+  expectedStatus: 'ringing' | 'voicemail',
+): Promise<void> {
+  const svc = new PhoneService(db);
+  const recorded = await svc.recordVoicemailPrompt({
+    callId: context.call.id,
+    content,
+    expectedStatus,
+  });
+  await relayMessage(client, context, recorded, false);
+}
+
+export async function disableRingDmButtons(
+  client: Client,
+  callId: string,
+  description: string,
+): Promise<void> {
+  const svc = new PhoneService(db);
+  const context = await svc.getCallParticipants(callId);
+  await disableRingDmButtonsForContext(client, context, description);
+}
+
+async function disableRingDmButtonsForContext(
+  client: Client,
+  context: RelayContext,
+  description: string,
+): Promise<void> {
+  if (!context.call.ringDiscordMessageId) return;
+  const recipientUser = await client.users.fetch(context.recipientPlayer.discordId);
+  const dm = await recipientUser.createDM();
+  const message = await dm.messages.fetch(context.call.ringDiscordMessageId);
+  const disabledEmbed = new EmbedBuilder()
+    .setTitle('\u{260E} Call ended')
+    .setColor(ENDED_PALETTE)
+    .setDescription(description);
+  await message.edit({ embeds: [disabledEmbed], components: [] });
+}
+
 async function sendToRecipient(
   client: Client,
   recipientDiscordId: string,
@@ -588,7 +644,9 @@ export async function hangUpAndNotify(
     | 'dm_closed'
     | 'relay_failed'
     | 'session_reset'
-    | 'number_deactivated',
+    | 'number_deactivated'
+    | 'voicemail_left'
+    | 'voicemail_abandoned',
 ): Promise<void> {
   const svc = new PhoneService(db);
   let context: RelayContext;
@@ -610,6 +668,8 @@ export async function hangUpAndNotify(
     relay_failed: 'The relay failed; the call was ended automatically.',
     session_reset: 'The call was reset by a bot restart.',
     number_deactivated: 'One of the lines on this call was retired.',
+    voicemail_left: 'A voicemail was left.',
+    voicemail_abandoned: 'The voicemail session ended without a message.',
   };
 
   // If the persisted DB reason carries a staff-end note (e.g. `force_ended_by_staff:<note>`),
@@ -641,21 +701,12 @@ export async function hangUpAndNotify(
 
   // Disable buttons on the ring DM if persisted. Only relevant when the call terminated
   // while still in `ringing` status — but cheap to check.
-  if (context.call.ringDiscordMessageId) {
-    try {
-      const recipientUser = await client.users.fetch(context.recipientPlayer.discordId);
-      const dm = await recipientUser.createDM();
-      const message = await dm.messages.fetch(context.call.ringDiscordMessageId);
-      const disabledEmbed = new EmbedBuilder()
-        .setTitle('\u{260E} Call ended')
-        .setColor(ENDED_PALETTE)
-        .setDescription(reasonText[endedReason]);
-      await message.edit({ embeds: [disabledEmbed], components: [] });
-    } catch (err) {
-      // Recipient may have closed DMs, ring message may have been deleted, or it was
-      // never sent in the first place. Best-effort — log and continue.
-      console.error('[phone:relay] failed to disable ring DM buttons:', err);
-    }
+  try {
+    await disableRingDmButtonsForContext(client, context, reasonText[endedReason]);
+  } catch (err) {
+    // Recipient may have closed DMs, ring message may have been deleted, or it was
+    // never sent in the first place. Best-effort — log and continue.
+    console.error('[phone:relay] failed to disable ring DM buttons:', err);
   }
 
   if (context.call.staffThreadId) {

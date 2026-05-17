@@ -42,15 +42,21 @@ function makeDb(plan: {
   insertReturning?: unknown[];
   insertErrors?: (Error | undefined)[];
   updateReturning?: unknown[];
+  updatedValues?: unknown[];
+  updateWhereArgs?: unknown[];
   transactionCalls?: { count: number };
   chainEvents?: { method: string; args: unknown[] }[];
+  insertedValues?: unknown[];
 }) {
   const selectQueues = [...(plan.selectQueues ?? [])];
   const insertReturning = [...(plan.insertReturning ?? [])];
   const insertErrors = [...(plan.insertErrors ?? [])];
   const updateReturning = [...(plan.updateReturning ?? [])];
+  const updatedValues = plan.updatedValues;
+  const updateWhereArgs = plan.updateWhereArgs;
   const transactionCalls = plan.transactionCalls;
   const chainEvents = plan.chainEvents;
+  const insertedValues = plan.insertedValues;
 
   // Each chain step returns a Proxy that:
   //   - is awaitable (resolves to the next selectQueue entry)
@@ -85,7 +91,8 @@ function makeDb(plan: {
   }
 
   const insert = (_table?: unknown) => ({
-    values: (_v: unknown) => {
+    values: (v: unknown) => {
+      insertedValues?.push(v);
       const err = insertErrors.shift();
       if (err) {
         // Both `.returning()` and a bare await should reject.
@@ -103,15 +110,19 @@ function makeDb(plan: {
   });
 
   const update = (_table?: unknown) => ({
-    set: (_v: unknown) => ({
-      where: (_w: unknown) => {
+    set: (v: unknown) => {
+      updatedValues?.push(v);
+      return {
+      where: (w: unknown) => {
+        updateWhereArgs?.push(w);
         const rows = updateReturning.shift() ?? [];
         return {
           returning: () => Promise.resolve(rows),
           then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
         };
       },
-    }),
+      };
+    },
   });
 
   const select = (_proj?: unknown) => thenableChain();
@@ -128,6 +139,30 @@ function makeDb(plan: {
 
   const api = { select, insert, update, delete: remove, transaction };
   return api as any;
+}
+
+function collectStrings(value: unknown, seen = new WeakSet<object>()): string[] {
+  if (typeof value === 'string') return [value];
+  if (value === null || typeof value !== 'object') return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
+  const out: string[] = [];
+  for (const v of Object.values(value as Record<string, unknown>)) {
+    out.push(...collectStrings(v, seen));
+  }
+  return out;
+}
+
+function collectDates(value: unknown, seen = new WeakSet<object>()): Date[] {
+  if (value instanceof Date) return [value];
+  if (value === null || typeof value !== 'object') return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
+  const out: Date[] = [];
+  for (const v of Object.values(value as Record<string, unknown>)) {
+    out.push(...collectDates(v, seen));
+  }
+  return out;
 }
 
 describe('PhoneService.registerNumber', () => {
@@ -424,6 +459,54 @@ describe('PhoneService.initiateCall', () => {
     expect(result.callerNumber.playerId).toBe('p1');
     expect(result.callerPlayer.characterName).toBe('Beatrice Vance');
   });
+
+  it('snapshots the recipient number voicemail messages onto the ringing call', async () => {
+    const insertedValues: unknown[] = [];
+    const insertedCall = {
+      id: 'call-1',
+      callerNumberId: 'n1',
+      recipientNumberId: 'n2',
+      callerPlayerId: 'p1',
+      recipientPlayerId: 'p2',
+      status: 'ringing',
+      voicemailEnabled: true,
+      voicemailIntroMessage: 'Hello?',
+      voicemailPostBeepMessage: 'Leave it after the peep.',
+    };
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'n1', playerId: 'p1', isActive: true }],
+        [{
+          id: 'n2',
+          playerId: 'p2',
+          isActive: true,
+          voicemailEnabled: true,
+          voicemailIntroMessage: 'Hello?',
+          voicemailPostBeepMessage: 'Leave it after the peep.',
+        }],
+        [{ id: 'p1', characterName: 'Alice', discordId: '1', isAlive: true }],
+        [{ id: 'p2', characterName: 'Bob', discordId: '2', isAlive: true }],
+        [],
+        [],
+      ],
+      insertReturning: [[insertedCall]],
+      insertedValues,
+    });
+    const svc = new PhoneService(db);
+
+    const result = await svc.initiateCall({
+      callerPlayerId: 'p1',
+      callerNumberId: 'n1',
+      recipientNumberId: 'n2',
+    });
+
+    expect(result.call.voicemailEnabled).toBe(true);
+    expect(insertedValues[0]).toMatchObject({
+      voicemailEnabled: true,
+      voicemailIntroMessage: 'Hello?',
+      voicemailPostBeepMessage: 'Leave it after the peep.',
+    });
+  });
 });
 
 describe('PhoneService.recordMessage', () => {
@@ -441,6 +524,84 @@ describe('PhoneService.recordMessage', () => {
     const svc = new PhoneService(db);
     await expect(svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p1', content: 'hi' }))
       .rejects.toMatchObject({ code: 'invalid_state' });
+  });
+
+  it('records a caller message after a call has entered voicemail and the peep has sounded', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [{
+          id: 'call-1',
+          status: 'voicemail',
+          voicemailBeepedAt: new Date('2026-05-15T12:00:00.000Z'),
+          callerPlayerId: 'p1',
+          recipientPlayerId: 'p2',
+          callerNumberId: 'n1',
+          recipientNumberId: 'n2',
+        }],
+        [{ isAlive: true }],
+        [],
+      ],
+      insertReturning: [
+        [{ id: 'm1', callId: 'call-1', senderPlayerId: 'p1', content: 'call me back' }],
+      ],
+    });
+    const svc = new PhoneService(db);
+
+    const result = await svc.recordMessage({
+      callId: 'call-1',
+      senderPlayerId: 'p1',
+      content: 'call me back',
+    });
+
+    expect(result.message.id).toBe('m1');
+  });
+
+  it('does not record voicemail before the peep has sounded', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [{
+          id: 'call-1',
+          status: 'voicemail',
+          voicemailBeepedAt: null,
+          callerPlayerId: 'p1',
+          recipientPlayerId: 'p2',
+          callerNumberId: 'n1',
+          recipientNumberId: 'n2',
+        }],
+        [{ isAlive: true }],
+      ],
+    });
+    const svc = new PhoneService(db);
+
+    try {
+      await svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p1', content: 'too early' });
+      throw new Error('expected recordMessage to reject');
+    } catch (err) {
+      expect(err).toMatchObject({ code: 'invalid_state' });
+      expect((err as Error).message).toContain('ringing');
+      expect((err as Error).message.toLowerCase()).not.toContain('voicemail');
+      expect((err as Error).message.toLowerCase()).not.toContain('peep');
+    }
+  });
+
+  it('does not let the recipient speak into their own voicemail session', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [{
+          id: 'call-1',
+          status: 'voicemail',
+          callerPlayerId: 'p1',
+          recipientPlayerId: 'p2',
+          callerNumberId: 'n1',
+          recipientNumberId: 'n2',
+        }],
+      ],
+    });
+    const svc = new PhoneService(db);
+
+    await expect(
+      svc.recordMessage({ callId: 'call-1', senderPlayerId: 'p2', content: 'hello?' }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
   });
 
   it('refuses senders not in the call', async () => {
@@ -527,6 +688,46 @@ describe('PhoneService.recordMessage', () => {
     expect(result.message.id).toBe('m1');
     expect(result.tapDeliveries).toHaveLength(1);
     expect(result.tapDeliveries[0].id).toBe('delivery-1');
+  });
+});
+
+describe('PhoneService.recordVoicemailPrompt', () => {
+  it('records voicemail prompts as recipient-authored ledger messages with tap placeholders', async () => {
+    const insertedValues: unknown[] = [];
+    const db = makeDb({
+      selectQueues: [
+        [{
+          id: 'call-1',
+          status: 'ringing',
+          voicemailEnabled: true,
+          callerPlayerId: 'p1',
+          recipientPlayerId: 'p2',
+          callerNumberId: 'n1',
+          recipientNumberId: 'n2',
+        }],
+        [{ id: 'tap-1', targetNumberId: 'n2', isActive: true }],
+      ],
+      insertReturning: [
+        [{ id: 'm1', callId: 'call-1', senderPlayerId: 'p2', content: 'intro' }],
+        [{ id: 'delivery-1', messageId: 'm1', tapId: 'tap-1' }],
+      ],
+      insertedValues,
+    });
+    const svc = new PhoneService(db);
+
+    const result = await (svc as any).recordVoicemailPrompt({
+      callId: 'call-1',
+      content: 'intro',
+      expectedStatus: 'ringing',
+    });
+
+    expect(insertedValues[0]).toMatchObject({
+      callId: 'call-1',
+      senderPlayerId: 'p2',
+      content: 'intro',
+    });
+    expect(result.message.id).toBe('m1');
+    expect(result.tapDeliveries).toHaveLength(1);
   });
 });
 
@@ -1512,13 +1713,112 @@ describe('PhoneService.sweepStrandedActiveCalls', () => {
 describe('PhoneService worker sweepers — Date parameter contract', () => {
   it('expireRingingCalls accepts a Date `now` without throwing at construction', async () => {
     const db = makeDb({
-      updateReturning: [[{ id: 'call-1', status: 'missed', endedReason: 'ring_timeout' }]],
+      updateReturning: [[], [{ id: 'call-1', status: 'missed', endedReason: 'ring_timeout' }]],
     });
     const svc = new PhoneService(db);
     const now = new Date('2026-05-15T12:00:00.000Z');
     await expect(svc.expireRingingCalls(now)).resolves.toEqual([
       { id: 'call-1', status: 'missed', endedReason: 'ring_timeout' },
     ]);
+  });
+
+  it('expireRingingCalls moves voicemail-enabled expired rings into voicemail', async () => {
+    const voicemailCall = { id: 'call-1', status: 'voicemail', endedReason: null };
+    const missedCall = { id: 'call-2', status: 'missed', endedReason: 'ring_timeout' };
+    const db = makeDb({
+      updateReturning: [[voicemailCall], [missedCall]],
+    });
+    const svc = new PhoneService(db);
+    const now = new Date('2026-05-15T12:00:00.000Z');
+
+    await expect(svc.expireRingingCalls(now)).resolves.toEqual([voicemailCall, missedCall]);
+  });
+
+  it('expireRingingCall transitions only the requested expired call', async () => {
+    const now = new Date('2026-05-15T12:00:00.000Z');
+    const updateWhereArgs: unknown[] = [];
+    const missedCall = { id: 'call-1', status: 'missed', endedReason: 'ring_timeout' };
+    const db = makeDb({
+      updateReturning: [[], [missedCall]],
+      updateWhereArgs,
+    });
+    const svc = new PhoneService(db);
+
+    await expect((svc as any).expireRingingCall('call-1', now)).resolves.toEqual(missedCall);
+    expect(collectStrings(updateWhereArgs[0])).toContain('call-1');
+    expect(collectStrings(updateWhereArgs[1])).toContain('call-1');
+  });
+
+  it('expireRingingCalls leaves voicemail peeps pending until delivery succeeds', async () => {
+    const updatedValues: unknown[] = [];
+    const db = makeDb({
+      updateReturning: [[{ id: 'call-1', status: 'voicemail', endedReason: null }], []],
+      updatedValues,
+    });
+    const svc = new PhoneService(db);
+    const now = new Date('2026-05-15T12:00:00.000Z');
+
+    await svc.expireRingingCalls(now);
+
+    expect(updatedValues[0]).toEqual({ status: 'voicemail' });
+  });
+
+  it('findPendingVoicemailBeeps returns only unclaimed voicemail peeps', async () => {
+    const pending = [{ id: 'call-1', status: 'voicemail', voicemailBeepedAt: null }];
+    const chainEvents: { method: string; args: unknown[] }[] = [];
+    const db = makeDb({ selectQueues: [pending], chainEvents });
+    const svc = new PhoneService(db);
+
+    await expect((svc as any).findPendingVoicemailBeeps()).resolves.toEqual(pending);
+    const whereArg = chainEvents.find((event) => event.method === 'where')?.args[0];
+    expect(collectStrings(whereArg)).toContain('voicemail_peep_claimed_at');
+    expect(collectDates(whereArg)).toEqual([]);
+  });
+
+  it('markVoicemailPeeped stamps pending voicemail after the peep DM succeeds', async () => {
+    const now = new Date('2026-05-15T12:00:00.000Z');
+    const stamped = { id: 'call-1', status: 'voicemail', voicemailBeepedAt: now };
+    const db = makeDb({ updateReturning: [[stamped]] });
+    const svc = new PhoneService(db);
+
+    await expect((svc as any).markVoicemailPeeped('call-1', now)).resolves.toEqual(stamped);
+  });
+
+  it('claimVoicemailPeep atomically claims one pending peep before Discord delivery', async () => {
+    const now = new Date('2026-05-15T12:00:00.000Z');
+    const claimed = { id: 'call-1', status: 'voicemail', voicemailPeepClaimedAt: now };
+    const updatedValues: unknown[] = [];
+    const updateWhereArgs: unknown[] = [];
+    const db = makeDb({ updateReturning: [[claimed]], updatedValues, updateWhereArgs });
+    const svc = new PhoneService(db);
+
+    await expect((svc as any).claimVoicemailPeep('call-1', now)).resolves.toEqual(claimed);
+    expect(updatedValues[0]).toEqual({ voicemailPeepClaimedAt: now });
+    expect(collectDates(updateWhereArgs[0])).toEqual([]);
+  });
+
+  it('sweepClaimedVoicemailBeeps stamps stale claimed peeps without requeueing delivery', async () => {
+    const now = new Date('2026-05-15T12:00:00.000Z');
+    const recovered = { id: 'call-1', status: 'voicemail', voicemailBeepedAt: now };
+    const updatedValues: unknown[] = [];
+    const db = makeDb({ updateReturning: [[recovered]], updatedValues });
+    const svc = new PhoneService(db);
+
+    await expect(
+      (svc as any).sweepClaimedVoicemailBeeps({ now, maxAgeMs: 60_000 }),
+    ).resolves.toEqual([recovered]);
+    expect(updatedValues[0]).toEqual({ voicemailBeepedAt: now });
+  });
+
+  it('sweepAbandonedVoicemails ends peeped voicemail sessions after the response timeout', async () => {
+    const now = new Date('2026-05-15T12:00:00.000Z');
+    const ended = { id: 'call-1', status: 'ended', endedReason: 'voicemail_abandoned' };
+    const db = makeDb({ updateReturning: [[ended]] });
+    const svc = new PhoneService(db);
+
+    await expect(
+      (svc as any).sweepAbandonedVoicemails({ now, maxAgeMs: 60_000 }),
+    ).resolves.toEqual([ended]);
   });
 
   it('sweepStrandedActiveCalls accepts a Date-derived cutoff without throwing', async () => {

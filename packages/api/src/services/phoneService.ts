@@ -24,6 +24,9 @@ import {
   PHONE_NUMBER_NOT_FOUND,
   PHONE_FORCE_END_REASON_PREFIX,
   PHONE_TAP_FAILURE_THRESHOLD,
+  PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH,
+  PHONE_VOICEMAIL_PEEP_CLAIM_STALE_MS,
+  PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS,
   isValidPhoneNumber,
   normalizePhoneNumber,
 } from '@hansard/shared';
@@ -86,6 +89,12 @@ export interface RegisterNumberInput {
   label?: string | null;
 }
 
+export interface VoicemailSettingsInput {
+  enabled: boolean;
+  introMessage?: string | null;
+  postBeepMessage?: string | null;
+}
+
 export interface InitiateCallInput {
   callerPlayerId: string;
   callerNumberId: string;
@@ -98,6 +107,12 @@ export interface RecordMessageInput {
   senderPlayerId: string;
   content: string;
   senderDiscordMessageId?: string | null;
+}
+
+export interface RecordVoicemailPromptInput {
+  callId: string;
+  content: string;
+  expectedStatus: 'ringing' | 'voicemail';
 }
 
 export interface SetTapInput {
@@ -118,6 +133,9 @@ export interface CallParticipants {
 }
 
 type DbOrTx = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
+const CALLER_OPEN_STATUSES = ['ringing', 'active', 'voicemail'];
+const RECIPIENT_OPEN_STATUSES = ['ringing', 'active'];
+const TERMINABLE_STATUSES = ['ringing', 'active', 'voicemail'];
 
 /**
  * Custom error subclass so callers (Discord commands, web routes) can map known refusals
@@ -154,6 +172,12 @@ export type PhoneErrorCode =
  */
 function sanitizeNumberRaw(input: string): string {
   return input.replace(/[^+0-9()\- ]/gu, '').trim();
+}
+
+function cleanVoicemailMessage(input: string | null | undefined): string | null {
+  const trimmed = input?.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH);
 }
 
 // ============================================================
@@ -294,7 +318,7 @@ export class PhoneService {
         .from(phoneCalls)
         .where(
           and(
-            inArray(phoneCalls.status, ['ringing', 'active']),
+            inArray(phoneCalls.status, TERMINABLE_STATUSES),
             or(eq(phoneCalls.callerNumberId, numberId), eq(phoneCalls.recipientNumberId, numberId)),
           ),
         )
@@ -346,6 +370,50 @@ export class PhoneService {
       .where(and(eq(phoneNumbers.numberNormalized, normalized), eq(phoneNumbers.isActive, true)))
       .limit(1);
     return row ?? null;
+  }
+
+  async setVoicemail(
+    numberId: string,
+    actingPlayerId: string,
+    viewer: PhoneViewer,
+    input: VoicemailSettingsInput,
+  ): Promise<PhoneNumber> {
+    const introMessage = input.enabled ? cleanVoicemailMessage(input.introMessage) : null;
+    const postBeepMessage = input.enabled ? cleanVoicemailMessage(input.postBeepMessage) : null;
+
+    if (input.enabled && (!introMessage || !postBeepMessage)) {
+      throw new PhoneServiceError('invalid_state', 'Voicemail needs both an intro message and an after-peep message.');
+    }
+
+    return this.db.transaction(async (tx) => {
+      await lockPhoneKey(tx, 'number', numberId);
+      const [row] = await tx
+        .select()
+        .from(phoneNumbers)
+        .where(eq(phoneNumbers.id, numberId))
+        .for('update')
+        .limit(1);
+
+      if (!row || !row.isActive) {
+        throw new PhoneServiceError('not_found', 'No such active number.');
+      }
+      if (!viewer.isStaff && row.playerId !== actingPlayerId) {
+        throw new PhoneServiceError('forbidden', 'You can only change voicemail on your own phone numbers.');
+      }
+
+      const [updated] = await tx
+        .update(phoneNumbers)
+        .set({
+          voicemailEnabled: input.enabled,
+          voicemailIntroMessage: introMessage,
+          voicemailPostBeepMessage: postBeepMessage,
+        })
+        .where(eq(phoneNumbers.id, numberId))
+        .returning();
+
+      if (!updated) throw new PhoneServiceError('not_found', 'No such active number.');
+      return updated;
+    });
   }
 
   // ----------------------------------------------------------
@@ -434,11 +502,14 @@ export class PhoneService {
         .select({ id: phoneCalls.id })
         .from(phoneCalls)
         .where(
-          and(
-            inArray(phoneCalls.status, ['ringing', 'active']),
-            or(
+          or(
+            and(
               eq(phoneCalls.callerPlayerId, callerPlayer.id),
+              inArray(phoneCalls.status, CALLER_OPEN_STATUSES),
+            ),
+            and(
               eq(phoneCalls.recipientPlayerId, callerPlayer.id),
+              inArray(phoneCalls.status, RECIPIENT_OPEN_STATUSES),
             ),
           ),
         )
@@ -450,11 +521,14 @@ export class PhoneService {
         .select({ id: phoneCalls.id })
         .from(phoneCalls)
         .where(
-          and(
-            inArray(phoneCalls.status, ['ringing', 'active']),
-            or(
+          or(
+            and(
               eq(phoneCalls.callerPlayerId, recipientPlayer.id),
+              inArray(phoneCalls.status, CALLER_OPEN_STATUSES),
+            ),
+            and(
               eq(phoneCalls.recipientPlayerId, recipientPlayer.id),
+              inArray(phoneCalls.status, RECIPIENT_OPEN_STATUSES),
             ),
           ),
         )
@@ -477,6 +551,9 @@ export class PhoneService {
             status: 'ringing',
             ringExpiresAt,
             ringDiscordMessageId: input.ringDiscordMessageId ?? null,
+            voicemailEnabled: Boolean(recipientNumber.voicemailEnabled),
+            voicemailIntroMessage: recipientNumber.voicemailEnabled ? recipientNumber.voicemailIntroMessage : null,
+            voicemailPostBeepMessage: recipientNumber.voicemailEnabled ? recipientNumber.voicemailPostBeepMessage : null,
           })
           .returning();
         call = row;
@@ -611,13 +688,24 @@ export class PhoneService {
     if (!isCaller && !isRecipient) {
       throw new PhoneServiceError('forbidden', 'Only call participants can end this call.');
     }
-    if (call.status !== 'ringing' && call.status !== 'active') {
+    if (!TERMINABLE_STATUSES.includes(call.status as (typeof TERMINABLE_STATUSES)[number])) {
       throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
+    }
+    if (call.status === 'voicemail' && !isCaller) {
+      throw new PhoneServiceError('forbidden', 'Only the caller can end a voicemail session.');
     }
 
     const isRinging = call.status === 'ringing';
-    const endedReason: 'hangup_caller' | 'hangup_recipient' | 'cancelled_by_caller' | 'declined_by_recipient' =
-      isRinging && isCaller
+    const isVoicemail = call.status === 'voicemail';
+    const endedReason:
+      | 'hangup_caller'
+      | 'hangup_recipient'
+      | 'cancelled_by_caller'
+      | 'declined_by_recipient'
+      | 'voicemail_abandoned' =
+      isVoicemail
+        ? 'voicemail_abandoned'
+        : isRinging && isCaller
         ? 'cancelled_by_caller'
         : isRinging
           ? 'declined_by_recipient'
@@ -631,7 +719,7 @@ export class PhoneService {
     const [updated] = await this.db
       .update(phoneCalls)
       .set({ status: terminalStatus, endedAt: new Date(), endedReason })
-      .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, ['ringing', 'active'])))
+      .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, TERMINABLE_STATUSES)))
       .returning();
 
     if (!updated) {
@@ -647,12 +735,19 @@ export class PhoneService {
    */
   async systemEndCall(
     callId: string,
-    reason: 'ring_timeout' | 'dm_closed' | 'relay_failed' | 'session_reset' | 'number_deactivated',
+    reason:
+      | 'ring_timeout'
+      | 'dm_closed'
+      | 'relay_failed'
+      | 'session_reset'
+      | 'number_deactivated'
+      | 'voicemail_left'
+      | 'voicemail_abandoned',
   ): Promise<PhoneCall | null> {
     const [updated] = await this.db
       .update(phoneCalls)
       .set({ status: reason === 'ring_timeout' ? 'missed' : 'ended', endedAt: new Date(), endedReason: reason })
-      .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, ['ringing', 'active'])))
+      .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, TERMINABLE_STATUSES)))
       .returning();
     return updated ?? null;
   }
@@ -680,7 +775,7 @@ export class PhoneService {
       throw new PhoneServiceError('forbidden', 'Only staff can force-end calls.');
     }
     const call = await this.requireCall(callId);
-    if (call.status !== 'ringing' && call.status !== 'active') {
+    if (!TERMINABLE_STATUSES.includes(call.status as (typeof TERMINABLE_STATUSES)[number])) {
       throw new PhoneServiceError('invalid_state', `Call is already ${call.status}.`);
     }
     const [updated] = await this.db
@@ -691,7 +786,7 @@ export class PhoneService {
         endedReason: reason ? `${PHONE_FORCE_END_REASON_PREFIX}${reason.slice(0, 59)}` : 'force_ended_by_staff',
         forceEndedById: actingStaffId,
       })
-      .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, ['ringing', 'active'])))
+      .where(and(eq(phoneCalls.id, callId), inArray(phoneCalls.status, TERMINABLE_STATUSES)))
       .returning();
     if (!updated) {
       throw new PhoneServiceError('invalid_state', 'Call already ended.');
@@ -715,11 +810,13 @@ export class PhoneService {
   }
 
   /**
-   * Find the player's currently open call (ringing or active) for routing inbound DMs.
+   * Find the player's currently open call for routing inbound DMs. Caller-side voicemail
+   * remains open until a message arrives or the abandonment sweeper frees it; recipient-side
+   * voicemail is intentionally excluded because the mailbox owner is no longer on the line.
    *
    * Implemented as two sequential single-column lookups instead of a `WHERE … OR …` on
    * (caller, recipient). Each lookup hits its partial unique index
-   * (`phone_calls_one_open_{caller,recipient}` WHERE status IN ('ringing','active')) with
+   * (`phone_calls_one_open_{caller,recipient}` partial indexes) with
    * zero scan; the planner-fragile `BitmapOr` of two partial unique indexes is sidestepped.
    * The partial unique indexes guarantee at most one row per role per player, so this is
    * O(2 × index_lookup), not O(N).
@@ -731,7 +828,7 @@ export class PhoneService {
       .where(
         and(
           eq(phoneCalls.callerPlayerId, playerId),
-          inArray(phoneCalls.status, ['ringing', 'active']),
+          inArray(phoneCalls.status, CALLER_OPEN_STATUSES),
         ),
       )
       .limit(1);
@@ -743,7 +840,7 @@ export class PhoneService {
       .where(
         and(
           eq(phoneCalls.recipientPlayerId, playerId),
-          inArray(phoneCalls.status, ['ringing', 'active']),
+          inArray(phoneCalls.status, RECIPIENT_OPEN_STATUSES),
         ),
       )
       .limit(1);
@@ -811,11 +908,17 @@ export class PhoneService {
         .for('update')
         .limit(1);
       if (!call) throw new PhoneServiceError('not_found', 'Call not found.');
-      if (call.status !== 'active') {
+      if (call.status !== 'active' && call.status !== 'voicemail') {
         throw new PhoneServiceError('invalid_state', `Call is ${call.status}, cannot record messages.`);
       }
       if (call.callerPlayerId !== input.senderPlayerId && call.recipientPlayerId !== input.senderPlayerId) {
         throw new PhoneServiceError('forbidden', 'You are not in this call.');
+      }
+      if (call.status === 'voicemail' && call.callerPlayerId !== input.senderPlayerId) {
+        throw new PhoneServiceError('forbidden', 'Only the caller can leave a voicemail on this call.');
+      }
+      if (call.status === 'voicemail' && !call.voicemailBeepedAt) {
+        throw new PhoneServiceError('invalid_state', 'Your line is still ringing. Please wait.');
       }
       const [sender] = await tx
         .select({ isAlive: players.isAlive })
@@ -840,6 +943,66 @@ export class PhoneService {
       // Snapshot the active taps on both call numbers *inside the transaction* and write a
       // pending delivery placeholder per tap. `deliveredAt`/`mirrorMessageId`/`error` stay
       // null until the relay reports the Discord send result.
+      const activeTaps = await tx
+        .select()
+        .from(phoneTaps)
+        .where(
+          and(
+            inArray(phoneTaps.targetNumberId, [call.callerNumberId, call.recipientNumberId]),
+            eq(phoneTaps.isActive, true),
+          ),
+        );
+      let tapDeliveries: PhoneMessageTapDelivery[] = [];
+      if (activeTaps.length) {
+        tapDeliveries = await tx
+          .insert(phoneMessageTapDeliveries)
+          .values(
+            activeTaps.map((tap) => ({
+              messageId: row.id,
+              tapId: tap.id,
+              mirrorMessageId: null,
+              deliveredAt: null,
+              error: null,
+            })),
+          )
+          .returning();
+      }
+      return { message: row, tapDeliveries };
+    });
+  }
+
+  /**
+   * Persist a configured voicemail prompt (intro or peep/after-peep) as a recipient-authored
+   * ledger message. These prompts are user-controlled phone content, so they need the same
+   * staff/tap audit path as live call messages even though the recipient is not actively
+   * typing at delivery time.
+   */
+  async recordVoicemailPrompt(input: RecordVoicemailPromptInput): Promise<RecordedMessage> {
+    return this.db.transaction(async (tx) => {
+      const [call] = await tx
+        .select()
+        .from(phoneCalls)
+        .where(eq(phoneCalls.id, input.callId))
+        .for('update')
+        .limit(1);
+      if (!call) throw new PhoneServiceError('not_found', 'Call not found.');
+      if (!call.voicemailEnabled) {
+        throw new PhoneServiceError('invalid_state', 'Voicemail is not enabled for this call.');
+      }
+      if (call.status !== input.expectedStatus) {
+        throw new PhoneServiceError('invalid_state', `Call is ${call.status}, cannot send this voicemail prompt.`);
+      }
+
+      const [row] = await tx
+        .insert(phoneMessages)
+        .values({
+          callId: input.callId,
+          senderPlayerId: call.recipientPlayerId,
+          content: input.content,
+          senderDiscordMessageId: null,
+        })
+        .returning();
+
       const activeTaps = await tx
         .select()
         .from(phoneTaps)
@@ -1378,20 +1541,165 @@ export class PhoneService {
   // Worker support
   // ----------------------------------------------------------
 
-  /** Mark every ringing call past its expiry as missed. Returns the calls that were swept. */
+  /**
+   * Sweep every ringing call past its expiry. Voicemail-enabled calls become caller-only
+   * `voicemail` sessions; other calls are marked missed.
+   */
   async expireRingingCalls(now: Date = new Date()): Promise<PhoneCall[]> {
-    const rows = await this.db
+    const voicemails = await this.db
       .update(phoneCalls)
-      .set({ status: 'missed', endedAt: now, endedReason: 'ring_timeout' })
+      .set({ status: 'voicemail' })
       .where(
         and(
           eq(phoneCalls.status, 'ringing'),
+          eq(phoneCalls.voicemailEnabled, true),
           isNotNull(phoneCalls.ringExpiresAt),
           lt(phoneCalls.ringExpiresAt, now),
         ),
       )
       .returning();
-    return rows;
+
+    const missed = await this.db
+      .update(phoneCalls)
+      .set({ status: 'missed', endedAt: now, endedReason: 'ring_timeout' })
+      .where(
+        and(
+          eq(phoneCalls.status, 'ringing'),
+          eq(phoneCalls.voicemailEnabled, false),
+          isNotNull(phoneCalls.ringExpiresAt),
+          lt(phoneCalls.ringExpiresAt, now),
+        ),
+      )
+      .returning();
+    return [...voicemails, ...missed];
+  }
+
+  /** Transition one expired ringing call, used by stale Answer/Decline button clicks. */
+  async expireRingingCall(callId: string, now: Date = new Date()): Promise<PhoneCall | null> {
+    const [voicemail] = await this.db
+      .update(phoneCalls)
+      .set({ status: 'voicemail' })
+      .where(
+        and(
+          eq(phoneCalls.id, callId),
+          eq(phoneCalls.status, 'ringing'),
+          eq(phoneCalls.voicemailEnabled, true),
+          isNotNull(phoneCalls.ringExpiresAt),
+          lt(phoneCalls.ringExpiresAt, now),
+        ),
+      )
+      .returning();
+    if (voicemail) return voicemail;
+
+    const [missed] = await this.db
+      .update(phoneCalls)
+      .set({ status: 'missed', endedAt: now, endedReason: 'ring_timeout' })
+      .where(
+        and(
+          eq(phoneCalls.id, callId),
+          eq(phoneCalls.status, 'ringing'),
+          eq(phoneCalls.voicemailEnabled, false),
+          isNotNull(phoneCalls.ringExpiresAt),
+          lt(phoneCalls.ringExpiresAt, now),
+        ),
+      )
+      .returning();
+    return missed ?? null;
+  }
+
+  /**
+   * Rows in `voicemail` with no peep claim still need the caller-facing `<peep>` DM.
+   * Once claimed, delivery is treated as in-flight/uncertain and must not be replayed.
+   */
+  async findPendingVoicemailBeeps(): Promise<PhoneCall[]> {
+    return this.db
+      .select()
+      .from(phoneCalls)
+      .where(
+        and(
+          eq(phoneCalls.status, 'voicemail'),
+          isNull(phoneCalls.voicemailBeepedAt),
+          isNull(phoneCalls.voicemailPeepClaimedAt),
+        ),
+      )
+      .orderBy(asc(phoneCalls.startedAt));
+  }
+
+  async claimVoicemailPeep(callId: string, now: Date = new Date()): Promise<PhoneCall | null> {
+    const [updated] = await this.db
+      .update(phoneCalls)
+      .set({ voicemailPeepClaimedAt: now })
+      .where(
+        and(
+          eq(phoneCalls.id, callId),
+          eq(phoneCalls.status, 'voicemail'),
+          isNull(phoneCalls.voicemailBeepedAt),
+          isNull(phoneCalls.voicemailPeepClaimedAt),
+        ),
+      )
+      .returning();
+    return updated ?? null;
+  }
+
+  async markVoicemailPeeped(callId: string, now: Date = new Date()): Promise<PhoneCall | null> {
+    const [updated] = await this.db
+      .update(phoneCalls)
+      .set({ voicemailBeepedAt: now })
+      .where(
+        and(
+          eq(phoneCalls.id, callId),
+          eq(phoneCalls.status, 'voicemail'),
+          isNull(phoneCalls.voicemailBeepedAt),
+        ),
+      )
+      .returning();
+    return updated ?? null;
+  }
+
+  /**
+   * If the bot crashes or the DB write fails after a peep was claimed, do not resend it.
+   * Stamp the voicemail as post-peep so callers can continue without duplicate prompts.
+   */
+  async sweepClaimedVoicemailBeeps(
+    opts: { now?: Date; maxAgeMs?: number } = {},
+  ): Promise<PhoneCall[]> {
+    const now = opts.now ?? new Date();
+    const maxAgeMs = opts.maxAgeMs ?? PHONE_VOICEMAIL_PEEP_CLAIM_STALE_MS;
+    const cutoff = new Date(now.getTime() - maxAgeMs);
+    return this.db
+      .update(phoneCalls)
+      .set({ voicemailBeepedAt: now })
+      .where(
+        and(
+          eq(phoneCalls.status, 'voicemail'),
+          isNull(phoneCalls.voicemailBeepedAt),
+          isNotNull(phoneCalls.voicemailPeepClaimedAt),
+          lt(phoneCalls.voicemailPeepClaimedAt, cutoff),
+        ),
+      )
+      .returning();
+  }
+
+  /**
+   * Free caller lines when a post-peep voicemail session never receives a message.
+   */
+  async sweepAbandonedVoicemails(
+    opts: { now?: Date; maxAgeMs?: number } = {},
+  ): Promise<PhoneCall[]> {
+    const now = opts.now ?? new Date();
+    const maxAgeMs = opts.maxAgeMs ?? PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS;
+    const cutoff = new Date(now.getTime() - maxAgeMs);
+    return this.db
+      .update(phoneCalls)
+      .set({ status: 'ended', endedAt: now, endedReason: 'voicemail_abandoned' })
+      .where(
+        and(
+          eq(phoneCalls.status, 'voicemail'),
+          isNotNull(phoneCalls.voicemailBeepedAt),
+          lt(phoneCalls.voicemailBeepedAt, cutoff),
+        ),
+      )
+      .returning();
   }
 
   /**

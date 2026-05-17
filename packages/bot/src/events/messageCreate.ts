@@ -195,6 +195,91 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
   }
 
   const senderIsCaller = participants.callerPlayer.id === player.id;
+  if (openCall.status === 'voicemail') {
+    if (!senderIsCaller) {
+      try {
+        await message.reply({
+          content: 'That voicemail box is waiting for the caller, not the mailbox owner.',
+          allowedMentions: { repliedUser: false, parse: [] },
+        });
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    if (!participants.call.voicemailBeepedAt) {
+      try {
+        await message.reply({
+          content: 'Your line is still ringing. Please wait.',
+          allowedMentions: { repliedUser: false, parse: [] },
+        });
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    let persisted;
+    try {
+      persisted = await svc.recordMessage({
+        callId: openCall.id,
+        senderPlayerId: player.id,
+        content: message.content,
+        senderDiscordMessageId: message.id,
+      });
+    } catch (err) {
+      if (err instanceof PhoneServiceError) {
+        try {
+          await message.reply({ content: err.message, allowedMentions: { repliedUser: false, parse: [] } });
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      console.error('[phone:event] failed to record voicemail:', err);
+      return;
+    }
+
+    if (message.content.length > PHONE_DM_CHUNK_BUDGET) {
+      try {
+        await message.react('\u{1F4E8}'); // 📨
+      } catch {
+        /* ignore */
+      }
+    }
+
+    let delivered = true;
+    try {
+      await relayMessage(client, participants, persisted, true);
+    } catch (err) {
+      delivered = false;
+      if (err instanceof RecipientDmClosedError) {
+        console.error(`[phone:event] voicemail recipient ${err.discordUserId} has DMs closed`);
+      } else {
+        console.error('[phone:event] voicemail relay error:', err);
+      }
+    }
+
+    try {
+      await svc.systemEndCall(openCall.id, 'voicemail_left');
+    } catch (err) {
+      console.error('[phone:event] failed to end voicemail after message:', err);
+    }
+
+    try {
+      await message.reply({
+        content: delivered
+          ? 'Voicemail delivered.'
+          : 'Voicemail recorded, but I could not DM it to the recipient.',
+        allowedMentions: { repliedUser: false, parse: [] },
+      });
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+
   const hasStaffThread = Boolean(openCall.staffThreadId);
 
   let persisted;

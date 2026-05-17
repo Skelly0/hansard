@@ -261,6 +261,30 @@ describe('PhoneService.registerNumber', () => {
     await svc.registerNumber({ playerId: 'p1', numberRaw: '+1 (555)‍-0142‎' });
     expect(inserted[0].numberRaw).toBe('+1 (555)-0142');
   });
+
+  it('stores a sanitized pseudonym for anonymous lines', async () => {
+    const inserted: unknown[] = [];
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'p1', characterName: 'Alice', isAlive: true }],
+        [{ value: 0 }],
+      ],
+      insertReturning: [[{ id: 'num-1' }]],
+      insertedValues: inserted,
+    });
+    const svc = new PhoneService(db);
+
+    await svc.registerNumber({
+      playerId: 'p1',
+      numberRaw: '5550142',
+      pseudonym: '  The\u200D  Night\u200E Clerk  ',
+    });
+
+    expect(inserted[0]).toMatchObject({
+      pseudonym: 'The Night Clerk',
+      cachedCharacterName: 'Alice',
+    });
+  });
 });
 
 describe('PhoneService.listDirectory', () => {
@@ -329,6 +353,37 @@ describe('PhoneService.listDirectory', () => {
         playerId: 'p1',
         numberRaw: '555-0101',
         characterName: 'Beatrice Vance',
+      }),
+    ]);
+  });
+
+  it('redacts owner names and labels on pseudonymous directory rows', async () => {
+    const db = makeDb({
+      selectQueues: [[
+        {
+          id: 'n1',
+          playerId: 'p1',
+          numberRaw: '555-0101',
+          numberNormalized: '5550101',
+          label: 'Private desk',
+          pseudonym: 'The Night Clerk',
+          characterName: 'Ada Mortalis',
+          discordUsername: 'ada',
+        },
+      ]],
+    });
+
+    const svc = new PhoneService(db);
+    const rows = await svc.listDirectory();
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        playerId: 'p1',
+        numberRaw: '555-0101',
+        label: null,
+        characterName: 'The Night Clerk',
+        discordUsername: '',
+        pseudonym: 'The Night Clerk',
       }),
     ]);
   });
@@ -1511,6 +1566,40 @@ describe('PhoneService.getCallHistory enrichment', () => {
     expect(result.calls[0].recipient.characterName).toBe('Bob');
     expect(result.calls[0].caller.numberRaw).toBe('+1001');
     expect(result.calls[0].recipient.numberRaw).toBe('+1002');
+  });
+
+  it('attaches number pseudonyms to history summaries so participant views can stay anonymous', async () => {
+    const db = makeDb({
+      selectQueues: [
+        [
+          {
+            id: 'call-1',
+            callerPlayerId: 'p1',
+            recipientPlayerId: 'p2',
+            callerNumberId: 'n1',
+            recipientNumberId: 'n2',
+            status: 'ended',
+            endedReason: null,
+            startedAt: new Date('2026-05-12T12:00:00Z'),
+          },
+        ],
+        [{ value: 1 }],
+        [
+          { id: 'p1', characterName: 'Alice', discordUsername: 'alice#1', discordId: '1' },
+          { id: 'p2', characterName: 'Bob', discordUsername: 'bob#1', discordId: '2' },
+        ],
+        [
+          { id: 'n1', numberRaw: '+1001', pseudonym: 'The Night Clerk' },
+          { id: 'n2', numberRaw: '+1002', pseudonym: null },
+        ],
+      ],
+    });
+    const svc = new PhoneService(db);
+    const result = await svc.getCallHistory('p2', { userId: 'p2', isStaff: false });
+
+    expect(result.calls[0].caller.characterName).toBe('Alice');
+    expect(result.calls[0].caller.pseudonym).toBe('The Night Clerk');
+    expect(result.calls[0].recipient.pseudonym).toBeNull();
   });
 });
 

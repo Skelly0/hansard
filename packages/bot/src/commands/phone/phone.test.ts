@@ -73,6 +73,16 @@ describe('/phone command metadata', () => {
     expect(pageOpt!.type).toBe(4); // INTEGER
     expect(pageOpt!.min_value).toBe(1);
   });
+
+  it('register subcommand exposes an optional pseudonym string option', () => {
+    const register = json.options?.find((o) => o.type === 1 && o.name === 'register');
+    const pseudonymOpt = (register as { options?: Array<{ name: string; type: number; required?: boolean; max_length?: number }> })
+      .options?.find((o) => o.name === 'pseudonym');
+    expect(pseudonymOpt).toBeDefined();
+    expect(pseudonymOpt!.type).toBe(3); // STRING
+    expect(pseudonymOpt!.required).toBe(false);
+    expect(pseudonymOpt!.max_length).toBe(128);
+  });
 });
 
 // =====================================================================================

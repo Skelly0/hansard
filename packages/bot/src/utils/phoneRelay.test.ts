@@ -196,6 +196,27 @@ describe('phoneRelay.sendToRecipient', () => {
     expect(id).toBe('dm-1');
   });
 
+  it('uses the sender number pseudonym in recipient DM prefixes when present', async () => {
+    const sent: string[] = [];
+    const client = {
+      users: {
+        fetch: async () => ({
+          send: async ({ content }: { content: string }) => {
+            sent.push(content);
+            return { id: 'dm-1' };
+          },
+        }),
+      },
+    } as never;
+    await __internal.sendToRecipient(
+      client,
+      'recipient-discord',
+      { numberRaw: '+15550142', pseudonym: 'The Night Clerk' } as never,
+      'hello',
+    );
+    expect(sent[0]).toBe('**The Night Clerk (+15550142):** hello');
+  });
+
   it('throws RecipientDmClosedError when the recipient has DMs closed (50007)', async () => {
     const client = {
       users: {

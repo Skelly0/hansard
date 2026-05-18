@@ -10,7 +10,12 @@ import {
   PhoneService,
   PhoneServiceError,
 } from '@hansard/api/services/phoneService';
-import { hangUpAndNotify, postCallOpenedToStaffThread, sendVoicemailBeep } from '../utils/phoneRelay.js';
+import {
+  formatVoicemailSentDescription,
+  hangUpAndNotify,
+  postCallOpenedToStaffThread,
+  sendVoicemailBeep,
+} from '../utils/phoneRelay.js';
 import { errorEmbed } from '../utils/embeds.js';
 import { resolvePhonePlayer } from '../commands/phone/playerLookup.js';
 
@@ -48,13 +53,21 @@ async function handleExpiredRingButton(
   callId: string,
   alreadyVoicemail = false,
 ): Promise<void> {
-  let transitioned = alreadyVoicemail
-    ? (await svc.getCallParticipants(callId)).call
-    : await svc.expireRingingCall(callId, new Date());
+  let participants = alreadyVoicemail ? await svc.getCallParticipants(callId) : null;
+  let transitioned = participants?.call ?? await svc.expireRingingCall(callId, new Date());
   let description = 'The recipient did not answer in time.';
 
   if (transitioned?.status === 'voicemail') {
-    description = 'The caller was sent to voicemail.';
+    if (!participants) {
+      try {
+        participants = await svc.getCallParticipants(callId);
+      } catch (err) {
+        console.error('[phone:button] expired ring: failed to load voicemail caller number:', err);
+      }
+    }
+    description = participants
+      ? formatVoicemailSentDescription(participants)
+      : 'The caller was sent to voicemail.';
     if (!transitioned.voicemailBeepedAt) {
       const now = new Date();
       let claimed = null;

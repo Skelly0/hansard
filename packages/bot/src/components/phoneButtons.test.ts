@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
     systemEndCall: vi.fn(),
   },
   relay: {
+    formatVoicemailSentDescription: vi.fn((context: { callerNumber: { numberRaw: string } }) =>
+      `The caller from ${context.callerNumber.numberRaw} was sent to voicemail.`,
+    ),
     hangUpAndNotify: vi.fn(),
     postCallOpenedToStaffThread: vi.fn(),
     sendVoicemailBeep: vi.fn(),
@@ -124,6 +127,30 @@ describe('handlePhoneButton expired ringing calls', () => {
     expect(mocks.svc.claimVoicemailPeep).toHaveBeenCalledWith('call-1', expect.any(Date));
     expect(mocks.relay.sendVoicemailBeep).not.toHaveBeenCalled();
     expect(mocks.svc.markVoicemailPeeped).not.toHaveBeenCalled();
+  });
+
+  it('shows the caller number when an expired ring sends the caller to voicemail', async () => {
+    const interaction = makeInteraction();
+    mocks.svc.answerCall.mockRejectedValueOnce(
+      new MockPhoneServiceError('invalid_state', 'Call is no longer ringing.'),
+    );
+    mocks.svc.expireRingingCall.mockResolvedValueOnce({
+      id: 'call-1',
+      status: 'voicemail',
+      voicemailBeepedAt: new Date(),
+    });
+    mocks.svc.getCallParticipants.mockResolvedValueOnce({
+      call: { id: 'call-1', status: 'voicemail', voicemailBeepedAt: new Date() },
+      callerPlayer: { discordId: 'caller-discord' },
+      recipientPlayer: { discordId: 'recipient-discord' },
+      callerNumber: { numberRaw: '213' },
+      recipientNumber: { numberRaw: '222' },
+    });
+
+    await handlePhoneButton(interaction);
+
+    const editArg = interaction.message.edit.mock.calls[0]?.[0] as { embeds?: Array<{ data?: { description?: string } }> };
+    expect(editArg.embeds?.[0]?.data?.description).toContain('213');
   });
 
   it('keeps voicemail open when peep delivery succeeds but stamping fails', async () => {

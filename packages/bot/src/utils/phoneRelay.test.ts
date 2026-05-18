@@ -267,6 +267,24 @@ describe('phoneRelay.sendToRecipient', () => {
   });
 });
 
+describe('phoneRelay voicemail transition descriptions', () => {
+  it('names the caller number when the called line is sent to voicemail', () => {
+    const description = (__internal as any).formatVoicemailSentDescription({
+      callerNumber: { numberRaw: '213' },
+    });
+
+    expect(description).toBe('The caller from 213 was sent to voicemail.');
+  });
+
+  it('uses the caller number pseudonym when one is configured', () => {
+    const description = (__internal as any).formatVoicemailSentDescription({
+      callerNumber: { numberRaw: '+15550142', pseudonym: 'The Night Clerk' },
+    });
+
+    expect(description).toBe('The caller from The Night Clerk (+15550142) was sent to voicemail.');
+  });
+});
+
 describe('phoneRelay voicemail prompts', () => {
   const context = {
     call: {

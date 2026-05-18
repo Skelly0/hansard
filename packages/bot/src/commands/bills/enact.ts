@@ -60,9 +60,10 @@ async function resolveBill(input: string): Promise<
 /**
  * Statuses from which a bill can be cleanly finalised into law.
  * (Distinct from /bill repeal and /bill npc-vote — this is the
- * Chancellor's stamp on a bill that has already passed.)
+ * Chancellor's stamp, including direct enactment before a house vote.)
  */
 const ENACTABLE_STATUSES = new Set<string>([
+  BillStatus.SUBMITTED,
   BillStatus.PLAYER_PASSED,
   BillStatus.NPC_PASSED,
 ]);
@@ -154,7 +155,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   if (!ENACTABLE_STATUSES.has(bill.status)) {
     await interaction.editReply({
-      embeds: [errorEmbed(`Bill #B-${String(bill.billNumber).padStart(3, '0')} is in status \`${bill.status}\` and cannot be enacted (must be \`player_passed\` or \`npc_passed\`).`)],
+      embeds: [errorEmbed(`Bill #B-${String(bill.billNumber).padStart(3, '0')} is in status \`${bill.status}\` and cannot be enacted (must be \`submitted\`, \`player_passed\`, or \`npc_passed\`).`)],
     });
     return;
   }

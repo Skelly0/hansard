@@ -49,6 +49,9 @@ export interface LeaderboardEntry {
 
 export interface TransactionFilters {
   categoryId?: string;
+  playerId?: string;
+  grantedById?: string;
+  type?: FavourTransactionType;
   limit?: number;
   offset?: number;
 }
@@ -534,6 +537,10 @@ export async function getHistory(
     conditions.push(eq(favourTransactions.categoryId, filters.categoryId));
   }
 
+  if (filters.type) {
+    conditions.push(eq(favourTransactions.type, filters.type));
+  }
+
   const limit = filters.limit ?? 50;
   const offset = filters.offset ?? 0;
 
@@ -556,7 +563,8 @@ export async function getHistory(
 }
 
 /**
- * Get all transactions (staff overview), optionally filtered by category.
+ * Get all transactions (staff overview), optionally filtered by category,
+ * player, grantor, or transaction type.
  */
 export async function getAllHistory(
   db: Database,
@@ -566,6 +574,18 @@ export async function getAllHistory(
 
   if (filters.categoryId) {
     conditions.push(eq(favourTransactions.categoryId, filters.categoryId));
+  }
+
+  if (filters.playerId) {
+    conditions.push(eq(favourTransactions.playerId, filters.playerId));
+  }
+
+  if (filters.grantedById) {
+    conditions.push(eq(favourTransactions.grantedById, filters.grantedById));
+  }
+
+  if (filters.type) {
+    conditions.push(eq(favourTransactions.type, filters.type));
   }
 
   const limit = filters.limit ?? 100;

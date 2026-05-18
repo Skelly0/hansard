@@ -69,6 +69,10 @@ function publicNumberLabel(number: PhoneNumber): string {
   return number.pseudonym ? `${escapeMarkdown(number.pseudonym)} (${number.numberRaw})` : number.numberRaw;
 }
 
+export function formatVoicemailSentDescription(context: Pick<RelayContext, 'callerNumber'>): string {
+  return `The caller from ${publicNumberLabel(context.callerNumber)} was sent to voicemail.`;
+}
+
 function staffNumberLabel(name: string | null, number: PhoneNumber): string {
   const realName = name ?? 'Unknown';
   return number.pseudonym
@@ -484,13 +488,16 @@ async function disableRingDmButtonsForContext(
   description: string,
 ): Promise<void> {
   if (!context.call.ringDiscordMessageId) return;
+  const resolvedDescription = description === 'The caller was sent to voicemail.'
+    ? formatVoicemailSentDescription(context)
+    : description;
   const recipientUser = await client.users.fetch(context.recipientPlayer.discordId);
   const dm = await recipientUser.createDM();
   const message = await dm.messages.fetch(context.call.ringDiscordMessageId);
   const disabledEmbed = new EmbedBuilder()
     .setTitle('\u{260E} Call ended')
     .setColor(ENDED_PALETTE)
-    .setDescription(description);
+    .setDescription(resolvedDescription);
   await message.edit({ embeds: [disabledEmbed], components: [] });
 }
 
@@ -769,6 +776,7 @@ export const __internal = {
   chunkForEmbed,
   isDmClosedError,
   publicNumberLabel,
+  formatVoicemailSentDescription,
   staffNumberLabel,
   sendToRecipient,
   validateTapMirrorChannel,

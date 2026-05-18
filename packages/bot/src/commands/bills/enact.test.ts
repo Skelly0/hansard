@@ -75,8 +75,42 @@ function makeInteraction() {
 
 describe('/bill enact repair path', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mocks.db.select.mockReset();
+    mocks.hasPermission.mockReset();
+    mocks.enactAndPostBill.mockReset();
+    mocks.postExistingEnactedBill.mockReset();
     mocks.hasPermission.mockResolvedValue(true);
+  });
+
+  it('enacts a submitted bill without requiring a prior house vote', async () => {
+    const bill = {
+      id: 'bill-37',
+      billNumber: 37,
+      title: 'Industrial Peace Ordinance',
+      status: BillStatus.SUBMITTED,
+      authorId: 'author-1',
+    };
+    const embed = { data: { title: bill.title } };
+    mocks.db.select
+      .mockReturnValueOnce(selectLimit([bill]))
+      .mockReturnValueOnce(selectLimit([{ id: 'actor-player' }]))
+      .mockReturnValueOnce(selectLimit([{ characterName: 'Ada Vance', discordId: 'author-discord' }]));
+    mocks.enactAndPostBill.mockResolvedValue({
+      embed,
+      postResult: { status: 'sent', channelId: 'law-channel', messageId: 'law-message' },
+    });
+
+    const interaction = makeInteraction();
+
+    await execute(interaction as any);
+
+    expect(mocks.enactAndPostBill).toHaveBeenCalledWith(expect.objectContaining({
+      bill,
+      authorDisplay: 'Ada Vance (<@author-discord>)',
+      changedById: 'actor-player',
+      actorDiscordId: 'actor-discord',
+    }));
+    expect(interaction.editReply).toHaveBeenCalledWith({ embeds: [embed] });
   });
 
   it('repairs an enacted bill that is missing its legislation message', async () => {

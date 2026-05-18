@@ -32,6 +32,22 @@ vi.mock('@hansard/api/services/phoneService', () => ({
   }),
 }));
 
+const favourServiceMocks = vi.hoisted(() => ({
+  getCategories: vi.fn(),
+  getPlayerBalances: vi.fn(),
+  getLeaderboard: vi.fn(),
+  getHistory: vi.fn(),
+  getAllHistory: vi.fn(),
+}));
+
+vi.mock('@hansard/api/services/favourService', () => ({
+  getCategories: favourServiceMocks.getCategories,
+  getPlayerBalances: favourServiceMocks.getPlayerBalances,
+  getLeaderboard: favourServiceMocks.getLeaderboard,
+  getHistory: favourServiceMocks.getHistory,
+  getAllHistory: favourServiceMocks.getAllHistory,
+}));
+
 import { registerAllTools } from './register.js';
 
 beforeEach(() => {
@@ -393,5 +409,103 @@ describe('MCP phone tools', () => {
       { userId: staffSession.playerId, isStaff: true },
       { limit: 5, offset: 0 },
     );
+  });
+});
+
+describe('MCP favour tools', () => {
+  const session = {
+    playerId: '00000000-0000-4000-8000-000000000001',
+    discordId: '123',
+    username: 'clerk',
+    characterName: 'The Clerk',
+    isStaff: false,
+    staffRole: null,
+    permissions: [],
+  };
+
+  it('exposes a staff-only global favour transaction ledger with useful filters', async () => {
+    const staffSession = { ...session, isStaff: true };
+    favourServiceMocks.getAllHistory.mockResolvedValue([
+      {
+        id: 'tx-1',
+        playerId: '00000000-0000-4000-8000-000000000010',
+        categoryId: '00000000-0000-4000-8000-000000000020',
+        categoryName: 'Industrialists',
+        playerName: 'Ada',
+        discordUsername: 'ada',
+        amount: 7,
+        balanceAfter: 12,
+        type: 'grant',
+        reason: 'Bill negotiation',
+        grantedById: staffSession.playerId,
+        simTick: 42,
+        simDate: '101.4',
+        createdAt: '2026-05-18T12:00:00.000Z',
+      },
+    ]);
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(staffSession) } as never,
+    });
+
+    const tool = tools.get('get_favour_transaction_ledger');
+    expect(tool).toBeDefined();
+
+    const result = await tool!.handler({
+      playerId: '00000000-0000-4000-8000-000000000010',
+      categoryId: '00000000-0000-4000-8000-000000000020',
+      type: 'grant',
+      grantedById: staffSession.playerId,
+      limit: 25,
+      offset: 50,
+    });
+
+    expect(favourServiceMocks.getAllHistory).toHaveBeenCalledWith(
+      {},
+      {
+        playerId: '00000000-0000-4000-8000-000000000010',
+        categoryId: '00000000-0000-4000-8000-000000000020',
+        type: 'grant',
+        grantedById: staffSession.playerId,
+        limit: 25,
+        offset: 50,
+      },
+    );
+    expect(JSON.parse((result as { content: [{ text: string }] }).content[0].text)).toEqual({
+      count: 1,
+      transactions: [
+        {
+          id: 'tx-1',
+          playerId: '00000000-0000-4000-8000-000000000010',
+          categoryId: '00000000-0000-4000-8000-000000000020',
+          categoryName: 'Industrialists',
+          playerName: 'Ada',
+          discordUsername: 'ada',
+          amount: 7,
+          balanceAfter: 12,
+          type: 'grant',
+          reason: 'Bill negotiation',
+          grantedById: staffSession.playerId,
+          simTick: 42,
+          simDate: '101.4',
+          createdAt: '2026-05-18T12:00:00.000Z',
+        },
+      ],
+    });
+  });
+
+  it('refuses the global favour transaction ledger for non-staff sessions', async () => {
+    const { server, tools } = createServer();
+    registerAllTools(server as never, {
+      db: {} as never,
+      session: { get: vi.fn().mockResolvedValue(session) } as never,
+    });
+
+    const result = await tools.get('get_favour_transaction_ledger')!.handler({});
+
+    expect(favourServiceMocks.getAllHistory).not.toHaveBeenCalled();
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result as { content: [{ text: string }] }).content[0].text).toContain('Only staff');
   });
 });

@@ -100,6 +100,7 @@ webapp and bot.
 | `list_favour_categories` | Configured favour categories. |
 | `get_my_favours` | Your balances + recent transactions. |
 | `get_favour_leaderboard` | Top players by favour balance in a category. |
+| `get_favour_transaction_ledger` | Staff-only global favour transaction ledger with filters for player, category, type, grantor, limit, and offset. |
 | `list_documents` | Documents with filters. |
 | `get_document` | One document by slug. |
 | `search_documents` | Full-text search documents. |

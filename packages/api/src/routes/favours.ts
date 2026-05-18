@@ -14,6 +14,7 @@ import {
   getHistory,
   getAllHistory,
 } from '../services/favourService.js';
+import { FavourTransactionType, type FavourTransactionType as FavourTransactionTypeValue } from '@hansard/shared';
 
 /**
  * Favour routes plugin — categories, balances, and transactions.
@@ -21,6 +22,10 @@ import {
 export default async function favourRoutes(fastify: FastifyInstance) {
   const canViewPlayerFavours = (request: { session: { user?: { id: string } }; player?: { isStaff?: boolean } }, playerId: string) =>
     !!request.player?.isStaff || request.session.user?.id === playerId;
+  const parseTransactionType = (type: string | undefined): FavourTransactionTypeValue | undefined =>
+    Object.values(FavourTransactionType).includes(type as FavourTransactionTypeValue)
+      ? type as FavourTransactionTypeValue
+      : undefined;
 
   // ============================================================
   // Categories
@@ -228,7 +233,7 @@ export default async function favourRoutes(fastify: FastifyInstance) {
   // GET /api/favours/history/:playerId — transaction history for a player
   fastify.get<{
     Params: { playerId: string };
-    Querystring: { categoryId?: string; limit?: string; offset?: string };
+    Querystring: { categoryId?: string; type?: string; limit?: string; offset?: string };
   }>(
     '/api/favours/history/:playerId',
     { preHandler: [requireAuth] },
@@ -238,6 +243,7 @@ export default async function favourRoutes(fastify: FastifyInstance) {
       }
       return getHistory(fastify.db, request.params.playerId, {
         categoryId: request.query.categoryId,
+        type: parseTransactionType(request.query.type),
         limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
         offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
       });
@@ -246,13 +252,16 @@ export default async function favourRoutes(fastify: FastifyInstance) {
 
   // GET /api/favours/history — all transactions (staff only)
   fastify.get<{
-    Querystring: { categoryId?: string; limit?: string; offset?: string };
+    Querystring: { categoryId?: string; playerId?: string; grantedById?: string; type?: string; limit?: string; offset?: string };
   }>(
     '/api/favours/history',
     { preHandler: [requireAuth, requireStaff] },
     async (request) => {
       return getAllHistory(fastify.db, {
         categoryId: request.query.categoryId,
+        playerId: request.query.playerId,
+        grantedById: request.query.grantedById,
+        type: parseTransactionType(request.query.type),
         limit: request.query.limit ? parseInt(request.query.limit, 10) : undefined,
         offset: request.query.offset ? parseInt(request.query.offset, 10) : undefined,
       });

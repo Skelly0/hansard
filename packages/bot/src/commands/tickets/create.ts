@@ -49,6 +49,7 @@ import * as view from './view.js';
 import * as list from './list.js';
 import * as reply from './reply.js';
 import * as close from './close.js';
+import * as reopen from './reopen.js';
 import * as assign from './assign.js';
 import * as priority from './priority.js';
 import * as note from './note.js';
@@ -207,6 +208,25 @@ const command: Command = {
     )
     .addSubcommand((sub) =>
       sub
+        .setName('reopen')
+        .setDescription('Reopen a closed ticket')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('number')
+            .setDescription('The ticket number')
+            .setRequired(true)
+            .setMinValue(1),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('reason')
+            .setDescription('Why the ticket is being reopened')
+            .setRequired(false)
+            .setMaxLength(1000),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName('assign')
         .setDescription('Assign a ticket to a staff member')
         .addIntegerOption((opt) =>
@@ -312,6 +332,7 @@ const command: Command = {
       list,
       reply,
       close,
+      reopen,
       assign,
       priority,
       note,

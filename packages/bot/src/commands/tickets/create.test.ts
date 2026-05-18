@@ -189,6 +189,7 @@ describe('/ticket command definition', () => {
     expect(subcommandNames).toContain('create');
     expect(subcommandNames).toContain('categories');
     expect(subcommandNames).toContain('category-create');
+    expect(subcommandNames).toContain('reopen');
   });
 
   it('posts the ticket summary and opener without adding the creator to the text thread', async () => {

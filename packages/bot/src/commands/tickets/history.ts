@@ -32,6 +32,7 @@ const ACTION_RENDERERS: Record<string, ActionRenderer> = {
   assigned: (_entry, actorName) => `👤 **${actorName}** reassigned the ticket`,
   claimed: (_entry, actorName) => `👤 **${actorName}** claimed the ticket`,
   closed: (_entry, actorName) => `⚫ **${actorName}** closed the ticket`,
+  reopened: (_entry, actorName) => `🔵 **${actorName}** reopened the ticket`,
   linked: (_entry, actorName) => `🔗 **${actorName}** linked another ticket`,
   unlinked: (_entry, actorName) => `🔓 **${actorName}** unlinked another ticket`,
   tags_changed: (_entry, actorName) => `🏷️ **${actorName}** updated tags`,

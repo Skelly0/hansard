@@ -6,11 +6,11 @@ import { api } from '../client';
 export interface FavourCategory {
   id: string;
   name: string;
-  shortName?: string;
-  description?: string;
-  emoji?: string;
-  colour?: string;
-  spendableOn?: string[];
+  shortName?: string | null;
+  description?: string | null;
+  emoji?: string | null;
+  colour?: string | null;
+  spendableOn?: string[] | null;
   isActive: boolean;
   sortOrder: number;
 }
@@ -19,8 +19,12 @@ export interface FavourBalance {
   id: string;
   playerId: string;
   player?: { id: string; characterName: string; discordUsername: string };
+  playerName?: string | null;
+  discordUsername?: string;
   categoryId: string;
   category?: FavourCategory;
+  categoryName?: string;
+  categoryEmoji?: string | null;
   balance: number;
   updatedAt: string;
 }
@@ -31,6 +35,7 @@ export interface FavourTransaction {
   player?: { id: string; characterName: string };
   categoryId: string;
   category?: FavourCategory;
+  categoryName?: string;
   amount: number;
   balanceAfter: number;
   type: 'grant' | 'spend' | 'remove' | 'transfer' | 'system';

@@ -45,6 +45,25 @@ function formatDate(dateString: string): string {
   });
 }
 
+function formatCategoryLabel({
+  category,
+  categoryName,
+  categoryEmoji,
+  categoryId,
+}: {
+  category?: FavourCategory;
+  categoryName?: string | null;
+  categoryEmoji?: string | null;
+  categoryId: string;
+}): string {
+  if (category) {
+    return `${category.emoji || ''} ${category.name}`.trim();
+  }
+
+  const label = `${categoryEmoji || ''} ${categoryName || ''}`.trim();
+  return label || categoryId;
+}
+
 const TYPE_COLOURS: Record<string, string> = {
   grant: 'passed',
   spend: 'pending',
@@ -75,7 +94,7 @@ function StaffOverview() {
       if (!playerMap.has(pid)) {
         playerMap.set(pid, {
           playerId: pid,
-          characterName: bal.player?.characterName || bal.player?.discordUsername || pid,
+          characterName: bal.player?.characterName || bal.playerName || bal.player?.discordUsername || bal.discordUsername || pid,
           balances: {},
         });
       }
@@ -151,26 +170,7 @@ function MyFavours({ playerId }: { playerId: string }) {
 
   const isLoading = balLoading || histLoading;
 
-  // Build bar data
-  const barData = useMemo(() => {
-    if (!balances) return [];
-    return [...balances]
-      .sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0))
-      .map((bal) => ({
-        categoryId: bal.categoryId,
-        label: bal.category
-          ? `${bal.category.emoji || ''} ${bal.category.name}`.trim()
-          : bal.categoryId,
-        value: bal.balance,
-      }));
-  }, [balances]);
-
-  const maxBar = useMemo(() => {
-    if (!barData.length) return 1;
-    return Math.max(...barData.map((b) => Math.abs(b.value)), 1);
-  }, [barData]);
-
-  // Category lookup for history
+  // Category lookup for history and for older balance responses that omit categoryName.
   const categoryMap = useMemo(() => {
     const map = new Map<string, FavourCategory>();
     if (categories) {
@@ -178,6 +178,28 @@ function MyFavours({ playerId }: { playerId: string }) {
     }
     return map;
   }, [categories]);
+
+  // Build bar data
+  const barData = useMemo(() => {
+    if (!balances) return [];
+    return [...balances]
+      .sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0))
+      .map((bal) => ({
+        categoryId: bal.categoryId,
+        label: formatCategoryLabel({
+          category: bal.category ?? categoryMap.get(bal.categoryId),
+          categoryName: bal.categoryName,
+          categoryEmoji: bal.categoryEmoji,
+          categoryId: bal.categoryId,
+        }),
+        value: bal.balance,
+      }));
+  }, [balances, categoryMap]);
+
+  const maxBar = useMemo(() => {
+    if (!barData.length) return 1;
+    return Math.max(...barData.map((b) => Math.abs(b.value)), 1);
+  }, [barData]);
 
   if (isLoading) return <PageSkeleton />;
   if (balIsError || histIsError || catIsError) {
@@ -257,7 +279,11 @@ function TransactionList({
         const cat = row.category || categoryMap.get(row.categoryId);
         return (
           <span className="text-body-sm text-text-secondary">
-            {cat ? `${cat.emoji || ''} ${cat.name}`.trim() : row.categoryId}
+            {formatCategoryLabel({
+              category: cat,
+              categoryName: row.categoryName,
+              categoryId: row.categoryId,
+            })}
           </span>
         );
       },

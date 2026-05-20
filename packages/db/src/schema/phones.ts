@@ -1,5 +1,9 @@
 import { pgTable, uuid, varchar, text, boolean, timestamp, bigserial, uniqueIndex, index, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import {
+  PHONE_DEFAULT_VOICEMAIL_INTRO_MESSAGE,
+  PHONE_DEFAULT_VOICEMAIL_POST_BEEP_MESSAGE,
+} from '@hansard/shared';
 import { players } from './players';
 
 // === PHONE NUMBERS ===
@@ -23,9 +27,9 @@ export const phoneNumbers = pgTable('phone_numbers', {
   cachedCharacterName: varchar('cached_character_name', { length: 128 }),
   pseudonym: varchar('pseudonym', { length: 128 }),
 
-  voicemailEnabled: boolean('voicemail_enabled').default(false).notNull(),
-  voicemailIntroMessage: text('voicemail_intro_message'),
-  voicemailPostBeepMessage: text('voicemail_post_beep_message'),
+  voicemailEnabled: boolean('voicemail_enabled').default(true).notNull(),
+  voicemailIntroMessage: text('voicemail_intro_message').default(PHONE_DEFAULT_VOICEMAIL_INTRO_MESSAGE),
+  voicemailPostBeepMessage: text('voicemail_post_beep_message').default(PHONE_DEFAULT_VOICEMAIL_POST_BEEP_MESSAGE),
 
   isActive: boolean('is_active').default(true).notNull(),
 

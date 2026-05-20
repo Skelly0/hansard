@@ -130,6 +130,7 @@ async function handleRegister(interaction: ChatInputCommandInteraction): Promise
             row.pseudonym
               ? 'Anyone can dial this number to reach your pseudonymous line. Other players will see the pseudonym instead of your character name.'
               : 'Anyone can dial this number to reach you. Make sure your Discord DMs are open.',
+            'Voicemail is on by default with a standard greeting. Use `/phone voicemail set` to customize it or `/phone voicemail disable` to opt out.',
             '',
             'Next steps:',
             '• `/phone dial <number>` to start a call',

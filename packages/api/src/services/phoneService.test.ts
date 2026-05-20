@@ -3,6 +3,8 @@ import {
   normalizePhoneNumber,
   isValidPhoneNumber,
   PHONE_NUMBER_REGEX,
+  PHONE_DEFAULT_VOICEMAIL_INTRO_MESSAGE,
+  PHONE_DEFAULT_VOICEMAIL_POST_BEEP_MESSAGE,
 } from '@hansard/shared';
 import { PhoneService, PhoneServiceError } from './phoneService.js';
 
@@ -283,6 +285,27 @@ describe('PhoneService.registerNumber', () => {
     expect(inserted[0]).toMatchObject({
       pseudonym: 'The Night Clerk',
       cachedCharacterName: 'Alice',
+    });
+  });
+
+  it('enables voicemail with default messages on newly registered numbers', async () => {
+    const inserted: unknown[] = [];
+    const db = makeDb({
+      selectQueues: [
+        [{ id: 'p1', characterName: 'Alice', isAlive: true }],
+        [{ value: 0 }],
+      ],
+      insertReturning: [[{ id: 'num-1' }]],
+      insertedValues: inserted,
+    });
+    const svc = new PhoneService(db);
+
+    await svc.registerNumber({ playerId: 'p1', numberRaw: '5550142' });
+
+    expect(inserted[0]).toMatchObject({
+      voicemailEnabled: true,
+      voicemailIntroMessage: PHONE_DEFAULT_VOICEMAIL_INTRO_MESSAGE,
+      voicemailPostBeepMessage: PHONE_DEFAULT_VOICEMAIL_POST_BEEP_MESSAGE,
     });
   });
 });

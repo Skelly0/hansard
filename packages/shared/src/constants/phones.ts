@@ -42,6 +42,14 @@ export const PHONE_TAP_FAILURE_THRESHOLD = 5;
 /** Max length for each configured voicemail line message. */
 export const PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH = 1000;
 
+/** Default intro sent to callers while a voicemail-enabled line is still ringing. */
+export const PHONE_DEFAULT_VOICEMAIL_INTRO_MESSAGE =
+  'The line is ringing. If nobody answers, you can leave a voicemail after the peep.';
+
+/** Default post-peep prompt sent when an unanswered call enters voicemail. */
+export const PHONE_DEFAULT_VOICEMAIL_POST_BEEP_MESSAGE =
+  'Leave your message now. Your next DM here will be delivered as voicemail.';
+
 /** Max length for a public phone-line pseudonym. */
 export const PHONE_PSEUDONYM_MAX_LENGTH = 128;
 

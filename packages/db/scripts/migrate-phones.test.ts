@@ -150,12 +150,22 @@ describe('migrate-phones', () => {
   });
 
   it('adds voicemail settings to numbers and voicemail snapshots to calls', () => {
-    expect(script).toContain('ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_enabled" boolean NOT NULL DEFAULT false');
+    expect(script).toContain('ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_enabled" boolean NOT NULL DEFAULT true');
     expect(script).toContain('ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_intro_message" text');
     expect(script).toContain('ALTER TABLE "phone_numbers" ADD COLUMN IF NOT EXISTS "voicemail_post_beep_message" text');
+    expect(script).toContain('ALTER TABLE "phone_numbers" ALTER COLUMN "voicemail_enabled" SET DEFAULT true');
     expect(script).toContain('ALTER TABLE "phone_calls" ADD COLUMN IF NOT EXISTS "voicemail_enabled" boolean NOT NULL DEFAULT false');
     expect(script).toContain('ALTER TABLE "phone_calls" ADD COLUMN IF NOT EXISTS "voicemail_beeped_at" timestamptz');
     expect(script).toContain('ALTER TABLE "phone_calls" ADD COLUMN IF NOT EXISTS "voicemail_peep_claimed_at" timestamptz');
+  });
+
+  it('backfills active phone numbers onto the default voicemail mailbox', () => {
+    expect(script).toContain('UPDATE "phone_numbers"');
+    expect(script).toContain('"voicemail_enabled" = true');
+    expect(script).toContain('"voicemail_intro_message" = COALESCE');
+    expect(script).toContain('The line is ringing. If nobody answers, you can leave a voicemail after the peep.');
+    expect(script).toContain('Leave your message now. Your next DM here will be delivered as voicemail.');
+    expect(script).toContain('"is_active" = true');
   });
 
   it('adds an optional phone-number pseudonym for anonymous caller identity', () => {

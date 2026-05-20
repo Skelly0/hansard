@@ -27,6 +27,8 @@ import {
   PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH,
   PHONE_VOICEMAIL_PEEP_CLAIM_STALE_MS,
   PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS,
+  PHONE_DEFAULT_VOICEMAIL_INTRO_MESSAGE,
+  PHONE_DEFAULT_VOICEMAIL_POST_BEEP_MESSAGE,
   cleanPhonePseudonym,
   isValidPhoneNumber,
   normalizePhoneNumber,
@@ -249,6 +251,9 @@ export class PhoneService {
             label: input.label ?? null,
             pseudonym,
             cachedCharacterName: player.characterName,
+            voicemailEnabled: true,
+            voicemailIntroMessage: PHONE_DEFAULT_VOICEMAIL_INTRO_MESSAGE,
+            voicemailPostBeepMessage: PHONE_DEFAULT_VOICEMAIL_POST_BEEP_MESSAGE,
           })
           .returning();
         return row;

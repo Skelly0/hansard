@@ -5,8 +5,14 @@ import {
   type PhoneCall,
   type PhoneMessageTapDelivery,
 } from '@hansard/api/services/phoneService';
+import {
+  PhoneTextService,
+  type PhoneTextMessageDelivery,
+  type PhoneTextMessageTapDelivery,
+} from '@hansard/api/services/phoneTextService';
 import { PHONE_RING_WORKER_INTERVAL_MS } from '@hansard/shared';
 import { disableRingDmButtons, hangUpAndNotify, sendVoicemailBeep } from '../utils/phoneRelay.js';
+import { flushQueuedPhoneTextsForPlayer } from '../utils/phoneTextRelay.js';
 
 export type PhoneRingWorkerOptions = {
   intervalMs?: number;
@@ -42,6 +48,7 @@ export async function expireRingingCalls(
       expired.map(async (call) => {
         try {
           if (call.status === 'voicemail') {
+            await flushQueuedPhoneTextsForPlayer(options.client!, call.recipientPlayerId);
             return;
           }
           await hangUpAndNotify(options.client!, call.id, 'ring_timeout');
@@ -90,6 +97,7 @@ export async function processPendingVoicemailBeeps(
         logger.error(`[phone:worker] failed to send voicemail peep ${call.id}:`, err);
         try {
           await svc.systemEndCall(call.id, 'dm_closed');
+          await flushQueuedPhoneTextsForPlayer(options.client!, call.callerPlayerId);
         } catch (innerErr: unknown) {
           logger.error(`[phone:worker] failed to end unreachable voicemail ${call.id}:`, innerErr);
         }
@@ -237,6 +245,48 @@ export async function sweepStaleTapDeliveries(
   return { swept };
 }
 
+export async function sweepStalePhoneTextDeliveryClaims(
+  db: Database,
+  options: { now?: Date; maxAgeMs?: number; logger?: Pick<Console, 'error' | 'log'> } = {},
+): Promise<{ swept: PhoneTextMessageDelivery[] }> {
+  const svc = new PhoneTextService(db);
+  const logger = options.logger ?? console;
+
+  let swept: PhoneTextMessageDelivery[] = [];
+  try {
+    swept = await svc.sweepStaleDeliveryClaims({ now: options.now, maxAgeMs: options.maxAgeMs });
+  } catch (error) {
+    logger.error('[phone:worker] failed to sweep stale text delivery claims:', error);
+    return { swept: [] };
+  }
+
+  if (swept.length > 0) {
+    logger.log(`[phone:worker] released ${swept.length} stale text delivery claim(s)`);
+  }
+  return { swept };
+}
+
+export async function sweepStalePhoneTextTapDeliveries(
+  db: Database,
+  options: { now?: Date; maxAgeMs?: number; logger?: Pick<Console, 'error' | 'log'> } = {},
+): Promise<{ swept: PhoneTextMessageTapDelivery[] }> {
+  const svc = new PhoneTextService(db);
+  const logger = options.logger ?? console;
+
+  let swept: PhoneTextMessageTapDelivery[] = [];
+  try {
+    swept = await svc.sweepStaleTapDeliveries({ now: options.now, maxAgeMs: options.maxAgeMs });
+  } catch (error) {
+    logger.error('[phone:worker] failed to sweep stale text tap deliveries:', error);
+    return { swept: [] };
+  }
+
+  if (swept.length > 0) {
+    logger.log(`[phone:worker] marked ${swept.length} crash-stranded text tap delivery placeholder(s) as failed`);
+  }
+  return { swept };
+}
+
 export function startPhoneRingTimeoutWorker(
   db: Database,
   options: PhoneRingWorkerOptions = {},
@@ -271,6 +321,8 @@ export function startPhoneRingTimeoutWorker(
       }
       // Reconcile any tap-delivery placeholders left pending by a crashed/throwing relay.
       await sweepStaleTapDeliveries(db, { logger });
+      await sweepStalePhoneTextDeliveryClaims(db, { now, logger });
+      await sweepStalePhoneTextTapDeliveries(db, { now, logger });
     } catch (error) {
       logger.error('[phone:worker] tick failed:', error);
     } finally {

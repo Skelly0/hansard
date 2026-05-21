@@ -235,3 +235,85 @@ export const phoneMessageTapDeliveries = pgTable('phone_message_tap_deliveries',
     .on(table.createdAt)
     .where(sql`delivered_at IS NULL AND error IS NULL`),
 }));
+
+// === PHONE TEXT CONVERSATIONS ===
+// Persistent asynchronous text conversations. Unlike live `phone_calls`, these are not
+// mutually exclusive: a player can have many active text conversations, and delivery queues while
+// the recipient's DM is occupied by a live call or caller-side voicemail session.
+export const phoneTextConversations = pgTable('phone_text_conversations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  numberAId: uuid('number_a_id').references(() => phoneNumbers.id, { onDelete: 'restrict' }).notNull(),
+  numberBId: uuid('number_b_id').references(() => phoneNumbers.id, { onDelete: 'restrict' }).notNull(),
+  playerAId: uuid('player_a_id').references(() => players.id).notNull(),
+  playerBId: uuid('player_b_id').references(() => players.id).notNull(),
+  status: varchar('status', { length: 16 }).default('active').notNull(),
+  staffThreadId: varchar('staff_thread_id', { length: 20 }),
+  lastMessageAt: timestamp('last_message_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'date' }),
+}, (table) => ({
+  activePairUnique: uniqueIndex('phone_text_conversations_active_pair_unique')
+    .on(table.numberAId, table.numberBId)
+    .where(sql`status = 'active'`),
+  orderedNumbers: check('phone_text_conversations_ordered_numbers', sql`number_a_id < number_b_id`),
+  statusCheck: check('phone_text_conversations_status_check', sql`status IN ('active','archived')`),
+  playerAIdx: index('phone_text_conversations_player_a_idx').on(table.playerAId, table.lastMessageAt.desc()),
+  playerBIdx: index('phone_text_conversations_player_b_idx').on(table.playerBId, table.lastMessageAt.desc()),
+}));
+
+export const phoneTextMessages = pgTable('phone_text_messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  conversationId: uuid('conversation_id').references(() => phoneTextConversations.id, { onDelete: 'cascade' }).notNull(),
+  senderPlayerId: uuid('sender_player_id').references(() => players.id).notNull(),
+  senderNumberId: uuid('sender_number_id').references(() => phoneNumbers.id, { onDelete: 'restrict' }).notNull(),
+  content: text('content').notNull(),
+  senderDiscordMessageId: varchar('sender_discord_message_id', { length: 20 }),
+  staffMirrorMessageId: varchar('staff_mirror_message_id', { length: 20 }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  sequenceNo: bigserial('sequence_no', { mode: 'number' }).notNull(),
+}, (table) => ({
+  conversationIdx: index('phone_text_messages_conversation_idx').on(table.conversationId, table.createdAt, table.sequenceNo),
+}));
+
+export const phoneTextMessageDeliveries = pgTable('phone_text_message_deliveries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  messageId: uuid('message_id').references(() => phoneTextMessages.id, { onDelete: 'cascade' }).notNull(),
+  recipientPlayerId: uuid('recipient_player_id').references(() => players.id).notNull(),
+  recipientNumberId: uuid('recipient_number_id').references(() => phoneNumbers.id, { onDelete: 'restrict' }).notNull(),
+  recipientDiscordMessageId: varchar('recipient_discord_message_id', { length: 20 }),
+  status: varchar('status', { length: 16 }).default('queued').notNull(),
+  failureReason: varchar('failure_reason', { length: 500 }),
+  claimedAt: timestamp('claimed_at', { withTimezone: true, mode: 'date' }),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'date' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  recipientQueueIdx: index('phone_text_message_deliveries_recipient_queue_idx')
+    .on(table.recipientPlayerId, table.createdAt)
+    .where(sql`status = 'queued'`),
+  deliveringClaimIdx: index('phone_text_message_deliveries_delivering_claim_idx')
+    .on(table.claimedAt)
+    .where(sql`status = 'delivering'`),
+  messageIdx: index('phone_text_message_deliveries_message_idx').on(table.messageId),
+  statusCheck: check('phone_text_message_deliveries_status_check', sql`status IN ('queued','delivering','delivered','failed')`),
+}));
+
+export const phoneTextReplyStates = pgTable('phone_text_reply_states', {
+  playerId: uuid('player_id').references(() => players.id, { onDelete: 'cascade' }).primaryKey(),
+  conversationId: uuid('conversation_id').references(() => phoneTextConversations.id, { onDelete: 'set null' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+});
+
+export const phoneTextMessageTapDeliveries = pgTable('phone_text_message_tap_deliveries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  messageId: uuid('message_id').references(() => phoneTextMessages.id, { onDelete: 'cascade' }).notNull(),
+  tapId: uuid('tap_id').references(() => phoneTaps.id, { onDelete: 'restrict' }).notNull(),
+  mirrorMessageId: varchar('mirror_message_id', { length: 20 }),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'date' }),
+  error: varchar('error', { length: 500 }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  tapCreatedIdx: index('phone_text_message_tap_deliveries_tap_created_idx').on(table.tapId, table.createdAt.desc()),
+  pendingIdx: index('phone_text_message_tap_deliveries_pending_idx')
+    .on(table.createdAt)
+    .where(sql`delivered_at IS NULL AND error IS NULL`),
+}));

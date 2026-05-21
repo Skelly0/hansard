@@ -51,6 +51,12 @@ export const PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS = 5 * 60 * 1000;
 /** How long a claimed-but-unstamped voicemail peep can sit before another worker may retry it. */
 export const PHONE_VOICEMAIL_PEEP_CLAIM_STALE_MS = 2 * 60 * 1000;
 
+/** Max length for slash-command text messages. Freeform DM chunking still uses DM budget. */
+export const PHONE_TEXT_MESSAGE_MAX_LENGTH = 1900;
+
+/** How long a claimed text delivery can sit before the worker returns it to the queue. */
+export const PHONE_TEXT_DELIVERY_CLAIM_STALE_MS = 2 * 60 * 1000;
+
 /**
  * Number normalization regex. After stripping all non-digit characters (preserving an
  * optional leading `+`), the result must match this pattern.
@@ -75,6 +81,12 @@ export const PHONE_NUMBER_TAKEN = 'That number is already registered to another 
 export const PHONE_NUMBER_INVALID = 'Phone numbers must be 3-20 digits, optionally prefixed with `+`.';
 export const PHONE_NUMBER_NOT_FOUND = 'No active line found with that number.';
 export const PHONE_RECIPIENT_DM_CLOSED = 'Recipient has DMs closed and could not be reached.';
+export const PHONE_TEXT_NO_CONVERSATION =
+  'You are not in a call and do not have a selected text conversation. Use `/phone dial` to call, `/phone text` to start texting, or `/phone conversations` and `/phone switch` to pick an existing conversation.';
+export const PHONE_TEXT_MULTIPLE_CONVERSATIONS =
+  'You have multiple active text conversations. Use `/phone conversations` and `/phone switch` before replying in DM.';
+export const PHONE_TEXT_ARCHIVED =
+  'That text conversation is archived. Start a new one with `/phone text`.';
 
 /**
  * Normalize a player-entered phone number for uniqueness lookup. Strips all

@@ -18,6 +18,51 @@ describe('migrate-phones', () => {
     expect(script).toContain('CREATE TABLE IF NOT EXISTS "phone_message_tap_deliveries"');
   });
 
+  it('creates phone text conversation tables', () => {
+    expect(script).toContain('CREATE TABLE IF NOT EXISTS "phone_text_conversations"');
+    expect(script).toContain('CREATE TABLE IF NOT EXISTS "phone_text_messages"');
+    expect(script).toContain('CREATE TABLE IF NOT EXISTS "phone_text_message_deliveries"');
+    expect(script).toContain('CREATE TABLE IF NOT EXISTS "phone_text_reply_states"');
+    expect(script).toContain('CREATE TABLE IF NOT EXISTS "phone_text_message_tap_deliveries"');
+  });
+
+  it('enforces one active text conversation per phone-number pair', () => {
+    expect(script).toContain('phone_text_conversations_active_pair_unique');
+    expect(script).toMatch(/ON "phone_text_conversations" \("number_a_id", "number_b_id"\)\s*WHERE status = 'active'/);
+    expect(script).toContain('phone_text_conversations_ordered_numbers');
+    expect(script).toContain('CHECK (number_a_id < number_b_id)');
+  });
+
+  it('orders phone text transcripts by created_at and sequence_no', () => {
+    expect(script).toContain('CREATE INDEX IF NOT EXISTS "phone_text_messages_conversation_idx"');
+    expect(script).toMatch(/ON "phone_text_messages" \("conversation_id", "created_at", "sequence_no"\)/);
+  });
+
+  it('queues and claims text deliveries per recipient while calls own DMs', () => {
+    expect(script).toContain('phone_text_message_deliveries_recipient_queue_idx');
+    expect(script).toMatch(/WHERE status = 'queued'/);
+    expect(script).toContain('"claimed_at" timestamptz');
+    expect(script).toContain('phone_text_message_deliveries_delivering_claim_idx');
+    expect(script).toContain("status IN ('queued','delivering','delivered','failed')");
+  });
+
+  it('stores player reply targets for freeform DM text routing', () => {
+    expect(script).toMatch(/"player_id" uuid PRIMARY KEY REFERENCES "players"\("id"\) ON DELETE CASCADE/);
+    expect(script).toMatch(/"conversation_id" uuid REFERENCES "phone_text_conversations"\("id"\) ON DELETE SET NULL/);
+  });
+
+  it('creates text-message tap delivery audit rows', () => {
+    expect(script).toContain('CREATE TABLE IF NOT EXISTS "phone_text_message_tap_deliveries"');
+    expect(script).toContain('phone_text_message_tap_deliveries_pending_idx');
+    expect(script).toMatch(/"tap_id" uuid NOT NULL REFERENCES "phone_taps"\("id"\) ON DELETE RESTRICT/);
+  });
+
+  it('runs phone text DDL inside the migration transaction wrapper', () => {
+    expect(script).toContain('await sql.begin(async (tx)');
+    expect(script).toContain('CREATE TABLE IF NOT EXISTS "phone_text_conversations"');
+    expect(script).toContain('await tx.unsafe(stmt)');
+  });
+
   it('enforces one open call per player via partial unique indexes', () => {
     expect(script).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "phone_calls_one_open_caller"');
     expect(script).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "phone_calls_one_open_recipient"');

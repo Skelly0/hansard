@@ -199,19 +199,7 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
     // seconds, but still run text-conversation routing. With texting, "no call" no longer
     // means "nothing routable."
     rememberNoCall(message.author.id);
-    if (await routePhoneTextReply(client, message, player, isEmptyContent)) return;
-    if (isEmptyContent) return;
-    if (shouldShowHint(message.author.id)) {
-      try {
-        await message.reply({
-          content:
-            'You\'re not in a call right now. Use `/phone dial <number>` to start one. (Messages outside a call are not stored or forwarded.)',
-          allowedMentions: { repliedUser: false, parse: [] },
-        });
-      } catch {
-        /* DMs may be closed mid-stream; ignore */
-      }
-    }
+    await routePhoneTextReply(client, message, player, isEmptyContent);
     return;
   }
 

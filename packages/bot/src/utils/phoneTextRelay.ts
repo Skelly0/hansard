@@ -134,6 +134,8 @@ async function ensurePhoneTextStaffThread(
     }
   }
 
+  // Current deployment is single-shard; this process-local lock prevents duplicate Discord
+  // threads within that runtime. Conversation creation itself is DB-locked cross-process.
   const inflight = staffThreadCreateLocks.get(recorded.conversation.id);
   if (inflight) return inflight;
 
@@ -382,4 +384,5 @@ export const __internal = {
   publicNumberLabel,
   staffNumberLabel,
   sendToRecipient,
+  deliverTapCopy,
 };

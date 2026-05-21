@@ -11,6 +11,7 @@ import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import { postObituaryToGraveyard, type GraveyardPostResult } from '../../utils/graveyard.js';
 import { postGameEventsEmbed, type GameEventsPostResult } from '../../utils/gameEventsChannel.js';
+import { notifyAilmentDms, type AilmentDmResult } from '../../utils/ailmentNotifications.js';
 import type { Command } from '../../client.js';
 import { execute as eventsExecute, TYPE_CHOICES as EVENT_TYPE_CHOICES } from './events.js';
 
@@ -84,6 +85,7 @@ function buildDetailedAdvanceLines(result: TimeAdvanceResult): string[] {
 function buildStaffAdvanceLines(
   result: TimeAdvanceResult,
   graveyardPosts: GraveyardPostResult[],
+  ailmentDms: AilmentDmResult,
 ): string[] {
   const lines = buildDetailedAdvanceLines(result);
 
@@ -106,6 +108,13 @@ function buildStaffAdvanceLines(
         `• **${d.characterName ?? 'Unknown'}** (age ${d.age}) — ${d.cause}${formatDeathAilments(d.ailments)}; grace until tick ${d.eligibleFromTick} (${d.eligibleFromDate})`,
       );
     }
+  }
+
+  if (ailmentDms.attempted > 0) {
+    const suffix = ailmentDms.failed > 0 || ailmentDms.skipped > 0
+      ? '; check bot logs for failures.'
+      : '.';
+    lines.push('', `Ailment DMs: ${ailmentDms.sent}/${ailmentDms.attempted} sent${suffix}`);
   }
 
   return lines;
@@ -373,7 +382,13 @@ async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<
       embed: publicEmbed,
     });
 
-    const lines = buildStaffAdvanceLines(result, graveyardPosts);
+    const ailmentDms = await notifyAilmentDms({
+      client: interaction.client,
+      db,
+      ailments: result.ailmentDetails,
+    });
+
+    const lines = buildStaffAdvanceLines(result, graveyardPosts, ailmentDms);
     appendGameEventsPostStatus(lines, gameEventsPost);
 
     const embed = createEmbed({

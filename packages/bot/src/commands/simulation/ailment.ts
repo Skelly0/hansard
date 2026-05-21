@@ -4,6 +4,7 @@ import { db } from '../../db.js';
 import { players, playerEventLog, simulationClock } from '@hansard/db';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
+import { sendAilmentDmSafely } from '../../utils/ailmentNotifications.js';
 
 async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<boolean> {
   if (!interaction.guild || !interaction.member) {
@@ -105,6 +106,12 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
   });
 
   const severityEmoji = severity === 'critical' ? '☠️' : severity === 'major' ? '⚠️' : '🩹';
+  const dmSent = await sendAilmentDmSafely({
+    user: targetUser,
+    characterName: targetPlayer.characterName,
+    condition,
+    severity,
+  }, { playerId: targetPlayer.id });
 
   const embed = createEmbed({
     title: 'Ailment Assigned',
@@ -112,6 +119,8 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
       `**${targetPlayer.characterName ?? targetUser.username}** has been afflicted with:`,
       '',
       `${severityEmoji} **${condition}** (${severity})`,
+      '',
+      dmSent ? 'DM sent to player.' : 'DM could not be delivered; check bot logs.',
     ].join('\n'),
     system: 'simulation',
     fields: [

@@ -59,7 +59,7 @@ function updateWhereResult(updateValues: unknown[]) {
 
 describe('/time advance', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mocks.select.mockReturnValue(selectWhereResult([{ id: 'staff-player' }]));
     mocks.advanceTime.mockResolvedValue({
       fromDate: '2026-01-01',
@@ -182,6 +182,113 @@ describe('/time advance', () => {
     expect(staffDescription).toContain('stroke (critical)');
   });
 
+  it('DMs players who acquire ailments during time advance', async () => {
+    mocks.advanceTime.mockResolvedValue({
+      fromDate: '2026-01-01',
+      toDate: '2026-02-01',
+      fromTick: 1,
+      toTick: 2,
+      aged: 1,
+      ailmentDetails: [{
+        playerId: 'ailing-player',
+        characterName: 'Mira Sol',
+        condition: 'cancer',
+        severity: 'major',
+      }],
+      deathDetails: [],
+      pendingDeathDetails: [],
+    });
+    mocks.select
+      .mockReturnValueOnce(selectWhereResult([{ id: 'staff-player' }]))
+      .mockReturnValueOnce(selectWhereResult([{
+        id: 'ailing-player',
+        discordId: 'discord-ailing',
+        characterName: 'Mira Sol',
+      }]));
+
+    const send = vi.fn().mockResolvedValue({ id: 'dm-1' });
+    const interaction = {
+      user: { id: 'discord-staff' },
+      client: {
+        users: { fetch: vi.fn().mockResolvedValue({ send }) },
+        channels: { fetch: vi.fn() },
+      },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('advance'),
+        getInteger: vi.fn().mockReturnValue(1),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    expect(interaction.client.users.fetch).toHaveBeenCalledWith('discord-ailing');
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      embeds: [expect.anything()],
+      allowedMentions: { parse: [] },
+    }));
+    const dmPayload = send.mock.calls[0][0];
+    expect(dmPayload.embeds[0].toJSON().description).toContain('cancer');
+    expect(dmPayload.embeds[0].toJSON().description).toContain('major');
+  });
+
+  it('keeps time advance successful when an ailment DM cannot be delivered', async () => {
+    mocks.advanceTime.mockResolvedValue({
+      fromDate: '2026-01-01',
+      toDate: '2026-02-01',
+      fromTick: 1,
+      toTick: 2,
+      aged: 1,
+      ailmentDetails: [{
+        playerId: 'ailing-player',
+        characterName: 'Mira Sol',
+        condition: 'cancer',
+        severity: 'major',
+      }],
+      deathDetails: [],
+      pendingDeathDetails: [],
+    });
+    mocks.select
+      .mockReturnValueOnce(selectWhereResult([{ id: 'staff-player' }]))
+      .mockReturnValueOnce(selectWhereResult([{
+        id: 'ailing-player',
+        discordId: 'discord-ailing',
+        characterName: 'Mira Sol',
+      }]));
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const interaction = {
+      user: { id: 'discord-staff' },
+      client: {
+        users: {
+          fetch: vi.fn().mockResolvedValue({
+            send: vi.fn().mockRejectedValue(new Error('DMs closed')),
+          }),
+        },
+        channels: { fetch: vi.fn() },
+      },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('advance'),
+        getInteger: vi.fn().mockReturnValue(1),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    try {
+      await command.execute(interaction as any);
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(interaction.editReply).toHaveBeenCalledWith(expect.objectContaining({
+      embeds: [expect.anything()],
+    }));
+    const staffReply = (interaction.editReply as any).mock.calls[0][0];
+    expect(staffReply.embeds[0].toJSON().description).toContain('Ailment DMs: 0/1 sent');
+  });
+
   it('keeps pending death rolls out of the public game events post', async () => {
     mocks.advanceTime.mockResolvedValue({
       fromDate: '2026-01-01',
@@ -227,7 +334,7 @@ describe('/time advance', () => {
 
 describe('/time npc-house', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('lets staff persist whether the NPC house is active', async () => {

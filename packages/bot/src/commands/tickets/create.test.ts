@@ -138,7 +138,7 @@ function makeInteraction() {
     awaitMessageComponent: vi.fn().mockResolvedValue(categoryInteraction),
   };
 
-  return {
+  const interaction = {
     options: {
       getSubcommand: vi.fn().mockReturnValue('create'),
       getSubcommandGroup: vi.fn().mockReturnValue(null),
@@ -163,10 +163,13 @@ function makeInteraction() {
         }),
       },
     },
+    deferReply: vi.fn().mockResolvedValue(undefined),
     reply: vi.fn().mockResolvedValue(reply),
-    editReply: vi.fn().mockResolvedValue(undefined),
+    editReply: vi.fn().mockResolvedValue(reply),
     modalInteraction,
   };
+
+  return interaction;
 }
 
 describe('/ticket command definition', () => {
@@ -190,6 +193,17 @@ describe('/ticket command definition', () => {
     expect(subcommandNames).toContain('categories');
     expect(subcommandNames).toContain('category-create');
     expect(subcommandNames).toContain('reopen');
+  });
+
+  it('acknowledges /ticket create before loading categories from the database', async () => {
+    const interaction = makeInteraction();
+
+    await command.execute(interaction as any);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(interaction.deferReply.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.db.select.mock.invocationCallOrder[0],
+    );
   });
 
   it('posts the ticket summary and opener without adding the creator to the text thread', async () => {

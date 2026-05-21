@@ -344,6 +344,8 @@ const command: Command = {
 };
 
 async function handleCreate(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
   // Step 0: Load active categories from DB.
   const categoryRows = await db
     .select()
@@ -352,13 +354,12 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     .orderBy(asc(ticketCategories.sortOrder));
 
   if (categoryRows.length === 0) {
-    await interaction.reply({
+    await interaction.editReply({
       embeds: [
         errorEmbed(
           'No ticket categories are configured. Ask staff to seed `ticket_categories` before opening a ticket.',
         ),
       ],
-      ephemeral: true,
     });
     return;
   }
@@ -388,7 +389,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 
   const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
 
-  const reply = await interaction.reply({
+  const reply = await interaction.editReply({
     embeds: [
       createEmbed({
         title: 'Create a Ticket',
@@ -397,8 +398,6 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       }),
     ],
     components: [row],
-    ephemeral: true,
-    fetchReply: true,
   });
 
   // Step 2: Wait for category selection. Use a 14-minute window to match

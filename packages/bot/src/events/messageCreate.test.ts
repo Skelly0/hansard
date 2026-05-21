@@ -9,9 +9,15 @@ const mocks = vi.hoisted(() => ({
     recordMessage: vi.fn(),
     systemEndCall: vi.fn(),
   },
+  textSvc: {
+    resolveReplyConversation: vi.fn(),
+    recordReply: vi.fn(),
+  },
   relayMessage: vi.fn(),
   hangUpAndNotify: vi.fn(),
   postCallOpenedToStaffThread: vi.fn(),
+  relayRecordedPhoneText: vi.fn(),
+  flushQueuedPhoneTextsForPlayer: vi.fn(),
 }));
 
 class MockPhoneServiceError extends Error {
@@ -24,6 +30,12 @@ class MockRecipientDmClosedError extends Error {
   constructor(public discordUserId: string, cause?: unknown) {
     super('Recipient DM closed');
     this.cause = cause;
+  }
+}
+
+class MockPhoneTextServiceError extends Error {
+  constructor(public code: string, message: string) {
+    super(message);
   }
 }
 
@@ -46,6 +58,18 @@ vi.mock('@hansard/api/services/phoneService', () => ({
   PhoneServiceError: MockPhoneServiceError,
 }));
 
+vi.mock('@hansard/api/services/phoneTextService', () => ({
+  PhoneTextService: vi.fn(function PhoneTextService() {
+    return mocks.textSvc;
+  }),
+  PhoneTextServiceError: MockPhoneTextServiceError,
+  phoneTextReplyHintForResolution: (resolution: { status: string }) => {
+    if (resolution.status === 'none') return 'No phone text conversation is selected.';
+    if (resolution.status === 'multiple') return 'You have multiple active phone text conversations.';
+    return null;
+  },
+}));
+
 vi.mock('../utils/phoneRelay.js', () => ({
   RecipientDmClosedError: MockRecipientDmClosedError,
   hangUpAndNotify: mocks.hangUpAndNotify,
@@ -53,7 +77,12 @@ vi.mock('../utils/phoneRelay.js', () => ({
   relayMessage: mocks.relayMessage,
 }));
 
-const { registerMessageCreateEvent } = await import('./messageCreate.js');
+vi.mock('../utils/phoneTextRelay.js', () => ({
+  flushQueuedPhoneTextsForPlayer: mocks.flushQueuedPhoneTextsForPlayer,
+  relayRecordedPhoneText: mocks.relayRecordedPhoneText,
+}));
+
+const { clearNoCallCache, registerMessageCreateEvent } = await import('./messageCreate.js');
 
 function makeClient() {
   let handler: ((message: unknown) => Promise<void>) | null = null;
@@ -79,6 +108,10 @@ function makeMessage(content = 'call me back') {
   };
 }
 
+function setupResolvedPlayer() {
+  mocks.dbRows.push([{ id: 'player-caller', isAlive: true, characterName: 'Caller' }]);
+}
+
 function setupVoicemailCall(voicemailBeepedAt: Date | null = new Date('2026-05-15T12:00:00.000Z')) {
   const call = {
     id: 'call-1',
@@ -101,16 +134,50 @@ function setupVoicemailCall(voicemailBeepedAt: Date | null = new Date('2026-05-1
   return { call, participants };
 }
 
+function setupActiveCall() {
+  const call = {
+    id: 'call-1',
+    status: 'active',
+    callerPlayerId: 'player-caller',
+    recipientPlayerId: 'player-recipient',
+    staffThreadId: 'staff-thread-1',
+  };
+  const participants = {
+    call,
+    callerPlayer: { id: 'player-caller', discordId: 'discord-caller', characterName: 'Caller' },
+    recipientPlayer: { id: 'player-recipient', discordId: 'discord-recipient', characterName: 'Recipient' },
+    callerNumber: { id: 'number-caller', numberRaw: '111' },
+    recipientNumber: { id: 'number-recipient', numberRaw: '222' },
+  };
+  setupResolvedPlayer();
+  mocks.svc.findOpenCallForPlayer.mockResolvedValue(call);
+  mocks.svc.getCallParticipants.mockResolvedValue(participants);
+  return { call, participants };
+}
+
 describe('messageCreate voicemail DM flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.dbRows.length = 0;
+    clearNoCallCache('discord-caller');
     mocks.svc.recordMessage.mockResolvedValue({
       message: { id: 'message-1', content: 'call me back' },
       tapDeliveries: [],
     });
     mocks.svc.systemEndCall.mockResolvedValue({ id: 'call-1', status: 'ended' });
+    mocks.svc.findOpenCallForPlayer.mockResolvedValue(null);
+    mocks.textSvc.resolveReplyConversation.mockResolvedValue({ status: 'none' });
+    mocks.textSvc.recordReply.mockResolvedValue({
+      conversation: { id: 'conversation-1' },
+      message: { id: 'text-message-1', content: 'hi' },
+      delivery: { id: 'delivery-1' },
+      tapDeliveries: [],
+      sender: { playerId: 'player-caller' },
+      recipient: { playerId: 'player-recipient' },
+    });
     mocks.relayMessage.mockResolvedValue(undefined);
+    mocks.relayRecordedPhoneText.mockResolvedValue(undefined);
+    mocks.flushQueuedPhoneTextsForPlayer.mockResolvedValue(0);
   });
 
   it('does not record voicemail before the peep has sounded', async () => {
@@ -159,5 +226,73 @@ describe('messageCreate voicemail DM flow', () => {
     expect(message.reply).toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining('could not DM') }),
     );
+  });
+});
+
+describe('messageCreate phone text DM routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.dbRows.length = 0;
+    clearNoCallCache('discord-caller');
+    mocks.svc.findOpenCallForPlayer.mockResolvedValue(null);
+    mocks.svc.recordMessage.mockResolvedValue({
+      message: { id: 'message-1', content: 'call me back' },
+      tapDeliveries: [],
+    });
+    mocks.textSvc.resolveReplyConversation.mockResolvedValue({ status: 'none' });
+    mocks.textSvc.recordReply.mockResolvedValue({
+      conversation: { id: 'conversation-1' },
+      message: { id: 'text-message-1', content: 'hi' },
+      delivery: { id: 'delivery-1' },
+      tapDeliveries: [],
+      sender: { playerId: 'player-caller' },
+      recipient: { playerId: 'player-recipient' },
+    });
+    mocks.relayMessage.mockResolvedValue(undefined);
+    mocks.relayRecordedPhoneText.mockResolvedValue(undefined);
+    mocks.flushQueuedPhoneTextsForPlayer.mockResolvedValue(0);
+  });
+
+  it('still routes a text reply when the no-call negative cache is fresh', async () => {
+    const { handler, client } = makeClient();
+    setupResolvedPlayer();
+    mocks.textSvc.resolveReplyConversation.mockResolvedValueOnce({ status: 'none' });
+
+    await handler(makeMessage('first loose DM'));
+
+    expect(mocks.svc.findOpenCallForPlayer).toHaveBeenCalledTimes(1);
+    setupResolvedPlayer();
+    mocks.textSvc.resolveReplyConversation.mockResolvedValueOnce({
+      status: 'sole',
+      context: { conversation: { id: 'conversation-1' } },
+    });
+
+    await handler(makeMessage('hi'));
+
+    expect(mocks.svc.findOpenCallForPlayer).toHaveBeenCalledTimes(1);
+    expect(mocks.textSvc.recordReply).toHaveBeenCalledWith({
+      senderPlayerId: 'player-caller',
+      conversationId: 'conversation-1',
+      content: 'hi',
+      senderDiscordMessageId: 'discord-message-1',
+    });
+    expect(mocks.relayRecordedPhoneText).toHaveBeenCalledWith(client, expect.any(Object));
+  });
+
+  it('lets an active call own the DM instead of routing it as a text conversation reply', async () => {
+    const { handler, client } = makeClient();
+    const message = makeMessage('call message');
+    const { participants } = setupActiveCall();
+
+    await handler(message);
+
+    expect(mocks.textSvc.resolveReplyConversation).not.toHaveBeenCalled();
+    expect(mocks.svc.recordMessage).toHaveBeenCalledWith({
+      callId: 'call-1',
+      senderPlayerId: 'player-caller',
+      content: 'call message',
+      senderDiscordMessageId: 'discord-message-1',
+    });
+    expect(mocks.relayMessage).toHaveBeenCalledWith(client, participants, expect.any(Object), true);
   });
 });

@@ -157,6 +157,12 @@ export class PhoneTextService {
         : conversation.numberAId;
       const sender = await loadParticipantForPlayerAndNumber(tx, input.senderPlayerId, senderNumberId);
       const recipient = await loadParticipantForPlayerAndNumber(tx, recipientPlayerId, recipientNumberId);
+      if (!sender.isActive) {
+        throw new PhoneTextServiceError('not_found', 'Your texting number is not active.');
+      }
+      if (!recipient.isActive) {
+        throw new PhoneTextServiceError('not_found', PHONE_NUMBER_NOT_FOUND);
+      }
       requireTextableParticipant(sender, false);
       requireTextableParticipant(recipient, true);
       return this.recordTextInConversation(tx, {
@@ -282,6 +288,21 @@ export class PhoneTextService {
       await tx
         .delete(phoneTextReplyStates)
         .where(eq(phoneTextReplyStates.conversationId, conversationId));
+      await tx
+        .update(phoneTextMessageDeliveries)
+        .set({
+          status: 'failed',
+          failureReason: 'conversation archived',
+          claimedAt: null,
+        })
+        .where(and(
+          eq(phoneTextMessageDeliveries.status, 'queued'),
+          sql`${phoneTextMessageDeliveries.messageId} in (
+            select ${phoneTextMessages.id}
+            from ${phoneTextMessages}
+            where ${phoneTextMessages.conversationId} = ${conversationId}
+          )`,
+        ));
       return conversation;
     });
   }

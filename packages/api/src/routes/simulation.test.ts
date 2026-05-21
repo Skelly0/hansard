@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import simulationRoutes from './simulation';
 
 const mocks = vi.hoisted(() => ({
+  getClock: vi.fn(),
   advanceTime: vi.fn(),
   previewAdvance: vi.fn(),
 }));
@@ -19,7 +20,7 @@ vi.mock('../middleware/requireStaff.js', () => ({
 }));
 
 vi.mock('../services/simulationService.js', () => ({
-  getClock: vi.fn(),
+  getClock: mocks.getClock,
   advanceTime: mocks.advanceTime,
   previewAdvance: mocks.previewAdvance,
   getHistory: vi.fn(),
@@ -30,7 +31,13 @@ vi.mock('../services/simulationService.js', () => ({
 
 async function appWithSimulationRoutes() {
   const app = Fastify({ logger: false });
-  app.decorate('db', {} as any);
+  app.decorate('db', {
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(async () => []),
+      })),
+    })),
+  } as any);
   await app.register(simulationRoutes);
   return app;
 }
@@ -38,6 +45,7 @@ async function appWithSimulationRoutes() {
 describe('simulation routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getClock.mockResolvedValue({ id: 'clock-1', tickUnit: 'year' });
     mocks.advanceTime.mockResolvedValue({ ok: true });
     mocks.previewAdvance.mockResolvedValue({ ok: true });
   });
@@ -79,5 +87,18 @@ describe('simulation routes', () => {
 
     expect(res.statusCode).toBe(200);
     expect(mocks.advanceTime).toHaveBeenCalledWith(expect.anything(), 1, 'staff-player');
+  });
+
+  it('rejects unsupported clock tick units', async () => {
+    const app = await appWithSimulationRoutes();
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/simulation/clock',
+      payload: { tickUnit: 'years' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'tickUnit must be one of: day, week, month, year' });
   });
 });

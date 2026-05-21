@@ -4,7 +4,8 @@ import { players } from './players';
 
 // The simulation clock tracks in-game time independently of real time.
 // Staff advance time via /time advance command.
-// Each tick can represent whatever unit the season uses (days, weeks, months, years).
+// Each tick is one in-game year by default; legacy clocks can still carry an
+// explicit day/week/month unit if a season deliberately overrides it.
 
 export const simulationClock = pgTable('simulation_clock', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -14,7 +15,7 @@ export const simulationClock = pgTable('simulation_clock', {
   currentTick: integer('current_tick').default(0).notNull(),         // monotonic counter
 
   // Configuration
-  tickUnit: varchar('tick_unit', { length: 32 }).default('month').notNull(),  // 'day' | 'week' | 'month' | 'year'
+  tickUnit: varchar('tick_unit', { length: 32 }).default('year').notNull(),  // 'day' | 'week' | 'month' | 'year'
   startDate: varchar('start_date', { length: 32 }).notNull(),
 
   // Aging / mortality knobs. Null = use defaults from simulationService.

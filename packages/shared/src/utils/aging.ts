@@ -17,6 +17,17 @@ export interface ParsedSimDate {
 const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const FREEFORM_RE = /^Year\s+(\d+),?\s*Month\s+(\d+)$/i;
 
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function addMonths(year: number, month: number, delta: number): { year: number; month: number } {
+  const monthIndex = month - 1 + delta;
+  const targetYear = year + Math.floor(monthIndex / 12);
+  const targetMonth = ((monthIndex % 12) + 12) % 12 + 1;
+  return { year: targetYear, month: targetMonth };
+}
+
 export function parseSimDate(dateStr: string): ParsedSimDate | null {
   const iso = dateStr.match(ISO_RE);
   if (iso) {
@@ -79,20 +90,38 @@ export function advanceDateByTicks(
   }
 
   if (parsed.format === 'iso') {
-    const date = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day));
     switch (tickUnit) {
-      case 'day': date.setUTCDate(date.getUTCDate() + ticks); break;
-      case 'week': date.setUTCDate(date.getUTCDate() + ticks * 7); break;
-      case 'month': date.setUTCMonth(date.getUTCMonth() + ticks); break;
-      case 'year': date.setUTCFullYear(date.getUTCFullYear() + ticks); break;
-      default: date.setUTCFullYear(date.getUTCFullYear() + ticks);
+      case 'day':
+      case 'week': {
+        const date = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day));
+        date.setUTCDate(date.getUTCDate() + ticks * (tickUnit === 'week' ? 7 : 1));
+        return formatSimDate({
+          format: 'iso',
+          year: date.getUTCFullYear(),
+          month: date.getUTCMonth() + 1,
+          day: date.getUTCDate(),
+        });
+      }
+      case 'month': {
+        const target = addMonths(parsed.year, parsed.month, ticks);
+        return formatSimDate({
+          format: 'iso',
+          year: target.year,
+          month: target.month,
+          day: Math.min(parsed.day, daysInMonth(target.year, target.month)),
+        });
+      }
+      case 'year':
+      default: {
+        const targetYear = parsed.year + ticks;
+        return formatSimDate({
+          format: 'iso',
+          year: targetYear,
+          month: parsed.month,
+          day: Math.min(parsed.day, daysInMonth(targetYear, parsed.month)),
+        });
+      }
     }
-    return formatSimDate({
-      format: 'iso',
-      year: date.getUTCFullYear(),
-      month: date.getUTCMonth() + 1,
-      day: date.getUTCDate(),
-    });
   }
 
   // Freeform: month or year resolution only.
@@ -101,9 +130,7 @@ export function advanceDateByTicks(
     year += ticks;
   } else {
     // month
-    month += ticks;
-    while (month > 12) { month -= 12; year++; }
-    while (month < 1) { month += 12; year--; }
+    ({ year, month } = addMonths(year, month, ticks));
   }
   return formatSimDate({ format: 'freeform', year, month, day: 1 });
 }

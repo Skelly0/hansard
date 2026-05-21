@@ -38,3 +38,11 @@ describe('schema shape: timestamp columns', () => {
     expect(violations, violations.join('\n')).toEqual([]);
   });
 });
+
+describe('schema shape: simulation clock', () => {
+  it('defaults each tick to one year', () => {
+    const text = readFileSync(join(here, 'simulation.ts'), 'utf8');
+
+    expect(text).toContain("tickUnit: varchar('tick_unit', { length: 32 }).default('year').notNull()");
+  });
+});

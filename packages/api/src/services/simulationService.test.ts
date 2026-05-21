@@ -217,6 +217,188 @@ describe('advanceTime death grace period', () => {
   });
 });
 
+describe('advanceTime tick-unit rate scaling', () => {
+  it('keeps twelve monthly ticks aligned with one yearly tick at month end', async () => {
+    const agingConfig = {
+      ...DEFAULT_AGING_CONFIG,
+      ailmentAgeThreshold: 999,
+      deathAgeThreshold: 999,
+    };
+    const player = makePlayer({
+      birthDate: '1964-01-31',
+      currentAge: 62,
+      ailments: [],
+    });
+
+    const monthDb = makeSimulationDb(
+      makeClock({ currentDate: '2026-01-31', tickUnit: 'month', agingConfig }),
+      [{ ...player }],
+    );
+    const yearDb = makeSimulationDb(
+      makeClock({ currentDate: '2026-01-31', tickUnit: 'year', agingConfig }),
+      [{ ...player }],
+    );
+
+    const monthResult = await advanceTime(monthDb.db, 12, 'staff-1');
+    const yearResult = await advanceTime(yearDb.db, 1, 'staff-1');
+
+    expect(monthResult.toDate).toBe('2027-01-31');
+    expect(monthResult.toDate).toBe(yearResult.toDate);
+  });
+
+  it('rolls twelve monthly death chances across a yearly tick', async () => {
+    const randoms = [...Array(11).fill(0.5), 0.002];
+    vi.spyOn(Math, 'random').mockImplementation(() => randoms.shift() ?? 0.5);
+
+    const clock = makeClock({
+      tickUnit: 'year',
+      agingConfig: {
+        ...DEFAULT_AGING_CONFIG,
+        ailmentAgeThreshold: 999,
+        deathAgeThreshold: 1,
+        deathBaseChance: 0.003,
+        deathAgeScaling: 0,
+      },
+    });
+    const player = makePlayer({
+      birthDate: '1964-01-01',
+      currentAge: 62,
+      ailments: [],
+    });
+    const { db } = makeSimulationDb(clock, [player]);
+
+    const result = await advanceTime(db, 1, 'staff-1');
+
+    expect(result.pendingDeathDetails).toHaveLength(1);
+    expect(result.pendingDeathDetails[0]).toMatchObject({
+      playerId: 'player-1',
+      cause: 'natural causes',
+      triggeredTick: 1,
+      triggeredDate: '2027-01-01',
+    });
+  });
+
+  it('keeps the last internal yearly roll on the visible yearly date at month end', async () => {
+    const randoms = [...Array(11).fill(0.5), 0.002];
+    vi.spyOn(Math, 'random').mockImplementation(() => randoms.shift() ?? 0.5);
+
+    const clock = makeClock({
+      currentDate: '2026-01-31',
+      tickUnit: 'year',
+      agingConfig: {
+        ...DEFAULT_AGING_CONFIG,
+        ailmentAgeThreshold: 999,
+        deathAgeThreshold: 1,
+        deathBaseChance: 0.003,
+        deathAgeScaling: 0,
+      },
+    });
+    const player = makePlayer({
+      birthDate: '1964-01-31',
+      currentAge: 62,
+      ailments: [],
+    });
+    const { db } = makeSimulationDb(clock, [player]);
+
+    const result = await advanceTime(db, 1, 'staff-1');
+
+    expect(result.toDate).toBe('2027-01-31');
+    expect(result.pendingDeathDetails).toHaveLength(1);
+    expect(result.pendingDeathDetails[0]).toMatchObject({
+      triggeredTick: 1,
+      triggeredDate: '2027-01-31',
+    });
+  });
+
+  it('does not use yearly compounding for monthly death ticks', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.02);
+
+    const clock = makeClock({
+      tickUnit: 'month',
+      agingConfig: {
+        ...DEFAULT_AGING_CONFIG,
+        ailmentAgeThreshold: 999,
+        deathAgeThreshold: 1,
+        deathBaseChance: 0.003,
+        deathAgeScaling: 0,
+      },
+    });
+    const player = makePlayer({
+      birthDate: '1964-01-01',
+      currentAge: 62,
+      ailments: [],
+    });
+    const { db } = makeSimulationDb(clock, [player]);
+
+    const result = await advanceTime(db, 1, 'staff-1');
+
+    expect(result.pendingDeathDetails).toEqual([]);
+  });
+
+  it('rolls twelve monthly ailment chances across a yearly tick', async () => {
+    const randoms = [...Array(11).fill(0.5), 0.007, 0];
+    vi.spyOn(Math, 'random').mockImplementation(() => randoms.shift() ?? 0.5);
+
+    const clock = makeClock({
+      tickUnit: 'year',
+      agingConfig: {
+        ...DEFAULT_AGING_CONFIG,
+        ailmentAgeThreshold: 1,
+        ailmentBaseChance: 0.008,
+        ailmentAgeScaling: 0,
+        deathAgeThreshold: 999,
+        ailmentPool: [
+          { name: 'cancer', severity: 'major', weight: 1 },
+        ],
+      },
+    });
+    const player = makePlayer({
+      birthDate: '1964-01-01',
+      currentAge: 62,
+      ailments: [],
+    });
+    const { db } = makeSimulationDb(clock, [player]);
+
+    const result = await advanceTime(db, 1, 'staff-1');
+
+    expect(result.ailmentDetails).toEqual([{
+      playerId: 'player-1',
+      characterName: 'Ada Mortalis',
+      condition: 'cancer',
+      severity: 'major',
+    }]);
+  });
+
+  it('does not apply a full year of ailment risk before a late-year threshold birthday', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.03);
+
+    const clock = makeClock({
+      tickUnit: 'year',
+      currentDate: '2026-01-01',
+      agingConfig: {
+        ...DEFAULT_AGING_CONFIG,
+        ailmentAgeThreshold: 50,
+        ailmentBaseChance: 0.008,
+        ailmentAgeScaling: 0,
+        deathAgeThreshold: 999,
+        ailmentPool: [
+          { name: 'cancer', severity: 'major', weight: 1 },
+        ],
+      },
+    });
+    const player = makePlayer({
+      birthDate: '1976-12-01',
+      currentAge: 49,
+      ailments: [],
+    });
+    const { db } = makeSimulationDb(clock, [player]);
+
+    const result = await advanceTime(db, 1, 'staff-1');
+
+    expect(result.ailmentDetails).toEqual([]);
+  });
+});
+
 describe('simulation history privacy', () => {
   it('redacts per-player event IDs from time advance summaries for non-staff viewers', () => {
     const row = {

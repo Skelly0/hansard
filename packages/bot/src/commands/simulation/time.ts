@@ -31,13 +31,34 @@ function formatDeathAilments(ailments: DeathAilment[] | undefined): string {
 
 type TimeAdvanceResult = Awaited<ReturnType<typeof advanceTime>>;
 
-function buildPublicAdvanceLines(result: TimeAdvanceResult): string[] {
-  const lines: string[] = [
+function buildAdvanceHeaderLines(result: TimeAdvanceResult): string[] {
+  return [
     `**${result.fromDate}** → **${result.toDate}**`,
     `Tick \`${result.fromTick}\` → \`${result.toTick}\``,
     '',
     `**${result.aged}** players aged`,
   ];
+}
+
+function buildPublicAdvanceLines(result: TimeAdvanceResult): string[] {
+  const lines = buildAdvanceHeaderLines(result);
+
+  if (result.deathDetails.length > 0) {
+    lines.push('', '⚰️ **Deaths:**');
+    for (const d of result.deathDetails) {
+      lines.push(`• **${d.characterName ?? 'Unknown'}** (age ${d.age})`);
+    }
+  }
+
+  if (result.deathDetails.length === 0) {
+    lines.push('', '_No public deaths this tick._');
+  }
+
+  return lines;
+}
+
+function buildDetailedAdvanceLines(result: TimeAdvanceResult): string[] {
+  const lines = buildAdvanceHeaderLines(result);
 
   if (result.ailmentDetails.length > 0) {
     lines.push('', '**New Ailments:**');
@@ -54,7 +75,7 @@ function buildPublicAdvanceLines(result: TimeAdvanceResult): string[] {
   }
 
   if (result.ailmentDetails.length === 0 && result.deathDetails.length === 0) {
-    lines.push('', '_No public ailments or deaths this tick._');
+    lines.push('', '_No ailments or deaths this tick._');
   }
 
   return lines;
@@ -64,7 +85,7 @@ function buildStaffAdvanceLines(
   result: TimeAdvanceResult,
   graveyardPosts: GraveyardPostResult[],
 ): string[] {
-  const lines = buildPublicAdvanceLines(result);
+  const lines = buildDetailedAdvanceLines(result);
 
   if (result.deathDetails.length > 0) {
     const channelId = graveyardPosts.find(post => post.channelId)?.channelId;

@@ -10,7 +10,7 @@ There's a single row in `simulation_clock` (schema: `packages/db/src/schema/simu
 
 - **`currentDate`** — the in-sim "now". Either ISO (`1923-06-15`) or freeform (`Year 4, Month 3`).
 - **`currentTick`** — monotonic counter (just an integer that grows).
-- **`tickUnit`** — `'day' | 'week' | 'month' | 'year'`. How much each tick is worth.
+- **`tickUnit`** — `'day' | 'week' | 'month' | 'year'`. How much each tick is worth; the schema default is `year`.
 - **`startDate`** — where the season began. Reference only — math uses `currentDate`.
 - **`agingConfig`** — JSONB, nullable. If `null`, falls back to `DEFAULT_AGING_CONFIG`.
 - **`seasonName`** — cosmetic.
@@ -29,7 +29,7 @@ All date math lives in `packages/shared/src/utils/aging.ts`. Two formats, four t
 - **Freeform** — `Year N, Month M`. Only month/year resolution; day is implicitly `1`.
 
 **`advanceDateByTicks(dateStr, ticks, tickUnit)`**:
-- ISO + any unit → fine. Uses `Date.UTC(...)` and `setUTCDate/Month/FullYear`, so January-31 + 1 month gives March 3 (carries over correctly).
+- ISO + any unit → fine. Day/week ticks use UTC date arithmetic. Month/year ticks target the intended calendar month/year and clamp the day when needed, so January 31 + 1 month becomes February 28 (or 29 in a leap year), and twelve monthly ticks stay aligned with one yearly tick.
 - Freeform + `month` or `year` → fine. Manual modulo on the month, carries to year.
 - **Freeform + `day` or `week` → throws.** Freeform has no day resolution. The error message points the operator at switching to ISO or coarser ticks.
 
@@ -87,13 +87,15 @@ For each tick:
 1. **Age this tick** = `calculateAge(birthDate, perTickDates[i+1])`. So the dice are rolled against the age the character is at *that specific tick's date*, not their age at the start of the advance.
 2. **Ailment roll** (`rollSingleTick`):
    - Skipped entirely if `age < ailmentAgeThreshold` (default 50).
-   - Otherwise: `chance = ailmentBaseChance + (age - threshold) * ailmentAgeScaling` → `0.008 + (age-50)*0.003` by default. So at 50: 0.8%, at 60: 3.8%, at 70: 6.8%. (Per-tick — across 12 monthly ticks per year that's ~9% / ~37% / ~56% annual ailment-acquisition odds.)
+   - Otherwise, compute the monthly baseline: `monthlyChance = ailmentBaseChance + (age - threshold) * ailmentAgeScaling` → `0.008 + (age-50)*0.003` by default. So at 50: 0.8%, at 60: 3.8%, at 70: 6.8% per month.
+   - Year ticks are split into twelve internal monthly roll steps. Month ticks use one monthly roll. Day/week ticks use proportional fractional scaling with `1 - (1 - monthlyChance) ** monthsCoveredByTick`.
    - On hit, pick from `ailmentPool` weighted by `weight`, filtered by `minAge`. **Duplicate guard**: if the player already has that condition, the roll is discarded (no stacking the same disease).
    - The new ailment goes into the player's local `state.ailments` array immediately, so the *very same tick's* death roll can see it.
 3. **Death roll**:
    - **Critical ailments**: each adds `criticalAilmentDeathChance` (default 0.22) to `deathChance`. Cause = first critical ailment's name.
    - **Major-ailment stacks**: 2+ majors → `+0.05 * majorCount`. So 2 majors = +0.10, 3 = +0.15. Cause defaults to `"complications from multiple ailments"` if no critical was set.
-   - **Old age**: if `age ≥ deathAgeThreshold` (default 62), `ageDeathChance = 0.003 + (age-62)*0.005`. So at 62: 0.3%, at 65: 1.8%, at 70: 4.3%, at 80: 9.3%. The total `deathChance` is `Math.max(deathChance, ageDeathChance)` — they don't add. If old-age happens to dominate, cause becomes `"natural causes"`. Per-tick figures look small but compound monthly: cumulative survival from 60 → 70 under defaults (old age + ailment stacking) is roughly 1%, so most characters die in the 60–70 window.
+   - **Old age**: if `age ≥ deathAgeThreshold` (default 62), `monthlyAgeDeathChance = 0.003 + (age-62)*0.005`. So at 62: 0.3%, at 65: 1.8%, at 70: 4.3%, at 80: 9.3% per month. The monthly `deathChance` is `Math.max(deathChance, monthlyAgeDeathChance)` — they don't add. If old-age happens to dominate, cause becomes `"natural causes"`.
+   - The final death chance follows the same tick-length treatment as ailments. A default yearly tick rolls twelve internal monthly death chances, so threshold birthdays inside the year are handled month-by-month.
    - Roll `Math.random() < deathChance`. On hit, the tick loop **breaks immediately** for that player — no further ticks rolled. Automatic hits do not kill immediately; they create a pending death marker for the next time-advance window.
 
 ### 4c. Persistence — wrapped in `db.transaction`
@@ -132,22 +134,22 @@ Automatic deaths now pass through a one-advance settle-affairs period first. The
 
 ## 6. Default aging config
 
-From `DEFAULT_AGING_CONFIG` in `simulationService.ts`. All knobs live in `simulation_clock.aging_config` (JSONB) when overridden per-season.
+From `DEFAULT_AGING_CONFIG` in `simulationService.ts`. All probability knobs are monthly baselines; the engine applies them per internal month for year/month ticks and scales them proportionally for day/week ticks. All knobs live in `simulation_clock.aging_config` (JSONB) when overridden per-season.
 
 **Ailment knobs:**
 - `ailmentAgeThreshold` = **50** — age below this gets zero ailment rolls.
-- `ailmentBaseChance` = **0.008** — per-tick chance at exactly the threshold age.
+- `ailmentBaseChance` = **0.008** — monthly baseline chance at exactly the threshold age.
 - `ailmentAgeScaling` = **0.003** — linear bonus per year above threshold.
 
 **Death knobs:**
 - `deathAgeThreshold` = **62** — age below this gets no old-age death roll.
-- `deathBaseChance` = **0.003** — per-tick chance at exactly the threshold age.
+- `deathBaseChance` = **0.003** — monthly baseline chance at exactly the threshold age.
 - `deathAgeScaling` = **0.005** — linear bonus per year above threshold.
 - `criticalAilmentDeathChance` = **0.22** — per critical ailment, additive.
 
 **Character-creation bounds:** `minStartingAge` / `max` / `default` = **18 / 70 / 30**.
 
-These defaults centre most natural deaths in the **60–70 window** under monthly ticks: roughly ~75% alive at 60, ~22% alive at 65, ~1% alive at 70. Anyone who clears 70 is a notable survivor.
+With the schema's one-year tick default, those monthly baselines are rolled over twelve internal months. If a season overrides the clock to monthly ticks, the same baselines are applied one visible tick at a time.
 
 ### Default ailment pool
 

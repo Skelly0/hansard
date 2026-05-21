@@ -2,7 +2,7 @@
 
 ## How time passes
 
-Time only advances when staff run `/time advance`. Each advance ticks every living character forward by one or more units (default: months). Nothing happens to your character between advances.
+Time only advances when staff run `/time advance`. By default, each tick is one in-game year. For aging rolls, that yearly tick is processed as twelve internal monthly steps, so the risk tracks twelve monthly ticks without requiring staff to run the command twelve times. Nothing happens to your character between advances.
 
 ## Character creation
 
@@ -16,7 +16,7 @@ Time only advances when staff run `/time advance`. Each advance ticks every livi
 
 ## Ailments
 
-From age 50, every tick rolls a chance of acquiring a serious ailment. The chance grows with age. Because the setting is 2075, ordinary curable conditions are not in the automatic pool; these are normal but dangerous conditions that can still end a life.
+From age 50, every tick rolls a chance of acquiring a serious ailment, with the chance scaled to the tick length. The chance grows with age. Because the setting is 2075, ordinary curable conditions are not in the automatic pool; these are normal but dangerous conditions that can still end a life.
 
 Possible ailments:
 
@@ -33,7 +33,7 @@ Three causes contribute to the per-tick death roll:
 2. **Critical ailments** — each critical ailment adds a flat per-tick death chance.
 3. **Stacked major ailments** — having two or more major ailments adds further per-tick risk.
 
-Most characters die between ages 60 and 70. Surviving past 70 is rare.
+Risk rises meaningfully from the 60s onward, especially for characters with critical or stacked major ailments.
 
 ## When a character dies
 

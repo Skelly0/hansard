@@ -6,6 +6,8 @@ import { requireStaff } from '../middleware/requireStaff.js';
 import * as simService from '../services/simulationService.js';
 import { PUBLIC_PLAYER_EVENT_TYPES } from '../services/playerService.js';
 
+const VALID_TICK_UNITS = new Set(['day', 'week', 'month', 'year']);
+
 function parseTicks(rawTicks: unknown): number | null {
   const ticks = rawTicks ?? 1;
   return typeof ticks === 'number' && Number.isInteger(ticks) && ticks >= 1 && ticks <= 100
@@ -110,6 +112,13 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
         isPaused?: boolean;
         npcHouseActive?: boolean;
       };
+
+      if (
+        body.tickUnit !== undefined
+        && (typeof body.tickUnit !== 'string' || !VALID_TICK_UNITS.has(body.tickUnit))
+      ) {
+        return reply.status(400).send({ error: 'tickUnit must be one of: day, week, month, year' });
+      }
 
       const clock = await simService.getClock(fastify.db);
       if (!clock) {

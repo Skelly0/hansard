@@ -130,6 +130,58 @@ describe('/time advance', () => {
     }));
   });
 
+  it('hides ailment details from the public game events post', async () => {
+    mocks.advanceTime.mockResolvedValue({
+      fromDate: '2026-01-01',
+      toDate: '2026-02-01',
+      fromTick: 1,
+      toTick: 2,
+      aged: 1,
+      ailmentDetails: [{
+        playerId: 'ailing-player',
+        characterName: 'Mira Sol',
+        condition: 'cancer',
+        severity: 'major',
+      }],
+      deathDetails: [{
+        playerId: 'dead-player',
+        characterName: 'Isabella Grech',
+        age: 70,
+        cause: 'stroke',
+        ailments: [{ condition: 'stroke', severity: 'critical' }],
+      }],
+      pendingDeathDetails: [],
+    });
+
+    const interaction = {
+      user: { id: 'discord-staff' },
+      client: { channels: { fetch: vi.fn() } },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('advance'),
+        getInteger: vi.fn().mockReturnValue(1),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    const publicEmbed = mocks.postGameEventsEmbed.mock.calls[0][0].embed;
+    const publicDescription = publicEmbed.toJSON().description;
+    expect(publicDescription).not.toContain('New Ailments');
+    expect(publicDescription).not.toContain('Mira Sol');
+    expect(publicDescription).not.toContain('cancer');
+    expect(publicDescription).not.toContain('stroke');
+    expect(publicDescription).not.toContain('ailments:');
+
+    const staffReply = (interaction.editReply as any).mock.calls[0][0];
+    const staffDescription = staffReply.embeds[0].toJSON().description;
+    expect(staffDescription).toContain('New Ailments');
+    expect(staffDescription).toContain('Mira Sol');
+    expect(staffDescription).toContain('cancer (major)');
+    expect(staffDescription).toContain('stroke (critical)');
+  });
+
   it('keeps pending death rolls out of the public game events post', async () => {
     mocks.advanceTime.mockResolvedValue({
       fromDate: '2026-01-01',

@@ -260,6 +260,44 @@ interface TickRoll {
   death?: { cause: string };
 }
 
+type RollStep = {
+  date: string;
+  unit: string;
+};
+
+function buildRollStepsForTick(fromDate: string, toDate: string, tickUnit: string): RollStep[] {
+  if (tickUnit !== 'year') {
+    return [{ date: toDate, unit: tickUnit }];
+  }
+
+  const steps: RollStep[] = [];
+  for (let i = 1; i <= 12; i++) {
+    steps.push({
+      date: i === 12 ? toDate : advanceDateByTicks(fromDate, i, 'month'),
+      unit: 'month',
+    });
+  }
+  return steps;
+}
+
+function monthlyRollsForTickUnit(tickUnit: string): number {
+  switch (tickUnit) {
+    case 'day': return 12 / 365;
+    case 'week': return 12 / 52;
+    case 'month': return 1;
+    case 'year': return 1;
+    default: return 12;
+  }
+}
+
+function scaleMonthlyChanceForTickUnit(monthlyChance: number, tickUnit: string): number {
+  if (!Number.isFinite(monthlyChance) || monthlyChance <= 0) return 0;
+  if (monthlyChance >= 1) return 1;
+
+  const rolls = monthlyRollsForTickUnit(tickUnit);
+  return 1 - ((1 - monthlyChance) ** rolls);
+}
+
 /**
  * Run one tick's worth of ailment + death rolls for a single player at
  * a known age. Pure of side effects beyond Math.random().
@@ -269,14 +307,16 @@ function rollSingleTick(
   age: number,
   ailments: AilmentEntry[],
   tick: number,
+  tickUnit: string,
 ): TickRoll {
   const result: TickRoll = {};
   let currentAilments = ailments;
 
   // --- Ailment roll ---
   if (age >= config.ailmentAgeThreshold) {
-    const ailmentChance =
+    const monthlyAilmentChance =
       config.ailmentBaseChance + (age - config.ailmentAgeThreshold) * config.ailmentAgeScaling;
+    const ailmentChance = scaleMonthlyChanceForTickUnit(monthlyAilmentChance, tickUnit);
     if (Math.random() < ailmentChance) {
       const ailment = rollAilment(config, age);
       if (ailment && !currentAilments.some(a => a.condition === ailment.name)) {
@@ -293,28 +333,29 @@ function rollSingleTick(
   }
 
   // --- Death roll ---
-  let deathChance = 0;
+  let monthlyDeathChance = 0;
   let causeOfDeath: string | null = null;
 
   const criticalAilments = currentAilments.filter(a => a.severity === 'critical');
   if (criticalAilments.length > 0) {
-    deathChance += config.criticalAilmentDeathChance * criticalAilments.length;
+    monthlyDeathChance += config.criticalAilmentDeathChance * criticalAilments.length;
     causeOfDeath = criticalAilments[0]!.condition;
   }
 
   const majorAilments = currentAilments.filter(a => a.severity === 'major');
   if (majorAilments.length >= 2) {
-    deathChance += 0.05 * majorAilments.length;
+    monthlyDeathChance += 0.05 * majorAilments.length;
     if (!causeOfDeath) causeOfDeath = 'complications from multiple ailments';
   }
 
   if (age >= config.deathAgeThreshold) {
-    const ageDeathChance =
+    const monthlyAgeDeathChance =
       config.deathBaseChance + (age - config.deathAgeThreshold) * config.deathAgeScaling;
-    if (ageDeathChance > deathChance) causeOfDeath = 'natural causes';
-    deathChance = Math.max(deathChance, ageDeathChance);
+    if (monthlyAgeDeathChance > monthlyDeathChance) causeOfDeath = 'natural causes';
+    monthlyDeathChance = Math.max(monthlyDeathChance, monthlyAgeDeathChance);
   }
 
+  const deathChance = scaleMonthlyChanceForTickUnit(monthlyDeathChance, tickUnit);
   if (deathChance > 0 && Math.random() < deathChance) {
     result.death = { cause: causeOfDeath ?? 'unknown causes' };
   }
@@ -361,6 +402,7 @@ function simulatePlayerTicks(
   fromTick: number,
   ticks: number,
   perTickDates: string[],
+  tickUnit: string,
 ): {
   finalAge: number | null;
   ageChanged: boolean;
@@ -378,25 +420,30 @@ function simulatePlayerTicks(
   for (let i = 0; i < ticks; i++) {
     if (!state.isAlive) break;
     const tickNum = fromTick + i + 1;
-    const tickDate = perTickDates[i + 1]!;
-    const ageThisTick = calculateAge(state.birthDate, tickDate) ?? lastAge;
-    lastAge = ageThisTick;
+    const visibleFromDate = perTickDates[i]!;
+    const visibleToDate = perTickDates[i + 1]!;
+    const rollSteps = buildRollStepsForTick(visibleFromDate, visibleToDate, tickUnit);
 
-    const roll = rollSingleTick(config, ageThisTick, state.ailments, tickNum);
+    for (const step of rollSteps) {
+      const ageThisStep = calculateAge(state.birthDate, step.date) ?? lastAge;
+      lastAge = ageThisStep;
 
-    if (roll.newAilment) {
-      state.ailments = [...state.ailments, roll.newAilment];
-      newAilments.push({ ailment: roll.newAilment, tick: tickNum, date: tickDate });
-    }
+      const roll = rollSingleTick(config, ageThisStep, state.ailments, tickNum, step.unit);
 
-    if (roll.death) {
-      state.isAlive = false;
-      return {
-        finalAge: ageThisTick,
-        ageChanged: ageThisTick !== startAge,
-        newAilments,
-        death: { cause: roll.death.cause, tick: tickNum, date: tickDate, age: ageThisTick },
-      };
+      if (roll.newAilment) {
+        state.ailments = [...state.ailments, roll.newAilment];
+        newAilments.push({ ailment: roll.newAilment, tick: tickNum, date: step.date });
+      }
+
+      if (roll.death) {
+        state.isAlive = false;
+        return {
+          finalAge: ageThisStep,
+          ageChanged: ageThisStep !== startAge,
+          newAilments,
+          death: { cause: roll.death.cause, tick: tickNum, date: step.date, age: ageThisStep },
+        };
+      }
     }
   }
 
@@ -421,10 +468,8 @@ function getWorstSeverity(ailments: { severity: 'minor' | 'major' | 'critical' }
  */
 function buildPerTickDates(fromDate: string, ticks: number, tickUnit: string): string[] {
   const dates: string[] = [fromDate];
-  let current = fromDate;
-  for (let i = 0; i < ticks; i++) {
-    current = advanceDateByTicks(current, 1, tickUnit);
-    dates.push(current);
+  for (let i = 1; i <= ticks; i++) {
+    dates.push(advanceDateByTicks(fromDate, i, tickUnit));
   }
   return dates;
 }
@@ -523,7 +568,7 @@ export async function advanceTime(
         isAlive: true,
       };
 
-      const result = simulatePlayerTicks(state, config, fromTick, ticks, perTickDates);
+      const result = simulatePlayerTicks(state, config, fromTick, ticks, perTickDates, clock.tickUnit);
       if (result.finalAge == null) continue;
 
       if (result.ageChanged) agedCount++;
@@ -667,7 +712,7 @@ export async function previewAdvance(
       isAlive: true,
     };
 
-    const result = simulatePlayerTicks(state, config, fromTick, ticks, perTickDates);
+    const result = simulatePlayerTicks(state, config, fromTick, ticks, perTickDates, clock.tickUnit);
     if (result.finalAge == null) continue;
     if (result.ageChanged) agedCount++;
 

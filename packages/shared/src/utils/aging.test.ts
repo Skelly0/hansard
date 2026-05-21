@@ -45,6 +45,12 @@ describe('advanceDateByTicks', () => {
     expect(advanceDateByTicks('2075-06-15', 5, 'month')).toBe('2075-11-15');
   });
 
+  it('clamps ISO month and year advances to the target month', () => {
+    expect(advanceDateByTicks('2026-01-31', 1, 'month')).toBe('2026-02-28');
+    expect(advanceDateByTicks('2026-01-31', 12, 'month')).toBe('2027-01-31');
+    expect(advanceDateByTicks('2024-02-29', 1, 'year')).toBe('2025-02-28');
+  });
+
   it('throws on unparseable dates rather than corrupting the clock', () => {
     expect(() => advanceDateByTicks('garbage', 5, 'month')).toThrow();
   });

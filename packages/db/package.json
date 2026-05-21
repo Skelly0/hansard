@@ -16,6 +16,7 @@
     "migrate:phone-backfill-marker": "tsx scripts/migrate-phone-backfill-marker.ts",
     "migrate:bill-legislation-message": "tsx scripts/migrate-bill-legislation-message.ts",
     "migrate:aging-config": "tsx scripts/migrate-aging-config.ts",
+    "migrate:year-tick-unit": "tsx scripts/migrate-year-tick-unit.ts",
     "migrate:sessions-table": "tsx scripts/migrate-sessions-table.ts",
     "fix:bill-5-status": "tsx scripts/fix-bill-5-status.ts",
     "fix:character-birth-dates": "tsx scripts/fix-character-birth-dates.ts",

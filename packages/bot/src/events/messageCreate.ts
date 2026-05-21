@@ -8,11 +8,17 @@ import {
   type CallParticipants,
 } from '@hansard/api/services/phoneService';
 import {
+  PhoneTextService,
+  PhoneTextServiceError,
+  phoneTextReplyHintForResolution,
+} from '@hansard/api/services/phoneTextService';
+import {
   relayMessage,
   hangUpAndNotify,
   postCallOpenedToStaffThread,
   RecipientDmClosedError,
 } from '../utils/phoneRelay.js';
+import { flushQueuedPhoneTextsForPlayer, relayRecordedPhoneText } from '../utils/phoneTextRelay.js';
 import { PHONE_HINT_COOLDOWN_MS, PHONE_DM_CHUNK_BUDGET } from '@hansard/shared';
 
 const HINT_MAP_MAX = 500;
@@ -95,6 +101,69 @@ async function resolvePlayer(discordId: string): Promise<{ id: string; isAlive: 
   return row ?? null;
 }
 
+async function routePhoneTextReply(
+  client: Client,
+  message: Message,
+  player: { id: string },
+  isEmptyContent: boolean,
+): Promise<boolean> {
+  const textSvc = new PhoneTextService(db);
+  const resolution = await textSvc.resolveReplyConversation(player.id);
+  const hint = phoneTextReplyHintForResolution(resolution);
+  if (hint) {
+    if (!isEmptyContent && shouldShowHint(message.author.id)) {
+      try {
+        await message.reply({ content: hint, allowedMentions: { repliedUser: false, parse: [] } });
+      } catch {
+        /* ignore */
+      }
+    }
+    return true;
+  }
+
+  if (resolution.status !== 'selected' && resolution.status !== 'sole') return false;
+
+  if (isEmptyContent) {
+    try {
+      await message.reply({
+        content: "Stickers, attachments, and embeds aren't relayed by phone text — please type your message as text.",
+        allowedMentions: { repliedUser: false, parse: [] },
+      });
+    } catch {
+      /* ignore */
+    }
+    return true;
+  }
+
+  try {
+    const recorded = await textSvc.recordReply({
+      senderPlayerId: player.id,
+      conversationId: resolution.context.conversation.id,
+      content: message.content,
+      senderDiscordMessageId: message.id,
+    });
+    await relayRecordedPhoneText(client, recorded);
+    if (message.content.length > PHONE_DM_CHUNK_BUDGET) {
+      try {
+        await message.react('\u{1F4E8}');
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    if (err instanceof PhoneTextServiceError) {
+      try {
+        await message.reply({ content: err.message, allowedMentions: { repliedUser: false, parse: [] } });
+      } catch {
+        /* ignore */
+      }
+      return true;
+    }
+    console.error('[phone:event] failed to route text reply:', err);
+  }
+  return true;
+}
+
 async function handleDmMessage(client: Client, message: Message): Promise<void> {
   if (message.partial) {
     try {
@@ -115,24 +184,7 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
   // nothing to do — and the negative cache (below) lets us skip the DB hit entirely.
   const isEmptyContent = message.content.trim() === '';
 
-  // Negative-cache fast path: this user had no open call very recently, so a chatty
-  // follow-up DM doesn't need another `resolvePlayer` + `findOpenCallForPlayer` round-trip.
-  if (hasFreshNoCallEntry(message.author.id)) {
-    if (isEmptyContent) return;
-    if (shouldShowHint(message.author.id)) {
-      try {
-        await message.reply({
-          content:
-            'You\'re not in a call right now. Use `/phone dial <number>` to start one. (Messages outside a call are not stored or forwarded.)',
-          allowedMentions: { repliedUser: false, parse: [] },
-        });
-      } catch {
-        /* DMs may be closed mid-stream; ignore */
-      }
-    }
-    return;
-  }
-
+  const hadFreshNoCallEntry = hasFreshNoCallEntry(message.author.id);
   const player = await resolvePlayer(message.author.id);
   if (!player || !player.characterName) {
     // OAuth-only placeholders and non-registered Discord users get no reply — we don't want
@@ -141,10 +193,13 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
   }
 
   const svc = new PhoneService(db);
-  const openCall = await svc.findOpenCallForPlayer(player.id);
+  const openCall = hadFreshNoCallEntry ? null : await svc.findOpenCallForPlayer(player.id);
   if (!openCall) {
-    // Record the negative result so chatty non-call DMs skip the DB hit for a few seconds.
+    // Record the negative result so chatty non-call DMs can skip the call lookup for a few
+    // seconds, but still run text-conversation routing. With texting, "no call" no longer
+    // means "nothing routable."
     rememberNoCall(message.author.id);
+    if (await routePhoneTextReply(client, message, player, isEmptyContent)) return;
     if (isEmptyContent) return;
     if (shouldShowHint(message.author.id)) {
       try {
@@ -263,6 +318,7 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
 
     try {
       await svc.systemEndCall(openCall.id, 'voicemail_left');
+      await flushQueuedPhoneTextsForPlayer(client, player.id);
     } catch (err) {
       console.error('[phone:event] failed to end voicemail after message:', err);
     }

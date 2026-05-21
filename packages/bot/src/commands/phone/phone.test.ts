@@ -19,6 +19,7 @@ describe('/phone command metadata', () => {
       .map((o) => o.name) ?? [];
     expect(subNames).toEqual(expect.arrayContaining([
       'register', 'numbers', 'directory', 'delete', 'dial', 'hangup', 'history',
+      'text', 'conversations', 'switch', 'close-conversation',
     ]));
   });
 
@@ -72,6 +73,24 @@ describe('/phone command metadata', () => {
     expect(pageOpt).toBeDefined();
     expect(pageOpt!.type).toBe(4); // INTEGER
     expect(pageOpt!.min_value).toBe(1);
+  });
+
+  it('text subcommand exposes number/message/from options and caps message length', () => {
+    const text = json.options?.find((o) => o.type === 1 && o.name === 'text');
+    const opts = (text as { options?: Array<{ name: string; type: number; required?: boolean; max_length?: number; autocomplete?: boolean }> })
+      .options ?? [];
+    expect(opts.find((o) => o.name === 'number')).toMatchObject({ type: 3, required: true, max_length: 32 });
+    expect(opts.find((o) => o.name === 'message')).toMatchObject({ type: 3, required: true, max_length: 1900 });
+    expect(opts.find((o) => o.name === 'from')).toMatchObject({ type: 3, required: false, autocomplete: true });
+  });
+
+  it('switch and close-conversation autocomplete conversation ids', () => {
+    for (const name of ['switch', 'close-conversation']) {
+      const sub = json.options?.find((o) => o.type === 1 && o.name === name);
+      const idOpt = (sub as { options?: Array<{ name: string; type: number; autocomplete?: boolean }> })
+        .options?.find((o) => o.name === 'conversation-id');
+      expect(idOpt).toMatchObject({ type: 3, autocomplete: true });
+    }
   });
 
   it('register subcommand exposes an optional pseudonym string option', () => {

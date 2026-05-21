@@ -17,8 +17,14 @@ import {
   PhoneServiceError,
   type PhoneDirectoryEntry,
 } from '@hansard/api/services/phoneService';
+import {
+  PhoneTextService,
+  PhoneTextServiceError,
+  type PhoneTextConversationContext,
+} from '@hansard/api/services/phoneTextService';
 import { buildIncomingCallActions } from '../../components/phoneButtons.js';
 import { hangUpAndNotify, sendVoicemailIntro } from '../../utils/phoneRelay.js';
+import { relayRecordedPhoneText } from '../../utils/phoneTextRelay.js';
 import { resolveStaffRoleIds } from '../../utils/staffRoles.js';
 import { clearNoCallCache } from '../../events/messageCreate.js';
 import { resolvePhonePlayer } from './playerLookup.js';
@@ -30,6 +36,7 @@ import {
   PHONE_NUMBER_INVALID,
   PHONE_PSEUDONYM_MAX_LENGTH,
   PHONE_RING_TIMEOUT_MS,
+  PHONE_TEXT_MESSAGE_MAX_LENGTH,
   PHONE_VOICEMAIL_MESSAGE_MAX_LENGTH,
   PHONE_VOICEMAIL_RESPONSE_TIMEOUT_MS,
 } from '@hansard/shared';
@@ -51,6 +58,10 @@ async function requirePlayer(interaction: ChatInputCommandInteraction): Promise<
 
 function svc(): PhoneService {
   return new PhoneService(db);
+}
+
+function textSvc(): PhoneTextService {
+  return new PhoneTextService(db);
 }
 
 function formatInlineCode(value: string): string {
@@ -559,6 +570,168 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
 }
 
 // -----------------------------------------------------------------------------
+// asynchronous text conversations
+// -----------------------------------------------------------------------------
+
+function formatConversationLine(context: PhoneTextConversationContext): string {
+  const stamp = `<t:${Math.floor(context.conversation.lastMessageAt.getTime() / 1000)}:R>`;
+  const otherName = context.counterparty.pseudonym
+    ?? context.counterparty.characterName
+    ?? context.counterparty.numberRaw;
+  return [
+    `• \`${context.conversation.id}\``,
+    `with **${escapeMarkdown(otherName)}** (${context.counterparty.numberRaw})`,
+    `from ${formatPublicLineIdentity(context.participant)}`,
+    stamp,
+  ].join(' — ');
+}
+
+async function chooseOwnedTextNumber(
+  interaction: ChatInputCommandInteraction,
+  player: { id: string },
+  fromNumber: string | null,
+): Promise<Awaited<ReturnType<PhoneService['listMyNumbers']>>[number] | null> {
+  const myNumbers = await svc().listMyNumbers(player.id);
+  if (!myNumbers.length) {
+    await interaction.editReply({
+      embeds: [errorEmbed('You need to register a phone number before texting. Try `/phone register`.')],
+    });
+    return null;
+  }
+  if (!fromNumber) return myNumbers[0];
+  const resolved = await svc().lookupNumber(fromNumber);
+  if (!resolved || resolved.playerId !== player.id) {
+    await interaction.editReply({ embeds: [errorEmbed('You do not own that texting number.')] });
+    return null;
+  }
+  return resolved;
+}
+
+async function handleText(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+
+  const targetNumber = interaction.options.getString('number', true);
+  const content = interaction.options.getString('message', true);
+  const fromNumber = interaction.options.getString('from');
+
+  const recipient = await svc().lookupNumber(targetNumber);
+  if (!recipient) {
+    await interaction.editReply({ embeds: [errorEmbed('No active line found with that number.')] });
+    return;
+  }
+
+  const senderNumber = await chooseOwnedTextNumber(interaction, player, fromNumber);
+  if (!senderNumber) return;
+
+  try {
+    const recorded = await textSvc().recordText({
+      senderPlayerId: player.id,
+      senderNumberId: senderNumber.id,
+      recipientNumberId: recipient.id,
+      content,
+    });
+    clearNoCallCache(interaction.user.id);
+    await relayRecordedPhoneText(interaction.client, recorded);
+    await interaction.editReply({
+      embeds: [
+        successEmbed(
+          'Text sent',
+          [
+            `From: ${formatPublicLineIdentity(recorded.sender)}`,
+            `To: ${formatPublicLineIdentity(recorded.recipient)}`,
+            '',
+            'Freeform DMs now reply to this text conversation. If the recipient is on a call, delivery waits until their line is free.',
+          ].join('\n'),
+        ),
+      ],
+    });
+  } catch (err) {
+    if (err instanceof PhoneTextServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[phone:cmd] text failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to send the text.')] });
+  }
+}
+
+async function handleConversations(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+
+  const conversations = await textSvc().listConversationsForPlayer(player.id, { limit: 20 });
+  if (!conversations.length) {
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Text conversations')
+          .setColor(CALL_COLOUR)
+          .setDescription('No active text conversations. Start one with `/phone text`.'),
+      ],
+    });
+    return;
+  }
+
+  await interaction.editReply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle('Text conversations')
+        .setColor(CALL_COLOUR)
+        .setDescription(conversations.map(formatConversationLine).join('\n')),
+    ],
+    allowedMentions: { parse: [] },
+  });
+}
+
+async function handleSwitchConversation(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+  const conversationId = interaction.options.getString('conversation-id', true);
+
+  try {
+    const context = await textSvc().setReplyConversation(player.id, conversationId);
+    clearNoCallCache(interaction.user.id);
+    await interaction.editReply({
+      embeds: [
+        successEmbed(
+          'Reply target set',
+          `Freeform DMs now reply to **${escapeMarkdown(context.counterparty.pseudonym ?? context.counterparty.characterName ?? context.counterparty.numberRaw)}** (${context.counterparty.numberRaw}).`,
+        ),
+      ],
+    });
+  } catch (err) {
+    if (err instanceof PhoneTextServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[phone:cmd] switch conversation failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to switch text conversation.')] });
+  }
+}
+
+async function handleCloseConversation(interaction: ChatInputCommandInteraction): Promise<void> {
+  const player = await requirePlayer(interaction);
+  if (!player) return;
+  const conversationId = interaction.options.getString('conversation-id', true);
+
+  try {
+    await textSvc().archiveConversation(player.id, conversationId);
+    clearNoCallCache(interaction.user.id);
+    await interaction.editReply({
+      embeds: [successEmbed('Text conversation closed', 'Freeform DMs will no longer reply to that conversation.')],
+    });
+  } catch (err) {
+    if (err instanceof PhoneTextServiceError) {
+      await interaction.editReply({ embeds: [errorEmbed(err.message)] });
+      return;
+    }
+    console.error('[phone:cmd] close conversation failed:', err);
+    await interaction.editReply({ embeds: [errorEmbed('Failed to close text conversation.')] });
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Admin subcommand group (staff only at runtime)
 // -----------------------------------------------------------------------------
 
@@ -887,6 +1060,58 @@ const command: Command = {
             .setRequired(false),
         ),
     )
+    .addSubcommand((sub) =>
+      sub
+        .setName('text')
+        .setDescription('Send a one-to-one phone text')
+        .addStringOption((opt) =>
+          opt.setName('number').setDescription('Number to text').setRequired(true).setMaxLength(32),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('message')
+            .setDescription('Message to send')
+            .setRequired(true)
+            .setMaxLength(PHONE_TEXT_MESSAGE_MAX_LENGTH),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('from')
+            .setDescription('Which of your numbers to text from (defaults to most recent)')
+            .setRequired(false)
+            .setMaxLength(32)
+            .setAutocomplete(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('conversations')
+        .setDescription('List your active phone text conversations'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('switch')
+        .setDescription('Choose which text conversation freeform DMs reply to')
+        .addStringOption((opt) =>
+          opt
+            .setName('conversation-id')
+            .setDescription('Text conversation id')
+            .setRequired(true)
+            .setAutocomplete(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('close-conversation')
+        .setDescription('Archive a phone text conversation')
+        .addStringOption((opt) =>
+          opt
+            .setName('conversation-id')
+            .setDescription('Text conversation id')
+            .setRequired(true)
+            .setAutocomplete(true),
+        ),
+    )
     .addSubcommandGroup((group) =>
       group
         .setName('voicemail')
@@ -1012,14 +1237,56 @@ const command: Command = {
 
   async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
     const focused = interaction.options.getFocused(true);
+    const sub = interaction.options.getSubcommand();
+    const group = interaction.options.getSubcommandGroup(false);
+    if (focused.name === 'conversation-id') {
+      if (sub !== 'switch' && sub !== 'close-conversation') {
+        await interaction.respond([]);
+        return;
+      }
+      const [row] = await db
+        .select({ id: players.id })
+        .from(players)
+        .where(eq(players.discordId, interaction.user.id))
+        .limit(1);
+      if (!row) {
+        await interaction.respond([]);
+        return;
+      }
+      const q = String(focused.value ?? '').toLowerCase();
+      const conversations = await textSvc().listConversationsForPlayer(row.id, { limit: 25 });
+      await interaction.respond(
+        conversations
+          .filter((context) =>
+            !q
+            || context.conversation.id.toLowerCase().includes(q)
+            || context.counterparty.numberRaw.toLowerCase().includes(q)
+            || (context.counterparty.characterName?.toLowerCase().includes(q) ?? false)
+            || (context.counterparty.pseudonym?.toLowerCase().includes(q) ?? false),
+          )
+          .slice(0, 25)
+          .map((context) => ({
+            name: [
+              context.counterparty.pseudonym ?? context.counterparty.characterName ?? context.counterparty.numberRaw,
+              context.counterparty.numberRaw,
+              context.conversation.id.slice(0, 8),
+            ].join(' — '),
+            value: context.conversation.id,
+          })),
+      );
+      return;
+    }
     if (focused.name !== 'number' && focused.name !== 'from') {
       await interaction.respond([]);
       return;
     }
-    const sub = interaction.options.getSubcommand();
-    const group = interaction.options.getSubcommandGroup(false);
     // Autocomplete only fires for the caller's own numbers on `delete` / `dial from`.
-    if (group !== 'voicemail' && sub !== 'delete' && !(sub === 'dial' && focused.name === 'from')) {
+    if (
+      group !== 'voicemail'
+      && sub !== 'delete'
+      && !(sub === 'dial' && focused.name === 'from')
+      && !(sub === 'text' && focused.name === 'from')
+    ) {
       await interaction.respond([]);
       return;
     }
@@ -1117,6 +1384,18 @@ const command: Command = {
           break;
         case 'history':
           await handleHistory(interaction);
+          break;
+        case 'text':
+          await handleText(interaction);
+          break;
+        case 'conversations':
+          await handleConversations(interaction);
+          break;
+        case 'switch':
+          await handleSwitchConversation(interaction);
+          break;
+        case 'close-conversation':
+          await handleCloseConversation(interaction);
           break;
         default:
           await interaction.editReply({ embeds: [errorEmbed(`Unknown subcommand: ${sub}`)] });

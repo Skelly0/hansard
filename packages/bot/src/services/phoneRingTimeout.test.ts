@@ -13,11 +13,19 @@ const relayMocks = vi.hoisted(() => ({
 
 vi.mock('../utils/phoneRelay.js', () => relayMocks);
 
+const textRelayMocks = vi.hoisted(() => ({
+  flushQueuedPhoneTextsForPlayer: vi.fn(),
+}));
+
+vi.mock('../utils/phoneTextRelay.js', () => textRelayMocks);
+
 const {
   expireRingingCalls,
   processPendingVoicemailBeeps,
   sweepClaimedVoicemailBeeps,
   sweepAbandonedVoicemails,
+  sweepStalePhoneTextDeliveryClaims,
+  sweepStalePhoneTextTapDeliveries,
 } = await import('./phoneRingTimeout.js');
 const { phoneCalls } = await import('@hansard/db');
 
@@ -90,6 +98,7 @@ beforeEach(() => {
   relayMocks.disableRingDmButtons.mockResolvedValue(undefined);
   relayMocks.hangUpAndNotify.mockResolvedValue(undefined);
   relayMocks.sendVoicemailBeep.mockResolvedValue(undefined);
+  textRelayMocks.flushQueuedPhoneTextsForPlayer.mockResolvedValue(0);
 });
 
 /**
@@ -166,6 +175,22 @@ describe('expireRingingCalls', () => {
     const { db } = buildDb([[], [{ id: 'call-1' }]]);
     // No client passed — call should succeed without throwing.
     await expect(expireRingingCalls(db as any, {})).resolves.toBeDefined();
+  });
+
+  it('flushes queued texts for a voicemail recipient instead of hanging up the voicemail call', async () => {
+    const client = {} as any;
+    const expired = [{
+      id: 'call-1',
+      status: 'voicemail',
+      recipientPlayerId: 'player-recipient',
+    }];
+    const { db } = buildDb([[], expired]);
+
+    const result = await expireRingingCalls(db as any, { client });
+
+    expect(result.expired).toEqual(expired);
+    expect(textRelayMocks.flushQueuedPhoneTextsForPlayer).toHaveBeenCalledWith(client, 'player-recipient');
+    expect(relayMocks.hangUpAndNotify).not.toHaveBeenCalled();
   });
 
   it('logs and returns an empty list when the DB call throws', async () => {
@@ -308,5 +333,36 @@ describe('sweepStaleTapDeliveries', () => {
     const { swept } = await sweepStaleTapDeliveries(db as any, { logger });
     expect(swept).toEqual([]);
     expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+describe('phone text worker sweeps', () => {
+  it('releases stale claimed text deliveries', async () => {
+    const now = new Date('2026-05-11T12:00:00.000Z');
+    const swept = [{ id: 'delivery-1', status: 'queued' }];
+    const { db, captured } = buildDb(swept);
+
+    const result = await sweepStalePhoneTextDeliveryClaims(db as any, { now, maxAgeMs: 1000 });
+
+    expect(result.swept).toEqual(swept);
+    expect(captured.setArg).toEqual({ status: 'queued', claimedAt: null, failureReason: null });
+    const predicate = collectStrings(captured.whereArg);
+    expect(predicate).toContain('delivering');
+    expect(predicate).toContain('claimed_at');
+    expect(predicate.some((s) => s.includes('<'))).toBe(true);
+  });
+
+  it('marks crash-stranded text tap placeholders with an explicit error', async () => {
+    const now = new Date('2026-05-11T12:00:00.000Z');
+    const swept = [{ id: 'tap-delivery-1', error: 'relay crashed before delivery' }];
+    const { db, captured } = buildDb(swept);
+
+    const result = await sweepStalePhoneTextTapDeliveries(db as any, { now, maxAgeMs: 1000 });
+
+    expect(result.swept).toEqual(swept);
+    expect(captured.setArg).toEqual({ error: 'relay crashed before delivery' });
+    const predicate = collectStrings(captured.whereArg);
+    expect(predicate.filter((s) => s.includes('is null'))).toHaveLength(2);
+    expect(predicate).toContain('created_at');
   });
 });

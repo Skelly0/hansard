@@ -19,6 +19,7 @@ import {
 } from '@hansard/api/services/phoneService';
 import { resolveStaffRoleIds } from './staffRoles.js';
 import { validateTapMirrorChannel } from './tapMirrorChannel.js';
+import { flushQueuedPhoneTextsForPlayer } from './phoneTextRelay.js';
 import {
   PHONE_FORCE_END_REASON_PREFIX,
   PHONE_TAP_FAILURE_THRESHOLD,
@@ -742,6 +743,15 @@ export async function hangUpAndNotify(
       console.error('[phone:relay] hangup notify: failed to update staff thread:', err);
     }
   }
+
+  await Promise.all([
+    flushQueuedPhoneTextsForPlayer(client, context.callerPlayer.id).catch((err: unknown) => {
+      console.error('[phone:relay] failed to flush caller queued texts:', err);
+    }),
+    flushQueuedPhoneTextsForPlayer(client, context.recipientPlayer.id).catch((err: unknown) => {
+      console.error('[phone:relay] failed to flush recipient queued texts:', err);
+    }),
+  ]);
 }
 
 export async function postCallOpenedToStaffThread(

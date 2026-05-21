@@ -485,6 +485,94 @@ const statements: string[] = [
   `CREATE INDEX IF NOT EXISTS "phone_message_tap_deliveries_pending_idx"
     ON "phone_message_tap_deliveries" ("created_at")
     WHERE delivered_at IS NULL AND error IS NULL;`,
+
+  // === phone_text_conversations ===
+  // Persistent asynchronous one-to-one text conversations. "Conversation" is used here
+  // deliberately so Discord `ThreadChannel`s remain the only thing called "threads".
+  `CREATE TABLE IF NOT EXISTS "phone_text_conversations" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "number_a_id" uuid NOT NULL REFERENCES "phone_numbers"("id") ON DELETE RESTRICT,
+    "number_b_id" uuid NOT NULL REFERENCES "phone_numbers"("id") ON DELETE RESTRICT,
+    "player_a_id" uuid NOT NULL REFERENCES "players"("id"),
+    "player_b_id" uuid NOT NULL REFERENCES "players"("id"),
+    "status" varchar(16) NOT NULL DEFAULT 'active',
+    "staff_thread_id" varchar(20),
+    "last_message_at" timestamptz NOT NULL DEFAULT now(),
+    "created_at" timestamptz NOT NULL DEFAULT now(),
+    "archived_at" timestamptz,
+    CONSTRAINT "phone_text_conversations_ordered_numbers" CHECK (number_a_id < number_b_id),
+    CONSTRAINT "phone_text_conversations_status_check" CHECK (status IN ('active','archived'))
+  );`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "phone_text_conversations_active_pair_unique"
+    ON "phone_text_conversations" ("number_a_id", "number_b_id")
+    WHERE status = 'active';`,
+  `CREATE INDEX IF NOT EXISTS "phone_text_conversations_player_a_idx"
+    ON "phone_text_conversations" ("player_a_id", "last_message_at" DESC);`,
+  `CREATE INDEX IF NOT EXISTS "phone_text_conversations_player_b_idx"
+    ON "phone_text_conversations" ("player_b_id", "last_message_at" DESC);`,
+
+  // === phone_text_messages ===
+  `CREATE TABLE IF NOT EXISTS "phone_text_messages" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "conversation_id" uuid NOT NULL REFERENCES "phone_text_conversations"("id") ON DELETE CASCADE,
+    "sender_player_id" uuid NOT NULL REFERENCES "players"("id"),
+    "sender_number_id" uuid NOT NULL REFERENCES "phone_numbers"("id") ON DELETE RESTRICT,
+    "content" text NOT NULL,
+    "sender_discord_message_id" varchar(20),
+    "staff_mirror_message_id" varchar(20),
+    "created_at" timestamptz NOT NULL DEFAULT now(),
+    "sequence_no" bigserial NOT NULL
+  );`,
+  `CREATE INDEX IF NOT EXISTS "phone_text_messages_conversation_idx"
+    ON "phone_text_messages" ("conversation_id", "created_at", "sequence_no");`,
+
+  // === phone_text_message_deliveries ===
+  // A row is claimed before Discord DM delivery so concurrent call-end/worker flushes cannot
+  // double-send the same queued text.
+  `CREATE TABLE IF NOT EXISTS "phone_text_message_deliveries" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "message_id" uuid NOT NULL REFERENCES "phone_text_messages"("id") ON DELETE CASCADE,
+    "recipient_player_id" uuid NOT NULL REFERENCES "players"("id"),
+    "recipient_number_id" uuid NOT NULL REFERENCES "phone_numbers"("id") ON DELETE RESTRICT,
+    "recipient_discord_message_id" varchar(20),
+    "status" varchar(16) NOT NULL DEFAULT 'queued',
+    "failure_reason" varchar(500),
+    "claimed_at" timestamptz,
+    "delivered_at" timestamptz,
+    "created_at" timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT "phone_text_message_deliveries_status_check" CHECK (status IN ('queued','delivering','delivered','failed'))
+  );`,
+  `CREATE INDEX IF NOT EXISTS "phone_text_message_deliveries_recipient_queue_idx"
+    ON "phone_text_message_deliveries" ("recipient_player_id", "created_at")
+    WHERE status = 'queued';`,
+  `CREATE INDEX IF NOT EXISTS "phone_text_message_deliveries_delivering_claim_idx"
+    ON "phone_text_message_deliveries" ("claimed_at")
+    WHERE status = 'delivering';`,
+  `CREATE INDEX IF NOT EXISTS "phone_text_message_deliveries_message_idx"
+    ON "phone_text_message_deliveries" ("message_id");`,
+
+  // === phone_text_reply_states ===
+  `CREATE TABLE IF NOT EXISTS "phone_text_reply_states" (
+    "player_id" uuid PRIMARY KEY REFERENCES "players"("id") ON DELETE CASCADE,
+    "conversation_id" uuid REFERENCES "phone_text_conversations"("id") ON DELETE SET NULL,
+    "updated_at" timestamptz NOT NULL DEFAULT now()
+  );`,
+
+  // === phone_text_message_tap_deliveries ===
+  `CREATE TABLE IF NOT EXISTS "phone_text_message_tap_deliveries" (
+    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    "message_id" uuid NOT NULL REFERENCES "phone_text_messages"("id") ON DELETE CASCADE,
+    "tap_id" uuid NOT NULL REFERENCES "phone_taps"("id") ON DELETE RESTRICT,
+    "mirror_message_id" varchar(20),
+    "delivered_at" timestamptz,
+    "error" varchar(500),
+    "created_at" timestamptz NOT NULL DEFAULT now()
+  );`,
+  `CREATE INDEX IF NOT EXISTS "phone_text_message_tap_deliveries_tap_created_idx"
+    ON "phone_text_message_tap_deliveries" ("tap_id", "created_at" DESC);`,
+  `CREATE INDEX IF NOT EXISTS "phone_text_message_tap_deliveries_pending_idx"
+    ON "phone_text_message_tap_deliveries" ("created_at")
+    WHERE delivered_at IS NULL AND error IS NULL;`,
 ];
 
 const validateStatements: string[] = [
@@ -496,6 +584,11 @@ const validateStatements: string[] = [
 
 const rollbackStatements: string[] = [
   // Reverse FK order: deliveries → audit_log → taps → threads → messages → calls → numbers.
+  `DROP TABLE IF EXISTS "phone_text_message_tap_deliveries" CASCADE;`,
+  `DROP TABLE IF EXISTS "phone_text_message_deliveries" CASCADE;`,
+  `DROP TABLE IF EXISTS "phone_text_reply_states" CASCADE;`,
+  `DROP TABLE IF EXISTS "phone_text_messages" CASCADE;`,
+  `DROP TABLE IF EXISTS "phone_text_conversations" CASCADE;`,
   `DROP TABLE IF EXISTS "phone_message_tap_deliveries" CASCADE;`,
   `DROP TABLE IF EXISTS "phone_tap_audit_log" CASCADE;`,
   `DROP FUNCTION IF EXISTS "phone_tap_audit_log_immutable"();`,

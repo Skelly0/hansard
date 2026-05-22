@@ -149,10 +149,11 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
     '/api/simulation/ailment',
     { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
-      const { playerId, condition, severity } = request.body as {
+      const { playerId, condition, severity, durationYears } = request.body as {
         playerId: string;
         condition: string;
         severity: 'minor' | 'major' | 'critical';
+        durationYears?: unknown;
       };
 
       if (!playerId || !condition || !severity) {
@@ -163,6 +164,18 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'Severity must be minor, major, or critical' });
       }
 
+      if (
+        durationYears !== undefined
+        && (
+          typeof durationYears !== 'number'
+          || !Number.isInteger(durationYears)
+          || durationYears < 1
+          || durationYears > 200
+        )
+      ) {
+        return reply.status(400).send({ error: 'durationYears must be an integer between 1 and 200' });
+      }
+
       try {
         const result = await simService.manualAilment(
           fastify.db,
@@ -170,6 +183,7 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
           condition,
           severity,
           request.session.user!.id,
+          durationYears === undefined ? undefined : { durationYears },
         );
         return result;
       } catch (err) {

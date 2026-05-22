@@ -2,6 +2,7 @@ import type { ChatInputCommandInteraction } from 'discord.js';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, playerEventLog, simulationClock } from '@hansard/db';
+import { advanceDateByTicks } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import { sendAilmentDmSafely } from '../../utils/ailmentNotifications.js';
@@ -40,8 +41,18 @@ type AilmentEntry = {
   severity: 'minor' | 'major' | 'critical';
   acquiredAtTick: number;
   acquiredAtAge: number;
+  durationYears?: number;
+  healsAtDate?: string;
   notes?: string;
 };
+
+function buildRecoveryLine(ailment: AilmentEntry): string | null {
+  if (!ailment.healsAtDate) return null;
+  const durationText = ailment.durationYears
+    ? ` after ${ailment.durationYears} year${ailment.durationYears === 1 ? '' : 's'}`
+    : '';
+  return `Expected recovery: ${ailment.healsAtDate}${durationText}`;
+}
 
 export async function executeAdd(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
@@ -50,6 +61,12 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
   const targetUser = interaction.options.getUser('user', true);
   const condition = interaction.options.getString('condition', true);
   const severity = interaction.options.getString('severity', true) as 'minor' | 'major' | 'critical';
+  const durationYears = interaction.options.getInteger('duration-years') ?? undefined;
+
+  if (durationYears !== undefined && (!Number.isInteger(durationYears) || durationYears < 1 || durationYears > 200)) {
+    await interaction.editReply({ embeds: [errorEmbed('Recovery duration must be an integer between 1 and 200 years.')] });
+    return;
+  }
 
   const [targetPlayer] = await db.select().from(players)
     .where(eq(players.discordId, targetUser.id));
@@ -70,6 +87,26 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
   const clock = await fetchClock();
   const currentTick = clock?.currentTick ?? 0;
   const currentDate = clock?.currentDate ?? 'unknown';
+  let recoveryFields: Pick<AilmentEntry, 'durationYears' | 'healsAtDate'> = {};
+  if (durationYears !== undefined) {
+    if (!clock) {
+      await interaction.editReply({
+        embeds: [errorEmbed('Cannot schedule timed recovery without a simulation clock.')],
+      });
+      return;
+    }
+
+    try {
+      recoveryFields = {
+        durationYears,
+        healsAtDate: advanceDateByTicks(clock.currentDate, durationYears, 'year'),
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not calculate recovery date.';
+      await interaction.editReply({ embeds: [errorEmbed(message)] });
+      return;
+    }
+  }
 
   const currentAilments = (targetPlayer.ailments ?? []) as AilmentEntry[];
 
@@ -83,6 +120,7 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
     severity,
     acquiredAtTick: currentTick,
     acquiredAtAge: targetPlayer.currentAge ?? 0,
+    ...recoveryFields,
     notes: 'Manually assigned by staff',
   };
 
@@ -97,7 +135,7 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
   await db.insert(playerEventLog).values({
     playerId: targetPlayer.id,
     eventType: 'ailment_acquired',
-    description: `Staff assigned ${severity} ailment: ${condition}`,
+    description: `Staff assigned ${severity} ailment: ${condition}${newAilment.healsAtDate ? `; expected recovery ${newAilment.healsAtDate}` : ''}`,
     newValue: newAilment,
     simTick: currentTick,
     simDate: currentDate,
@@ -112,6 +150,7 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
     condition,
     severity,
   }, { playerId: targetPlayer.id });
+  const recoveryLine = buildRecoveryLine(newAilment);
 
   const embed = createEmbed({
     title: 'Ailment Assigned',
@@ -119,6 +158,7 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
       `**${targetPlayer.characterName ?? targetUser.username}** has been afflicted with:`,
       '',
       `${severityEmoji} **${condition}** (${severity})`,
+      ...(recoveryLine ? ['', recoveryLine] : []),
       '',
       dmSent ? 'DM sent to player.' : 'DM could not be delivered; check bot logs.',
     ].join('\n'),

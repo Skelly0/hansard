@@ -1026,6 +1026,14 @@ const command: Command = {
               { name: 'Major', value: 'major' },
               { name: 'Critical', value: 'critical' },
             ),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('duration-years')
+            .setDescription('Optional in-game years until the ailment heals automatically')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(200),
         ),
     )
     .addSubcommand((sub) =>

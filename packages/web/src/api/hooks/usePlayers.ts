@@ -26,6 +26,8 @@ export interface Player {
     severity: 'minor' | 'major' | 'critical';
     acquiredAtTick: number;
     acquiredAtAge: number;
+    durationYears?: number;
+    healsAtDate?: string;
     notes?: string;
   }[];
   isActive: boolean;

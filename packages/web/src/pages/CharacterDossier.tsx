@@ -282,6 +282,11 @@ function OverviewTab({ player }: { player: PlayerDossier }) {
                     </Tag>
                     <span className="ml-2 font-mono text-xs">acquired age {a.acquiredAtAge}</span>
                   </p>
+                  {a.healsAtDate && (
+                    <p className="text-body-sm text-text-tertiary mt-1">
+                      Expected recovery: <span className="font-mono text-xs">{a.healsAtDate}</span>
+                    </p>
+                  )}
                   {a.notes && (
                     <p className="text-body-sm text-text-tertiary italic mt-1">{a.notes}</p>
                   )}

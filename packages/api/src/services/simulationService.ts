@@ -12,6 +12,7 @@ import {
 import {
   advanceDateByTicks,
   calculateAge,
+  parseSimDate,
   PlayerEventType,
   type AgingConfig,
   type AilmentPoolEntry,
@@ -67,6 +68,7 @@ export interface AdvanceResult {
   deathDetails: DeathDetail[];
   pendingDeathDetails: PendingDeathDetail[];
   ailmentDetails: AilmentDetail[];
+  recoveryDetails: AilmentDetail[];
   aged: number;
 }
 
@@ -252,6 +254,8 @@ interface AilmentEntry {
   severity: 'minor' | 'major' | 'critical';
   acquiredAtTick: number;
   acquiredAtAge: number;
+  durationYears?: number;
+  healsAtDate?: string;
   notes?: string;
 }
 
@@ -264,6 +268,60 @@ type RollStep = {
   date: string;
   unit: string;
 };
+
+function compareSimDates(left: string, right: string): number | null {
+  const parsedLeft = parseSimDate(left);
+  const parsedRight = parseSimDate(right);
+  if (!parsedLeft || !parsedRight) return null;
+
+  for (const key of ['year', 'month', 'day'] as const) {
+    if (parsedLeft[key] < parsedRight[key]) return -1;
+    if (parsedLeft[key] > parsedRight[key]) return 1;
+  }
+
+  return 0;
+}
+
+function splitDueRecoveries(
+  ailments: AilmentEntry[],
+  currentDate: string,
+): { active: AilmentEntry[]; recovered: AilmentEntry[] } {
+  const active: AilmentEntry[] = [];
+  const recovered: AilmentEntry[] = [];
+
+  for (const ailment of ailments) {
+    const healsAtDate = ailment.healsAtDate;
+    const comparison = typeof healsAtDate === 'string'
+      ? compareSimDates(healsAtDate, currentDate)
+      : null;
+
+    if (comparison !== null && comparison <= 0) {
+      recovered.push(ailment);
+    } else {
+      active.push(ailment);
+    }
+  }
+
+  return { active, recovered };
+}
+
+function buildAilmentRecoverySchedule(
+  currentDate: string | null,
+  durationYears: number | undefined,
+): Pick<AilmentEntry, 'durationYears' | 'healsAtDate'> {
+  if (durationYears === undefined) return {};
+  if (!Number.isInteger(durationYears) || durationYears < 1 || durationYears > 200) {
+    throw new Error('durationYears must be an integer between 1 and 200');
+  }
+  if (!currentDate) {
+    throw new Error('Cannot schedule timed recovery without a simulation clock date');
+  }
+
+  return {
+    durationYears,
+    healsAtDate: advanceDateByTicks(currentDate, durationYears, 'year'),
+  };
+}
 
 function buildRollStepsForTick(fromDate: string, toDate: string, tickUnit: string): RollStep[] {
   if (tickUnit !== 'year') {
@@ -407,15 +465,14 @@ function simulatePlayerTicks(
   finalAge: number | null;
   ageChanged: boolean;
   newAilments: { ailment: AilmentEntry; tick: number; date: string }[];
+  recoveredAilments: { ailment: AilmentEntry; tick: number; date: string }[];
   death: { cause: string; tick: number; date: string; age: number } | null;
 } {
   const startAge = calculateAge(state.birthDate, perTickDates[0] ?? null);
-  if (startAge == null) {
-    return { finalAge: null, ageChanged: false, newAilments: [], death: null };
-  }
 
   let lastAge = startAge;
   const newAilments: { ailment: AilmentEntry; tick: number; date: string }[] = [];
+  const recoveredAilments: { ailment: AilmentEntry; tick: number; date: string }[] = [];
 
   for (let i = 0; i < ticks; i++) {
     if (!state.isAlive) break;
@@ -425,6 +482,16 @@ function simulatePlayerTicks(
     const rollSteps = buildRollStepsForTick(visibleFromDate, visibleToDate, tickUnit);
 
     for (const step of rollSteps) {
+      const recovery = splitDueRecoveries(state.ailments, step.date);
+      if (recovery.recovered.length > 0) {
+        state.ailments = recovery.active;
+        for (const ailment of recovery.recovered) {
+          recoveredAilments.push({ ailment, tick: tickNum, date: step.date });
+        }
+      }
+
+      if (lastAge == null) continue;
+
       const ageThisStep = calculateAge(state.birthDate, step.date) ?? lastAge;
       lastAge = ageThisStep;
 
@@ -441,6 +508,7 @@ function simulatePlayerTicks(
           finalAge: ageThisStep,
           ageChanged: ageThisStep !== startAge,
           newAilments,
+          recoveredAilments,
           death: { cause: roll.death.cause, tick: tickNum, date: step.date, age: ageThisStep },
         };
       }
@@ -449,8 +517,9 @@ function simulatePlayerTicks(
 
   return {
     finalAge: lastAge,
-    ageChanged: lastAge !== startAge,
+    ageChanged: startAge != null && lastAge !== startAge,
     newAilments,
+    recoveredAilments,
     death: null,
   };
 }
@@ -523,6 +592,7 @@ export async function advanceTime(
   const deathDetails: DeathDetail[] = [];
   const pendingDeathDetails: PendingDeathDetail[] = [];
   const ailmentDetails: AilmentDetail[] = [];
+  const recoveryDetails: AilmentDetail[] = [];
   let agedCount = 0;
 
   await db.transaction(async (tx) => {
@@ -569,20 +639,44 @@ export async function advanceTime(
       };
 
       const result = simulatePlayerTicks(state, config, fromTick, ticks, perTickDates, clock.tickUnit);
-      if (result.finalAge == null) continue;
+      if (result.finalAge == null && result.recoveredAilments.length === 0) continue;
 
       if (result.ageChanged) agedCount++;
 
       // Persist new ailments + final age + health status
-      if (result.newAilments.length > 0 || result.ageChanged) {
+      if (result.newAilments.length > 0 || result.recoveredAilments.length > 0 || result.ageChanged) {
+        const updates: {
+          currentAge?: number;
+          ailments: AilmentEntry[];
+          healthStatus: string;
+        } = {
+          ailments: state.ailments,
+          healthStatus: getWorstSeverity(state.ailments),
+        };
+        if (result.finalAge != null) updates.currentAge = result.finalAge;
+
         await tx
           .update(players)
-          .set({
-            currentAge: result.finalAge,
-            ailments: state.ailments,
-            healthStatus: getWorstSeverity(state.ailments),
-          })
+          .set(updates)
           .where(eq(players.id, player.id));
+      }
+
+      for (const { ailment, tick, date } of result.recoveredAilments) {
+        await tx.insert(playerEventLog).values({
+          playerId: player.id,
+          eventType: PlayerEventType.AILMENT_RECOVERED,
+          description: `Recovered from ${ailment.severity} ailment: ${ailment.condition} (timed recovery)`,
+          oldValue: ailment,
+          simTick: tick,
+          simDate: date,
+          isAutomatic: true,
+        });
+        recoveryDetails.push({
+          playerId: player.id,
+          characterName: player.characterName,
+          condition: ailment.condition,
+          severity: ailment.severity,
+        });
       }
 
       for (const { ailment, tick, date } of result.newAilments) {
@@ -628,6 +722,7 @@ export async function advanceTime(
       deaths: deathDetails.map(d => d.playerId),
       pendingDeaths: pendingDeathDetails.map(d => d.playerId),
       ailments: ailmentDetails.map(a => a.playerId),
+      recoveries: recoveryDetails.map(a => a.playerId),
       aged: agedCount,
     };
 
@@ -650,11 +745,13 @@ export async function advanceTime(
       deaths: deathDetails.map(d => d.playerId),
       pendingDeaths: pendingDeathDetails.map(d => d.playerId),
       ailments: ailmentDetails.map(a => a.playerId),
+      recoveries: recoveryDetails.map(a => a.playerId),
       aged: agedCount,
     },
     deathDetails,
     pendingDeathDetails,
     ailmentDetails,
+    recoveryDetails,
     aged: agedCount,
   };
 }
@@ -681,6 +778,7 @@ export async function previewAdvance(
   const deathDetails: DeathDetail[] = [];
   const pendingDeathDetails: PendingDeathDetail[] = [];
   const ailmentDetails: AilmentDetail[] = [];
+  const recoveryDetails: AilmentDetail[] = [];
   let agedCount = 0;
 
   for (const player of livingPlayers) {
@@ -713,8 +811,17 @@ export async function previewAdvance(
     };
 
     const result = simulatePlayerTicks(state, config, fromTick, ticks, perTickDates, clock.tickUnit);
-    if (result.finalAge == null) continue;
+    if (result.finalAge == null && result.recoveredAilments.length === 0) continue;
     if (result.ageChanged) agedCount++;
+
+    for (const { ailment } of result.recoveredAilments) {
+      recoveryDetails.push({
+        playerId: player.id,
+        characterName: player.characterName,
+        condition: ailment.condition,
+        severity: ailment.severity,
+      });
+    }
 
     for (const { ailment } of result.newAilments) {
       ailmentDetails.push({
@@ -747,11 +854,13 @@ export async function previewAdvance(
       deaths: deathDetails.map(d => d.playerId),
       pendingDeaths: pendingDeathDetails.map(d => d.playerId),
       ailments: ailmentDetails.map(a => a.playerId),
+      recoveries: recoveryDetails.map(a => a.playerId),
       aged: agedCount,
     },
     deathDetails,
     pendingDeathDetails,
     ailmentDetails,
+    recoveryDetails,
     aged: agedCount,
   };
 }
@@ -765,6 +874,7 @@ export async function manualAilment(
   condition: string,
   severity: 'minor' | 'major' | 'critical',
   triggeredById?: string,
+  options: { durationYears?: number } = {},
 ) {
   const [player] = await db.select().from(players).where(eq(players.id, playerId));
   if (!player) throw new Error('Player not found');
@@ -779,6 +889,8 @@ export async function manualAilment(
     severity: 'minor' | 'major' | 'critical';
     acquiredAtTick: number;
     acquiredAtAge: number;
+    durationYears?: number;
+    healsAtDate?: string;
     notes?: string;
   }[];
 
@@ -792,6 +904,7 @@ export async function manualAilment(
     severity,
     acquiredAtTick: currentTick,
     acquiredAtAge: player.currentAge ?? 0,
+    ...buildAilmentRecoverySchedule(clock?.currentDate ?? null, options.durationYears),
     notes: 'Manually assigned by staff',
   };
 
@@ -809,7 +922,7 @@ export async function manualAilment(
   await db.insert(playerEventLog).values({
     playerId,
     eventType: 'ailment_acquired',
-    description: `Staff assigned ${severity} ailment: ${condition}`,
+    description: `Staff assigned ${severity} ailment: ${condition}${newAilment.healsAtDate ? `; expected recovery ${newAilment.healsAtDate}` : ''}`,
     newValue: newAilment,
     simTick: currentTick,
     simDate: currentDate,
@@ -841,6 +954,8 @@ export async function heal(
     severity: 'minor' | 'major' | 'critical';
     acquiredAtTick: number;
     acquiredAtAge: number;
+    durationYears?: number;
+    healsAtDate?: string;
     notes?: string;
   }[];
 
@@ -1009,6 +1124,7 @@ function sanitizeAdvanceSummary(
     deaths: [],
     pendingDeaths: [],
     ailments: [],
+    recoveries: [],
   };
 }
 

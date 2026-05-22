@@ -58,6 +58,7 @@ export interface TimeAdvanceSummary {
   deaths: string[];
   pendingDeaths?: string[];
   ailments: string[];
+  recoveries?: string[];
   aged: number;
 }
 

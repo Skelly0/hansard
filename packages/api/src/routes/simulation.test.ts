@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getClock: vi.fn(),
   advanceTime: vi.fn(),
   previewAdvance: vi.fn(),
+  manualAilment: vi.fn(),
 }));
 
 vi.mock('../middleware/requireAuth.js', () => ({
@@ -24,7 +25,7 @@ vi.mock('../services/simulationService.js', () => ({
   advanceTime: mocks.advanceTime,
   previewAdvance: mocks.previewAdvance,
   getHistory: vi.fn(),
-  manualAilment: vi.fn(),
+  manualAilment: mocks.manualAilment,
   manualDeath: vi.fn(),
   heal: vi.fn(),
 }));
@@ -48,6 +49,7 @@ describe('simulation routes', () => {
     mocks.getClock.mockResolvedValue({ id: 'clock-1', tickUnit: 'year' });
     mocks.advanceTime.mockResolvedValue({ ok: true });
     mocks.previewAdvance.mockResolvedValue({ ok: true });
+    mocks.manualAilment.mockResolvedValue({ ok: true });
   });
 
   it('rejects non-numeric advance ticks before calling the service', async () => {
@@ -100,5 +102,30 @@ describe('simulation routes', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: 'tickUnit must be one of: day, week, month, year' });
+  });
+
+  it('passes optional timed ailment duration to manualAilment', async () => {
+    const app = await appWithSimulationRoutes();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/simulation/ailment',
+      payload: {
+        playerId: 'player-1',
+        condition: 'Head Trauma',
+        severity: 'major',
+        durationYears: 5,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mocks.manualAilment).toHaveBeenCalledWith(
+      expect.anything(),
+      'player-1',
+      'Head Trauma',
+      'major',
+      'staff-player',
+      { durationYears: 5 },
+    );
   });
 });

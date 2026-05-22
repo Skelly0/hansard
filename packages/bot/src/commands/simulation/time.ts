@@ -60,6 +60,7 @@ function buildPublicAdvanceLines(result: TimeAdvanceResult): string[] {
 
 function buildDetailedAdvanceLines(result: TimeAdvanceResult): string[] {
   const lines = buildAdvanceHeaderLines(result);
+  const recoveryDetails = result.recoveryDetails ?? [];
 
   if (result.ailmentDetails.length > 0) {
     lines.push('', '**New Ailments:**');
@@ -75,7 +76,18 @@ function buildDetailedAdvanceLines(result: TimeAdvanceResult): string[] {
     }
   }
 
-  if (result.ailmentDetails.length === 0 && result.deathDetails.length === 0) {
+  if (recoveryDetails.length > 0) {
+    lines.push('', '**Recovered Ailments:**');
+    for (const a of recoveryDetails) {
+      lines.push(`• **${a.characterName ?? 'Unknown'}** — ${a.condition} (${a.severity})`);
+    }
+  }
+
+  if (
+    result.ailmentDetails.length === 0
+    && recoveryDetails.length === 0
+    && result.deathDetails.length === 0
+  ) {
     lines.push('', '_No ailments or deaths this tick._');
   }
 
@@ -297,15 +309,16 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
   const lines = rows.map((row) => {
     const advancer = nameMap.get(row.advancedById) ?? '_unknown_';
     const ticks = row.toTick - row.fromTick;
-    const summary = row.summary ?? { deaths: [], ailments: [], aged: 0 };
+    const summary = row.summary ?? { deaths: [], ailments: [], recoveries: [], aged: 0 };
     const deaths = summary.deaths?.length ?? 0;
     const ailments = summary.ailments?.length ?? 0;
+    const recoveries = summary.recoveries?.length ?? 0;
     const aged = summary.aged ?? 0;
     const when = `<t:${Math.floor(row.createdAt.getTime() / 1000)}:R>`;
     return [
       `**${row.fromDate}** → **${row.toDate}** (${ticks > 0 ? '+' : ''}${ticks} tick${ticks === 1 ? '' : 's'})`,
       `  by **${advancer}** • ${when}`,
-      `  aged: ${aged} • ailments: ${ailments} • deaths: ${deaths}`,
+      `  aged: ${aged} • ailments: ${ailments} • recoveries: ${recoveries} • deaths: ${deaths}`,
     ].join('\n');
   });
 
@@ -427,6 +440,13 @@ async function handlePreview(interaction: ChatInputCommandInteraction): Promise<
       }
     }
 
+    if ((result.recoveryDetails ?? []).length > 0) {
+      lines.push('', '**Potential Recoveries:**');
+      for (const a of result.recoveryDetails ?? []) {
+        lines.push(`• **${a.characterName ?? 'Unknown'}** — ${a.condition} (${a.severity})`);
+      }
+    }
+
     if (result.deathDetails.length > 0) {
       lines.push('', '⚰️ **Potential Deaths:**');
       for (const d of result.deathDetails) {
@@ -445,6 +465,7 @@ async function handlePreview(interaction: ChatInputCommandInteraction): Promise<
 
     if (
       result.ailmentDetails.length === 0
+      && (result.recoveryDetails ?? []).length === 0
       && result.deathDetails.length === 0
       && result.pendingDeathDetails.length === 0
     ) {

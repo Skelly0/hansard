@@ -69,6 +69,7 @@ function makeInteraction(send = vi.fn().mockResolvedValue({ id: 'dm-1' })) {
           condition: 'cancer',
           severity: 'major',
         })[name]),
+        getInteger: vi.fn().mockReturnValue(null),
       },
       deferReply: vi.fn(),
       editReply: vi.fn(),
@@ -128,5 +129,36 @@ describe('/character ailment-add', () => {
     }));
     const reply = interaction.editReply.mock.calls[0][0];
     expect(reply.embeds[0].toJSON().description).toContain('DM could not be delivered');
+  });
+
+  it('stores an optional staff-provided recovery lifetime', async () => {
+    const { interaction } = makeInteraction();
+    interaction.options.getString.mockImplementation((name: string) => ({
+      condition: 'Head Trauma',
+      severity: 'major',
+    })[name]);
+    interaction.options.getInteger.mockImplementation((name: string) =>
+      name === 'duration-years' ? 5 : null,
+    );
+
+    await executeAdd(interaction as any);
+
+    const updateSet = mocks.update.mock.results[0]!.value.set;
+    expect(updateSet.mock.calls[0][0].ailments[0]).toMatchObject({
+      condition: 'Head Trauma',
+      severity: 'major',
+      durationYears: 5,
+      healsAtDate: '2031-02-01',
+    });
+
+    const insertValues = mocks.insert.mock.results[0]!.value.values;
+    expect(insertValues.mock.calls[0][0].newValue).toMatchObject({
+      condition: 'Head Trauma',
+      durationYears: 5,
+      healsAtDate: '2031-02-01',
+    });
+
+    const reply = interaction.editReply.mock.calls[0][0];
+    expect(reply.embeds[0].toJSON().description).toContain('Expected recovery: 2031-02-01');
   });
 });

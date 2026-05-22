@@ -217,6 +217,107 @@ describe('advanceTime death grace period', () => {
   });
 });
 
+describe('advanceTime timed ailment recovery', () => {
+  it('automatically heals ailments whose recovery date has arrived', async () => {
+    const clock = makeClock({
+      currentTick: 10,
+      currentDate: '2026-01-01',
+      tickUnit: 'year',
+      agingConfig: {
+        ...DEFAULT_AGING_CONFIG,
+        ailmentAgeThreshold: 999,
+        deathAgeThreshold: 999,
+      },
+    });
+    const player = makePlayer({
+      birthDate: '1986-01-01',
+      currentAge: 40,
+      healthStatus: 'major',
+      ailments: [{
+        condition: 'Head Trauma',
+        severity: 'major',
+        acquiredAtTick: 10,
+        acquiredAtAge: 40,
+        durationYears: 5,
+        healsAtDate: '2031-01-01',
+      }],
+    });
+    const { db, eventLog, timeLog } = makeSimulationDb(clock, [player]);
+
+    const result = await advanceTime(db, 5, 'staff-1');
+
+    expect(result.recoveryDetails).toEqual([{
+      playerId: 'player-1',
+      characterName: 'Ada Mortalis',
+      condition: 'Head Trauma',
+      severity: 'major',
+    }]);
+    expect(result.summary.recoveries).toEqual(['player-1']);
+    expect(player.ailments).toEqual([]);
+    expect(player.healthStatus).toBe('healthy');
+    expect(eventLog).toContainEqual(expect.objectContaining({
+      playerId: 'player-1',
+      eventType: 'ailment_recovered',
+      description: 'Recovered from major ailment: Head Trauma (timed recovery)',
+      oldValue: expect.objectContaining({
+        condition: 'Head Trauma',
+        healsAtDate: '2031-01-01',
+      }),
+      simTick: 15,
+      simDate: '2031-01-01',
+      isAutomatic: true,
+    }));
+    expect(timeLog[0].summary).toMatchObject({
+      recoveries: ['player-1'],
+    });
+  });
+
+  it('heals timed ailments even when age cannot be calculated', async () => {
+    const clock = makeClock({
+      currentTick: 10,
+      currentDate: '2026-01-01',
+      tickUnit: 'year',
+      agingConfig: {
+        ...DEFAULT_AGING_CONFIG,
+        ailmentAgeThreshold: 999,
+        deathAgeThreshold: 999,
+      },
+    });
+    const player = makePlayer({
+      birthDate: null,
+      currentAge: null,
+      healthStatus: 'major',
+      ailments: [{
+        condition: 'Head Trauma',
+        severity: 'major',
+        acquiredAtTick: 10,
+        acquiredAtAge: 0,
+        durationYears: 5,
+        healsAtDate: '2031-01-01',
+      }],
+    });
+    const { db, eventLog } = makeSimulationDb(clock, [player]);
+
+    const result = await advanceTime(db, 5, 'staff-1');
+
+    expect(result.recoveryDetails).toEqual([{
+      playerId: 'player-1',
+      characterName: 'Ada Mortalis',
+      condition: 'Head Trauma',
+      severity: 'major',
+    }]);
+    expect(player.currentAge).toBeNull();
+    expect(player.ailments).toEqual([]);
+    expect(player.healthStatus).toBe('healthy');
+    expect(eventLog).toContainEqual(expect.objectContaining({
+      eventType: 'ailment_recovered',
+      simTick: 15,
+      simDate: '2031-01-01',
+      isAutomatic: true,
+    }));
+  });
+});
+
 describe('advanceTime tick-unit rate scaling', () => {
   it('keeps twelve monthly ticks aligned with one yearly tick at month end', async () => {
     const agingConfig = {
@@ -418,6 +519,7 @@ describe('simulation history privacy', () => {
       deaths: [],
       pendingDeaths: [],
       ailments: [],
+      recoveries: [],
       aged: 4,
     });
     expect(result.notes).toBeNull();

@@ -199,7 +199,7 @@ function ControlsCard() {
               </div>
 
               {/* Metrics row */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                 <MetricCard
                   label="Deaths"
                   value={preview.deathDetails.length}
@@ -216,6 +216,12 @@ function ControlsCard() {
                   label="New Ailments"
                   value={preview.ailmentDetails.length}
                   color={preview.ailmentDetails.length > 0 ? 'text-health-major' : 'text-text-tertiary'}
+                  borderColor="border-border-subtle"
+                />
+                <MetricCard
+                  label="Recoveries"
+                  value={preview.recoveryDetails.length}
+                  color={preview.recoveryDetails.length > 0 ? 'text-status-passed' : 'text-text-tertiary'}
                   borderColor="border-border-subtle"
                 />
                 <MetricCard
@@ -291,6 +297,28 @@ function ControlsCard() {
                   </div>
                 </div>
               )}
+
+              {/* Recovery details */}
+              {preview.recoveryDetails.length > 0 && (
+                <div>
+                  <p className="text-label-ui text-text-tertiary mb-2">Recovered Ailments</p>
+                  <div className="space-y-1">
+                    {preview.recoveryDetails.map((a) => (
+                      <div
+                        key={`${a.playerId}-recovery-${a.condition}`}
+                        className="flex items-center justify-between bg-status-passed/[0.05] border border-status-passed/10 rounded-card px-3 py-2"
+                      >
+                        <span className="text-body-sm text-text-primary font-medium">
+                          {a.characterName ?? 'Unknown'}
+                        </span>
+                        <span className="font-mono text-xs text-text-tertiary">
+                          {a.condition} &middot; {a.severity}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-body-sm text-text-tertiary italic">
@@ -347,6 +375,7 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
   const deaths = entry.summary?.deaths ?? [];
   const pendingDeaths = entry.summary?.pendingDeaths ?? [];
   const ailments = entry.summary?.ailments ?? [];
+  const recoveries = entry.summary?.recoveries ?? [];
   const aged = entry.summary?.aged ?? 0;
 
   return (
@@ -389,17 +418,22 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
             {ailments.length} ailment{ailments.length !== 1 ? 's' : ''}
           </span>
         )}
+        {recoveries.length > 0 && (
+          <span className="text-status-passed">
+            {recoveries.length} recover{recoveries.length !== 1 ? 'ies' : 'y'}
+          </span>
+        )}
         {aged > 0 && (
           <span className="text-accent-simulation">
             {aged} aged
           </span>
         )}
-        {deaths.length === 0 && pendingDeaths.length === 0 && ailments.length === 0 && aged === 0 && (
+        {deaths.length === 0 && pendingDeaths.length === 0 && ailments.length === 0 && recoveries.length === 0 && aged === 0 && (
           <span className="text-text-tertiary italic">Uneventful advance</span>
         )}
       </div>
 
-      {/* Death / ailment names */}
+      {/* Death / ailment / recovery names */}
       {deaths.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {deaths.map((name) => (
@@ -418,6 +452,13 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
         <div className="mt-2 flex flex-wrap gap-1.5">
           {ailments.map((name) => (
             <Tag key={name} color="pending">{name}</Tag>
+          ))}
+        </div>
+      )}
+      {recoveries.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {recoveries.map((name) => (
+            <Tag key={name} color="passed">{name}</Tag>
           ))}
         </div>
       )}
@@ -626,15 +667,33 @@ function AilmentModal({
   const [condition, setCondition] = useState('');
   const [severity, setSeverity] = useState<'minor' | 'major' | 'critical'>('minor');
   const [notes, setNotes] = useState('');
+  const [durationYears, setDurationYears] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
     setError(null);
     if (!condition.trim()) { setError('Condition is required.'); return; }
+    const trimmedDuration = durationYears.trim();
+    let parsedDurationYears: number | undefined;
+    if (trimmedDuration) {
+      const numericDuration = Number(trimmedDuration);
+      if (!Number.isInteger(numericDuration) || numericDuration < 1 || numericDuration > 200) {
+        setError('Recovery duration must be an integer between 1 and 200 years.');
+        return;
+      }
+      parsedDurationYears = numericDuration;
+    }
     try {
-      await assign.mutateAsync({ playerId, condition: condition.trim(), severity, notes: notes.trim() || undefined });
+      await assign.mutateAsync({
+        playerId,
+        condition: condition.trim(),
+        severity,
+        notes: notes.trim() || undefined,
+        durationYears: parsedDurationYears,
+      });
       setCondition('');
       setNotes('');
+      setDurationYears('');
       onClose();
     } catch (e: any) {
       setError(e?.message ?? 'Could not assign ailment.');
@@ -680,6 +739,18 @@ function AilmentModal({
         <label className="block">
           <span className="text-label-ui text-text-tertiary block mb-1">Notes</span>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${fc} resize-y`} />
+        </label>
+        <label className="block">
+          <span className="text-label-ui text-text-tertiary block mb-1">Recovery duration</span>
+          <input
+            type="number"
+            min={1}
+            max={200}
+            value={durationYears}
+            onChange={(e) => setDurationYears(e.target.value)}
+            placeholder="Optional years until healed"
+            className={fc}
+          />
         </label>
         {error && <p className="text-body-sm text-status-rejected">{error}</p>}
       </div>

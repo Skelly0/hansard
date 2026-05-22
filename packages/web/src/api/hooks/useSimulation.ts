@@ -27,6 +27,7 @@ export interface TimeAdvanceEntry {
     deaths: string[];
     pendingDeaths?: string[];
     ailments: string[];
+    recoveries?: string[];
     aged: number;
   };
   notes?: string;
@@ -70,11 +71,13 @@ export interface AdvancePreview {
     deaths: string[];
     pendingDeaths?: string[];
     ailments: string[];
+    recoveries?: string[];
     aged: number;
   };
   deathDetails: AdvanceDetail[];
   pendingDeathDetails: PendingDeathDetail[];
   ailmentDetails: AilmentDetail[];
+  recoveryDetails: AilmentDetail[];
   aged: number;
 }
 
@@ -146,7 +149,7 @@ export function useUpdateClock() {
 export function useAssignAilment() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { playerId: string; condition: string; severity: 'minor' | 'major' | 'critical'; notes?: string }) =>
+    mutationFn: (body: { playerId: string; condition: string; severity: 'minor' | 'major' | 'critical'; notes?: string; durationYears?: number }) =>
       api.post('/simulation/ailment', body),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['players', vars.playerId] });

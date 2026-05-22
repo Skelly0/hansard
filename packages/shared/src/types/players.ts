@@ -16,6 +16,8 @@ export interface Ailment {
   severity: AilmentSeverity;
   acquiredAtTick: number;
   acquiredAtAge: number;
+  durationYears?: number;
+  healsAtDate?: string;
   notes?: string;
 }
 

@@ -44,7 +44,9 @@ export const timeAdvanceLog = pgTable('time_advance_log', {
   // Summary of what happened during this tick
   summary: jsonb('summary').$type<{
     deaths: string[];           // player IDs who died
+    pendingDeaths?: string[];   // player IDs whose death roll is in grace
     ailments: string[];         // player IDs who got new ailments
+    recoveries?: string[];      // player IDs whose timed ailments healed
     aged: number;               // how many players aged
     // TODO: economy changes, popsim shifts
   }>(),

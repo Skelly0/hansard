@@ -25,6 +25,8 @@ interface AilmentEntry {
   severity: 'minor' | 'major' | 'critical';
   acquiredAtTick: number;
   acquiredAtAge: number;
+  durationYears?: number;
+  healsAtDate?: string;
   notes?: string;
 }
 
@@ -88,8 +90,9 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           .map((a) => {
             const sev = SEVERITY_DISPLAY[a.severity] ?? a.severity;
             const acquired = `acquired age ${a.acquiredAtAge} (tick ${a.acquiredAtTick})`;
+            const recovery = a.healsAtDate ? `\n  Expected recovery: ${a.healsAtDate}` : '';
             const notes = a.notes ? `\n  *${a.notes}*` : '';
-            return `• **${a.condition}** — ${sev}, ${acquired}${notes}`;
+            return `• **${a.condition}** — ${sev}, ${acquired}${recovery}${notes}`;
           })
           .join('\n')
       : '*No active ailments.*';

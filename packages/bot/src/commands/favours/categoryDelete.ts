@@ -4,6 +4,7 @@ import { favourCategories } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
@@ -40,6 +41,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       .set({ isActive: false })
       .where(eq(favourCategories.id, target.id));
 
+    await postStaffActionLog(interaction, {
+      title: 'Favour Category Deactivated',
+      system: 'favours',
+      fields: [
+        { name: 'Category', value: target.name, inline: true },
+        { name: 'ID', value: `\`${target.id}\``, inline: true },
+      ],
+    });
     await interaction.editReply({
       embeds: [successEmbed(
         'Favour Category Deactivated',

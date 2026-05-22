@@ -8,6 +8,7 @@ import { FavourTransactionType } from '@hansard/shared';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 import { autocompleteFavourCategory } from './_categoryAutocomplete.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -141,6 +142,17 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       ].join('\n'),
     );
 
+    await postStaffActionLog(interaction, {
+      title: 'Favours Removed',
+      system: 'favours',
+      fields: [
+        { name: 'Player', value: `**${playerName}** (<@${targetUser.id}>)`, inline: true },
+        { name: 'Category', value: category.name, inline: true },
+        { name: 'Amount', value: `-${amount}`, inline: true },
+        { name: 'New Balance', value: `${newBalance}`, inline: true },
+        { name: 'Reason', value: reason },
+      ],
+    });
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Removal failed';

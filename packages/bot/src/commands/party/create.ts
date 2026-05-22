@@ -4,6 +4,7 @@ import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { refreshPartyJoinMessage } from '../../utils/partyJoinMessage.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
@@ -76,6 +77,16 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       boardRefreshNotice,
     ].filter(Boolean).join('\n');
 
+    await postStaffActionLog(interaction, {
+      title: 'Party Created',
+      system: 'players',
+      fields: [
+        { name: 'Party', value: party.name, inline: true },
+        { name: 'ID', value: `\`${party.id}\``, inline: true },
+        { name: 'Access', value: party.isInviteOnly ? 'invite-only' : 'open join', inline: true },
+        ...(party.discordRoleId ? [{ name: 'Role', value: `<@&${party.discordRoleId}>`, inline: true }] : []),
+      ],
+    });
     await interaction.editReply({ embeds: [successEmbed('Party Founded', lines)] });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create party';

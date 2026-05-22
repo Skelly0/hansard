@@ -5,6 +5,7 @@ import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { refreshPartyJoinMessage } from '../../utils/partyJoinMessage.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 const PARTY_JOIN_BOARD_FIELDS = new Set(['name', 'shortName', 'ideology', 'colour', 'isActive', 'isInviteOnly']);
 
@@ -124,6 +125,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     }
 
     const changed = Object.keys(updates).join(', ');
+    await postStaffActionLog(interaction, {
+      title: 'Party Updated',
+      system: 'players',
+      fields: [
+        { name: 'Party', value: updated.name, inline: true },
+        { name: 'ID', value: `\`${updated.id}\``, inline: true },
+        { name: 'Fields Changed', value: changed },
+      ],
+    });
     await interaction.editReply({
       embeds: [successEmbed(
         'Party Updated',

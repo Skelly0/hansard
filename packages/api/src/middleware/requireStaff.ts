@@ -9,4 +9,6 @@ export async function requireStaff(request: FastifyRequest, reply: FastifyReply)
   if (!request.player?.isStaff) {
     return reply.status(403).send({ error: 'Staff access required' });
   }
+
+  request.staffActionLog = true;
 }

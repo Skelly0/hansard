@@ -3,6 +3,7 @@ import { favourCategories } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
@@ -57,6 +58,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       `\nID: \`${category.id}\``,
     ].filter(Boolean).join('\n');
 
+    await postStaffActionLog(interaction, {
+      title: 'Favour Category Created',
+      system: 'favours',
+      fields: [
+        { name: 'Category', value: category.name, inline: true },
+        { name: 'ID', value: `\`${category.id}\``, inline: true },
+        ...(category.shortName ? [{ name: 'Short Name', value: category.shortName, inline: true }] : []),
+        ...(spendableOn && spendableOn.length > 0
+          ? [{ name: 'Spendable On', value: spendableOn.join(', ') }]
+          : []),
+      ],
+    });
     await interaction.editReply({ embeds: [successEmbed('Favour Category Created', lines)] });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create category';

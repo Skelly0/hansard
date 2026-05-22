@@ -17,6 +17,7 @@ import {
 } from '@hansard/api/services/favourService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 import { clearPartyLeaderIfMatches } from '../party/shared.js';
 
 export const ADMIN_MIN_AGE = 18;
@@ -263,6 +264,18 @@ export async function executeCharacterCreate(interaction: ChatInputCommandIntera
       ].join('\n'),
     );
     if (portraitUrl) embed.setThumbnail(portraitUrl);
+    await postStaffActionLog(interaction, {
+      title: isReincarnation ? 'Character Successor Registered' : 'Character Created',
+      system: 'players',
+      fields: [
+        { name: 'User', value: targetUser.toString(), inline: true },
+        { name: 'Character', value: characterName, inline: true },
+        { name: 'Age', value: `${startingAge}`, inline: true },
+        { name: 'Faction', value: factionDisplay, inline: true },
+        { name: 'Party', value: partyDisplay, inline: true },
+        ...(favourBonus > 0 ? [{ name: 'Starting Favours', value: `${favourBonus}`, inline: true }] : []),
+      ],
+    });
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
     const raw = error instanceof Error ? error.message : 'Failed to create character';
@@ -391,6 +404,16 @@ export async function executeChangeParty(interaction: ChatInputCommandInteractio
     ],
   });
 
+  await postStaffActionLog(interaction, {
+    title: 'Player Party Changed',
+    system: 'players',
+    fields: [
+      { name: 'Player', value: `**${target.characterName}** (${targetUser.toString()})`, inline: true },
+      { name: 'From', value: oldPartyName ?? 'Independent', inline: true },
+      { name: 'To', value: newPartyName ?? 'Independent', inline: true },
+      ...(roleSyncWarning ? [{ name: 'Warning', value: roleSyncWarning }] : []),
+    ],
+  });
   await interaction.editReply({ embeds: [embed] });
 }
 

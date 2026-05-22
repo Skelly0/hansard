@@ -16,6 +16,7 @@ import { FavourTransactionType } from '@hansard/shared';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 import { autocompleteFavourCategory } from './_categoryAutocomplete.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -175,6 +176,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     failures.length > 0 ? `\n**Failures (${failures.length}):**\n${failures.slice(0, 10).join('\n')}` : '',
   ].filter(Boolean).join('\n');
 
+  await postStaffActionLog(interaction, {
+    title: 'Bulk Favours Granted',
+    system: 'favours',
+    fields: [
+      { name: 'Scope', value: groupLabel.replace(/\*\*/g, ''), inline: true },
+      { name: 'Category', value: category.name, inline: true },
+      { name: 'Recipients', value: `${succeeded}`, inline: true },
+      { name: 'Amount Each', value: `+${amount}`, inline: true },
+      { name: 'Total Granted', value: `${totalGranted}`, inline: true },
+      ...(reason ? [{ name: 'Reason', value: reason }] : []),
+    ],
+  });
   await interaction.editReply({ embeds: [successEmbed('Bulk Favour Grant', description)] });
 }
 

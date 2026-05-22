@@ -7,6 +7,7 @@ import { DrizzleSessionStore } from './sessionStore.js';
 import corsPlugin from './plugins/cors.js';
 import rateLimitPlugin from './plugins/rateLimit.js';
 import dbPlugin from './plugins/db.js';
+import staffActionModLogPlugin from './plugins/staffActionModLog.js';
 import authRoutes from './routes/auth.js';
 import dashboardRoutes from './routes/dashboard.js';
 import playerRoutes from './routes/players.js';
@@ -95,6 +96,10 @@ export async function buildApp() {
     },
     saveUninitialized: false,
   });
+
+  // Mirror successful web/API staff mutations into the same Discord mod log
+  // used by staff slash commands.
+  await fastify.register(staffActionModLogPlugin);
 
   // --- Health check ---
   fastify.get('/api/health', async () => ({

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   insert: vi.fn(),
   isStaff: vi.fn(),
+  postStaffActionLog: vi.fn(),
 }));
 
 vi.mock('../../db.js', () => ({
@@ -18,6 +19,10 @@ vi.mock('../../db.js', () => ({
 
 vi.mock('../../utils/permissions.js', () => ({
   isStaff: mocks.isStaff,
+}));
+
+vi.mock('../../utils/modLog.js', () => ({
+  postStaffActionLog: mocks.postStaffActionLog,
 }));
 
 function selectWhereResult(rows: unknown[]) {
@@ -160,5 +165,25 @@ describe('/character ailment-add', () => {
 
     const reply = interaction.editReply.mock.calls[0][0];
     expect(reply.embeds[0].toJSON().description).toContain('Expected recovery: 2031-02-01');
+  });
+
+  it('posts a staff action log when staff assigns an ailment', async () => {
+    const { interaction } = makeInteraction();
+
+    await executeAdd(interaction as any);
+
+    expect(mocks.postStaffActionLog).toHaveBeenCalledTimes(1);
+    expect(mocks.postStaffActionLog).toHaveBeenCalledWith(
+      interaction,
+      expect.objectContaining({
+        title: 'Ailment Assigned',
+        system: 'simulation',
+        fields: expect.arrayContaining([
+          expect.objectContaining({ name: 'Player', value: '**Mira Sol** (<@discord-target>)' }),
+          expect.objectContaining({ name: 'Condition', value: 'cancer' }),
+          expect.objectContaining({ name: 'Severity', value: 'major' }),
+        ]),
+      }),
+    );
   });
 });

@@ -4,6 +4,7 @@ import { favourCategories } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
@@ -82,6 +83,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       .returning();
 
     const changed = Object.keys(updates).join(', ');
+    await postStaffActionLog(interaction, {
+      title: 'Favour Category Updated',
+      system: 'favours',
+      fields: [
+        { name: 'Category', value: updated.name, inline: true },
+        { name: 'ID', value: `\`${updated.id}\``, inline: true },
+        { name: 'Fields Changed', value: changed },
+      ],
+    });
     await interaction.editReply({
       embeds: [successEmbed(
         'Favour Category Updated',

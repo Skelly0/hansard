@@ -4,6 +4,7 @@ import { offices } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 const KNOWN_PERMISSIONS = [
   'legislative_leader',
@@ -221,6 +222,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   try {
     await db.update(offices).set(updates).where(eq(offices.id, target.id));
 
+    await postStaffActionLog(interaction, {
+      title: 'Office Updated',
+      system: 'offices',
+      fields: [
+        { name: 'Office', value: target.name, inline: true },
+        { name: 'Field', value: field, inline: true },
+        { name: 'Change', value: changeSummary },
+      ],
+    });
     await interaction.editReply({
       embeds: [
         successEmbed(

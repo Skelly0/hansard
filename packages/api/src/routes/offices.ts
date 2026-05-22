@@ -108,6 +108,7 @@ export default async function officeRoutes(fastify: FastifyInstance) {
     '/api/offices/:id/appoint',
     { preHandler: [requireAuth, requireRole('appoint_ministers')] },
     async (request, reply) => {
+      request.staffActionLog = true;
       try {
         const result = await appointToOffice(
           fastify.db,
@@ -133,6 +134,7 @@ export default async function officeRoutes(fastify: FastifyInstance) {
     '/api/offices/:id/remove',
     { preHandler: [requireAuth, requireRole('appoint_ministers')] },
     async (request, reply) => {
+      request.staffActionLog = true;
       try {
         const result = await removeFromOffice(
           fastify.db,

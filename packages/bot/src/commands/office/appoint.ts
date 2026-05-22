@@ -9,6 +9,7 @@ import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { autocompleteOffice } from './_officeAutocomplete.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
@@ -181,6 +182,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   const embed = successEmbed('Appointment Confirmed', description);
 
+  await postStaffActionLog(interaction, {
+    title: 'Office Holder Appointed',
+    system: 'offices',
+    fields: [
+      { name: 'Player', value: `**${playerName}** (<@${targetUser.id}>)`, inline: true },
+      { name: 'Office', value: officeMatch.name, inline: true },
+      ...(roleSyncWarning ? [{ name: 'Warning', value: roleSyncWarning }] : []),
+    ],
+  });
   await interaction.editReply({ embeds: [embed] });
 }
 

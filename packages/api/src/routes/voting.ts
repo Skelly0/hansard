@@ -107,6 +107,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
           });
         }
       }
+      if (request.player?.isStaff) request.staffActionLog = true;
 
       const election = await service.createElection({
         ...body,
@@ -136,6 +137,9 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       }
       if (election.createdById !== user.id && !request.player?.isStaff) {
         return reply.status(403).send({ error: 'Only the creator or staff can update this election' });
+      }
+      if (request.player?.isStaff && election.createdById !== user.id) {
+        request.staffActionLog = true;
       }
 
       const updated = await service.updateElection(id, body);
@@ -236,6 +240,9 @@ export default async function votingRoutes(fastify: FastifyInstance) {
           error: 'Only staff can nominate other players',
         });
       }
+      if (targetPlayerId !== user.id && request.player?.isStaff) {
+        request.staffActionLog = true;
+      }
 
       try {
         const candidate = await service.registerCandidate({
@@ -274,6 +281,9 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const isOwner = election.createdById === user.id;
       if (!isSelf && !isOwner && !request.player?.isStaff) {
         return reply.status(403).send({ error: 'Not allowed to withdraw this candidate' });
+      }
+      if (!isSelf && !isOwner && request.player?.isStaff) {
+        request.staffActionLog = true;
       }
 
       const updated = await service.withdrawCandidate(id, playerId);

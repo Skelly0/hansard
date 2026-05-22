@@ -6,6 +6,7 @@ import { advanceDateByTicks } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import { sendAilmentDmSafely } from '../../utils/ailmentNotifications.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 async function ensureStaff(interaction: ChatInputCommandInteraction): Promise<boolean> {
   if (!interaction.guild || !interaction.member) {
@@ -169,6 +170,17 @@ export async function executeAdd(interaction: ChatInputCommandInteraction): Prom
     ],
   });
 
+  await postStaffActionLog(interaction, {
+    title: 'Ailment Assigned',
+    system: 'simulation',
+    fields: [
+      { name: 'Player', value: `**${targetPlayer.characterName ?? targetUser.username}** (<@${targetUser.id}>)`, inline: true },
+      { name: 'Condition', value: condition, inline: true },
+      { name: 'Severity', value: severity, inline: true },
+      { name: 'Health Status', value: worstSeverity, inline: true },
+      ...(recoveryLine ? [{ name: 'Recovery', value: recoveryLine }] : []),
+    ],
+  });
   await interaction.editReply({ embeds: [embed] });
 }
 
@@ -231,5 +243,15 @@ export async function executeRemove(interaction: ChatInputCommandInteraction): P
     ].join('\n'),
   );
 
+  await postStaffActionLog(interaction, {
+    title: 'Ailment Removed',
+    system: 'simulation',
+    fields: [
+      { name: 'Player', value: `**${targetPlayer.characterName ?? targetUser.username}** (<@${targetUser.id}>)`, inline: true },
+      { name: 'Condition', value: condition, inline: true },
+      { name: 'Severity', value: removed.severity, inline: true },
+      { name: 'Health Status', value: worstSeverity, inline: true },
+    ],
+  });
   await interaction.editReply({ embeds: [embed] });
 }

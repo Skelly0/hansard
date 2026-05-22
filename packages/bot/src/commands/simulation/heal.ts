@@ -4,6 +4,7 @@ import { db } from '../../db.js';
 import { players, playerEventLog, simulationClock } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 /**
  * Mirrors POST /api/simulation/heal (simulationService.heal).
@@ -181,5 +182,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     ].join('\n'),
   );
 
+  await postStaffActionLog(interaction, {
+    title: 'Ailment Healed',
+    system: 'simulation',
+    fields: [
+      { name: 'Player', value: `**${targetPlayer.characterName ?? targetUser.username}** (<@${targetUser.id}>)`, inline: true },
+      { name: 'Condition', value: removed.condition, inline: true },
+      { name: 'Severity', value: removed.severity, inline: true },
+      { name: 'Health Status', value: worstSeverity, inline: true },
+    ],
+  });
   await interaction.editReply({ embeds: [embed] });
 }

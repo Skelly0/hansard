@@ -9,6 +9,7 @@ import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { autocompleteOffice } from './_officeAutocomplete.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
@@ -166,6 +167,16 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     ].filter(Boolean).join('\n'),
   );
 
+  await postStaffActionLog(interaction, {
+    title: 'Office Holder Dismissed',
+    system: 'offices',
+    fields: [
+      { name: 'Player', value: `**${holderName}** (<@${currentHolder.discordId}>)`, inline: true },
+      { name: 'Office', value: officeMatch.name, inline: true },
+      ...(reason ? [{ name: 'Reason', value: reason }] : []),
+      ...(roleSyncWarning ? [{ name: 'Warning', value: roleSyncWarning }] : []),
+    ],
+  });
   await interaction.editReply({ embeds: [embed] });
 }
 

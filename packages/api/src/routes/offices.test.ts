@@ -9,7 +9,11 @@ const auth = vi.hoisted(() => ({
 const mocks = vi.hoisted(() => ({
   listOffices: vi.fn(),
   getOffice: vi.fn(),
+  appointToOffice: vi.fn(),
+  removeFromOffice: vi.fn(),
 }));
+
+const observedStaffActionMarkers: unknown[] = [];
 
 vi.mock('../middleware/requireAuth.js', () => ({
   requireAuth: async (request: any) => {
@@ -31,13 +35,16 @@ vi.mock('../services/officeService.js', () => ({
   getOffice: mocks.getOffice,
   createOffice: vi.fn(),
   updateOffice: vi.fn(),
-  appointToOffice: vi.fn(),
-  removeFromOffice: vi.fn(),
+  appointToOffice: mocks.appointToOffice,
+  removeFromOffice: mocks.removeFromOffice,
 }));
 
 async function appWithRoutes() {
   const app = Fastify({ logger: false });
   app.decorate('db', {} as any);
+  app.addHook('onResponse', async (request) => {
+    observedStaffActionMarkers.push(request.staffActionLog);
+  });
   await app.register(officeRoutes);
   return app;
 }
@@ -64,6 +71,9 @@ describe('office routes', () => {
     vi.clearAllMocks();
     mocks.listOffices.mockResolvedValue([office]);
     mocks.getOffice.mockResolvedValue({ ...office, holderHistory: [] });
+    mocks.appointToOffice.mockResolvedValue({ id: 'holder-1' });
+    mocks.removeFromOffice.mockResolvedValue({ removed: true });
+    observedStaffActionMarkers.length = 0;
   });
 
   it('omits office permission strings for non-staff players', async () => {
@@ -88,5 +98,35 @@ describe('office routes', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()[0].permissions).toEqual(['legislative_leader', 'call_elections']);
+  });
+
+  it('marks office appointments by non-staff office holders for mod logging', async () => {
+    const app = await appWithRoutes();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/offices/office-1/appoint',
+      payload: { playerId: 'target-player' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(mocks.appointToOffice).toHaveBeenCalled();
+    // The route is authorized by requireRole in this test, but auth.isStaff is false.
+    // It still needs the marker so the app-level mod-log hook will post it.
+    expect(observedStaffActionMarkers.at(-1)).toBe(true);
+  });
+
+  it('marks office removals by non-staff office holders for mod logging', async () => {
+    const app = await appWithRoutes();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/offices/office-1/remove',
+      payload: { reason: 'reshuffle' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mocks.removeFromOffice).toHaveBeenCalled();
+    expect(observedStaffActionMarkers.at(-1)).toBe(true);
   });
 });

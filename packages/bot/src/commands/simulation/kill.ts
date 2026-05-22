@@ -5,6 +5,7 @@ import { players, playerEventLog, simulationClock, officeHolders, offices, parti
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { postObituaryToGraveyard } from '../../utils/graveyard.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 type DeathAilment = {
   condition: string;
@@ -171,6 +172,17 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       system: 'graveyard',
     });
 
+    await postStaffActionLog(interaction, {
+      title: 'Character Killed',
+      system: 'graveyard',
+      fields: [
+        { name: 'Player', value: `**${obituary.characterName}** (<@${targetUser.id}>)`, inline: true },
+        { name: 'Cause', value: cause, inline: true },
+        { name: 'Date', value: currentDate, inline: true },
+        { name: 'Age', value: `${obituary.age ?? 'unknown'}`, inline: true },
+        ...(ailmentsText ? [{ name: 'Ailments', value: ailmentsText }] : []),
+      ],
+    });
     await interaction.editReply({ embeds: [confirmEmbed] });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to kill character';

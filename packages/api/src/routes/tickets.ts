@@ -232,6 +232,9 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
           error: 'Only the ticket creator or staff can edit title/description',
         });
       }
+      if (isStaff && (wantsStaffOnly || (wantsContentEdit && !isCreator))) {
+        request.staffActionLog = true;
+      }
 
       const updates: UpdateTicketData = {};
       if (body.status !== undefined) updates.status = body.status;
@@ -294,6 +297,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
       if (isInternal && !user.isStaff) {
         return reply.status(403).send({ error: 'Only staff can post internal notes' });
       }
+      if (isInternal && user.isStaff) request.staffActionLog = true;
 
       const message = await ticketService.addMessage(
         request.params.id,
@@ -380,6 +384,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
           error: 'Only the creator, assignee, or staff can close this ticket',
         });
       }
+      if (user.isStaff) request.staffActionLog = true;
 
       const updated = await ticketService.closeTicket(
         request.params.id,

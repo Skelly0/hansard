@@ -25,6 +25,9 @@ declare module '@fastify/session' {
 declare module 'fastify' {
   interface FastifyRequest {
     player?: Player;
+    // Set by staff-only middleware or route branches that perform staff/admin
+    // mutations so the API can mirror web-driven actions to the Discord mod log.
+    staffActionLog?: boolean;
     // sha-256 hex of the bearer token, set by requireMcpToken so downstream
     // handlers (e.g. revoke) don't have to re-parse the Authorization header.
     mcpTokenHash?: string;

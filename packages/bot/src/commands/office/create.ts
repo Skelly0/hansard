@@ -3,6 +3,7 @@ import { offices } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 export const TIER_CHOICES = [
   { name: 'Head of State', value: 'head_of_state' },
@@ -99,6 +100,18 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       `Use \`/office appoint office:${created.name} user:@player\` to assign someone.`,
     ].join('\n');
 
+    await postStaffActionLog(interaction, {
+      title: 'Office Created',
+      system: 'offices',
+      fields: [
+        { name: 'Office', value: created.name, inline: true },
+        { name: 'Tier', value: tier, inline: true },
+        { name: 'Filled By', value: filledBy, inline: true },
+        { name: 'Max Holders', value: `${maxHolders}`, inline: true },
+        { name: 'Requires Confirmation', value: requiresConfirmation ? 'yes' : 'no', inline: true },
+        ...(discordRole ? [{ name: 'Role', value: `<@&${discordRole.id}>`, inline: true }] : []),
+      ],
+    });
     await interaction.editReply({
       embeds: [successEmbed(`Office created: ${created.name}`, summary)],
     });

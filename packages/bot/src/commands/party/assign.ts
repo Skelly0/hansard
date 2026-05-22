@@ -4,6 +4,7 @@ import { db } from '../../db.js';
 import { players, parties, playerEventLog } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 import { clearPartyLeaderIfMatches } from './shared.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -109,6 +110,16 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     }
   }
 
+  await postStaffActionLog(interaction, {
+    title: 'Party Assigned',
+    system: 'players',
+    fields: [
+      { name: 'Player', value: `**${targetPlayer.characterName}** (<@${targetUser.id}>)`, inline: true },
+      { name: 'From', value: oldPartyName, inline: true },
+      { name: 'To', value: targetParty.name, inline: true },
+      ...(roleSyncWarning ? [{ name: 'Warning', value: roleSyncWarning.trim() }] : []),
+    ],
+  });
   await interaction.editReply({
     embeds: [
       successEmbed(

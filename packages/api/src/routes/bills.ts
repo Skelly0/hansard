@@ -277,6 +277,7 @@ export default async function billRoutes(fastify: FastifyInstance) {
             error: 'Only the Chancellor or staff can submit bills on behalf of other players',
           });
         }
+        if (isStaff) request.staffActionLog = true;
         bill = await submitBillFor(db, authorId, user.id, billData);
       } else {
         bill = await submitBill(db, user.id, billData);
@@ -309,6 +310,7 @@ export default async function billRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'Short bills do not have Google Docs to re-cache' });
       }
 
+      if (isStaff && bill.authorId !== user.id) request.staffActionLog = true;
       const content = await cacheDocContent(db, bill.id);
       return { cached: !!content, content };
     },
@@ -344,6 +346,7 @@ export default async function billRoutes(fastify: FastifyInstance) {
         return reply.status(403).send({ error: 'Only the bill author or staff can update this bill' });
       }
 
+      if (isStaff && bill.authorId !== user.id) request.staffActionLog = true;
       const updated = await updateBill(db, request.params.slug, request.body);
       if (!updated) {
         return reply.status(404).send({ error: 'Bill not found' });
@@ -380,6 +383,7 @@ export default async function billRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth, requireRole('legislative_leader')] },
     async (request, reply) => {
       const user = request.session.user!;
+      if (request.player?.isStaff) request.staffActionLog = true;
       try {
         const result = await createVoteOnBill(db, request.params.slug, user.id);
         return reply.status(201).send(result);

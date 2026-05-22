@@ -4,6 +4,7 @@ import { parties, players, playerEventLog } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
@@ -70,6 +71,14 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       .set({ isActive: false, dissolvedAt: sql`now()`, leaderId: null })
       .where(eq(parties.id, target.id));
 
+    await postStaffActionLog(interaction, {
+      title: 'Party Dissolved',
+      system: 'players',
+      fields: [
+        { name: 'Party', value: target.name, inline: true },
+        { name: 'Members Unassigned', value: `${memberRows.length}`, inline: true },
+      ],
+    });
     await interaction.editReply({
       embeds: [successEmbed(
         'Party Dissolved',

@@ -1,6 +1,8 @@
 import type { ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import { createEmbed, type EmbedField, type System } from './embeds.js';
 
 const MOD_LOG_CHANNEL_ENV = 'MOD_LOG_CHANNEL_ID';
+const staffActionLoggedInteractions = new WeakSet<ChatInputCommandInteraction>();
 
 type SendableChannel = {
   send: (options: { embeds: EmbedBuilder[] }) => Promise<unknown>;
@@ -28,4 +30,47 @@ export async function postModLog(
   } catch (err) {
     console.error('Failed to post moderation log:', err);
   }
+}
+
+export type StaffActionLogOptions = {
+  title: string;
+  description?: string;
+  system?: System;
+  fields?: EmbedField[];
+};
+
+function userLabel(interaction: ChatInputCommandInteraction): string {
+  return typeof interaction.user.toString === 'function'
+    ? interaction.user.toString()
+    : `<@${interaction.user.id}>`;
+}
+
+export async function postStaffActionLog(
+  interaction: ChatInputCommandInteraction,
+  options: StaffActionLogOptions,
+): Promise<void> {
+  staffActionLoggedInteractions.add(interaction);
+
+  try {
+    const fields: EmbedField[] = [
+      { name: 'Actor', value: userLabel(interaction), inline: true },
+      ...(options.fields ?? []),
+    ];
+
+    await postModLog(
+      interaction,
+      createEmbed({
+        title: options.title,
+        description: options.description,
+        system: options.system ?? 'moderation',
+        fields,
+      }),
+    );
+  } catch (err) {
+    console.error('Failed to build staff action log:', err);
+  }
+}
+
+export function hasStaffActionLogBeenPosted(interaction: ChatInputCommandInteraction): boolean {
+  return staffActionLoggedInteractions.has(interaction);
 }

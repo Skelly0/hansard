@@ -12,6 +12,7 @@ import { isStaff } from '../../utils/permissions.js';
 import { postObituaryToGraveyard, type GraveyardPostResult } from '../../utils/graveyard.js';
 import { postGameEventsEmbed, type GameEventsPostResult } from '../../utils/gameEventsChannel.js';
 import { notifyAilmentDms, type AilmentDmResult } from '../../utils/ailmentNotifications.js';
+import { postStaffActionLog } from '../../utils/modLog.js';
 import type { Command } from '../../client.js';
 import { execute as eventsExecute, TYPE_CHOICES as EVENT_TYPE_CHOICES } from './events.js';
 
@@ -410,6 +411,20 @@ async function handleAdvance(interaction: ChatInputCommandInteraction): Promise<
       system: 'simulation',
     });
 
+    await postStaffActionLog(interaction, {
+      title: 'Time Advanced',
+      system: 'simulation',
+      fields: [
+        { name: 'Ticks', value: `+${ticks}`, inline: true },
+        { name: 'From', value: result.fromDate, inline: true },
+        { name: 'To', value: result.toDate, inline: true },
+        { name: 'Aged', value: `${result.aged}`, inline: true },
+        { name: 'Ailments', value: `${result.ailmentDetails.length}`, inline: true },
+        { name: 'Recoveries', value: `${result.recoveryDetails?.length ?? 0}`, inline: true },
+        { name: 'Deaths', value: `${result.deathDetails.length}`, inline: true },
+        { name: 'Pending Death Rolls', value: `${result.pendingDeathDetails.length}`, inline: true },
+      ],
+    });
     await interaction.editReply({ embeds: [embed] });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to advance time';
@@ -499,6 +514,14 @@ async function handleSet(interaction: ChatInputCommandInteraction): Promise<void
     .set({ currentDate: newDate, updatedAt: new Date() })
     .where(eq(simulationClock.id, clock.id));
 
+  await postStaffActionLog(interaction, {
+    title: 'Simulation Date Set',
+    system: 'simulation',
+    fields: [
+      { name: 'From', value: clock.currentDate, inline: true },
+      { name: 'To', value: newDate, inline: true },
+    ],
+  });
   await interaction.editReply({
     embeds: [successEmbed('Date Updated', `Simulation date set to \`${newDate}\``)],
   });
@@ -534,6 +557,14 @@ async function handlePauseToggle(
       : 'The simulation clock is now running. Time can be advanced.',
   );
 
+  await postStaffActionLog(interaction, {
+    title: pause ? 'Simulation Clock Paused' : 'Simulation Clock Unpaused',
+    system: 'simulation',
+    fields: [
+      { name: 'Date', value: clock.currentDate, inline: true },
+      { name: 'Tick', value: `${clock.currentTick}`, inline: true },
+    ],
+  });
   await interaction.editReply({ embeds: [embed] });
 }
 
@@ -558,6 +589,14 @@ async function handleNpcHouseToggle(interaction: ChatInputCommandInteraction): P
       : 'Passed bills will now become player-passed after the legislature vote, with no NPC house review.',
   );
 
+  await postStaffActionLog(interaction, {
+    title: active ? 'NPC House Activated' : 'NPC House Deactivated',
+    system: 'simulation',
+    fields: [
+      { name: 'Date', value: clock.currentDate, inline: true },
+      { name: 'Tick', value: `${clock.currentTick}`, inline: true },
+    ],
+  });
   await interaction.editReply({ embeds: [embed] });
 }
 

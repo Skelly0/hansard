@@ -12,7 +12,7 @@ import { collectCommandFiles, loadCommands, toCommandModuleSpecifier } from './c
 // command is a namespace with subcommands (e.g. `/bill view`, `/vote tally`, `/character heal`),
 // so adding a new feature should normally add a subcommand under an existing parent rather
 // than a new top-level command.
-const EXPECTED_COMMAND_COUNT = 17;
+const EXPECTED_COMMAND_COUNT = 18;
 
 describe('toCommandModuleSpecifier', () => {
   it('converts filesystem paths into ESM file URLs for dynamic import', () => {

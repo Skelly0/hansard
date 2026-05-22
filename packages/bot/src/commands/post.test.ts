@@ -17,12 +17,15 @@ vi.mock('../utils/modLog.js', () => ({
 
 function makeInteraction({
   channel,
+  currentChannel = channel,
   text = 'Council convenes now, <@123> <@&456> @everyone.',
 }: {
-  channel: unknown;
+  channel?: unknown;
+  currentChannel?: unknown;
   text?: string;
-}) {
+} = {}) {
   return {
+    channel: currentChannel,
     deferReply: vi.fn().mockResolvedValue(undefined),
     editReply: vi.fn().mockResolvedValue(undefined),
     guild: {
@@ -32,7 +35,7 @@ function makeInteraction({
     },
     member: { id: 'staff-member' },
     options: {
-      getChannel: vi.fn().mockReturnValue(channel),
+      getChannel: vi.fn().mockReturnValue(channel ?? null),
       getString: vi.fn().mockReturnValue(text),
     },
     user: {
@@ -57,28 +60,29 @@ function makeSendableChannel(overrides: Record<string, unknown> = {}) {
 }
 
 describe('/post command definition', () => {
-  it('accepts a text channel or thread and required post text', () => {
+  it('accepts required post text and an optional text channel or thread', () => {
     const json = postCommand.data.toJSON();
 
     expect(json.name).toBe('post');
     expect(json.description).toMatch(/staff only/i);
-
-    const channelOption = json.options?.find((option) => option.name === 'channel');
-    expect(channelOption).toMatchObject({
-      name: 'channel',
-      required: true,
-      channel_types: [
-        ChannelType.GuildText,
-        ChannelType.PublicThread,
-        ChannelType.PrivateThread,
-      ],
-    });
+    expect(json.options?.map((option) => option.name)).toEqual(['text', 'channel']);
 
     const textOption = json.options?.find((option) => option.name === 'text');
     expect(textOption).toMatchObject({
       name: 'text',
       required: true,
       max_length: 2000,
+    });
+
+    const channelOption = json.options?.find((option) => option.name === 'channel');
+    expect(channelOption).toMatchObject({
+      name: 'channel',
+      required: false,
+      channel_types: [
+        ChannelType.GuildText,
+        ChannelType.PublicThread,
+        ChannelType.PrivateThread,
+      ],
     });
   });
 });
@@ -121,6 +125,32 @@ describe('/post execution', () => {
             description: expect.stringContaining(
               'https://discord.com/channels/guild-id/target-channel-id/sent-message-id',
             ),
+          }),
+        }),
+      ],
+    });
+  });
+
+  it('posts in the current channel when no channel option is provided', async () => {
+    const currentChannel = makeSendableChannel({
+      id: 'current-thread-id',
+      toString: () => '<#current-thread-id>',
+      type: ChannelType.PublicThread,
+    });
+    const interaction = makeInteraction({ channel: null, currentChannel });
+
+    await postCommand.execute(interaction);
+
+    expect(interaction.options.getChannel).toHaveBeenCalledWith('channel');
+    expect(currentChannel.send).toHaveBeenCalledWith({
+      content: 'Council convenes now, <@123> <@&456> @everyone.',
+      allowedMentions: { parse: ['users', 'roles', 'everyone'] },
+    });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      embeds: [
+        expect.objectContaining({
+          data: expect.objectContaining({
+            description: expect.stringContaining('<#current-thread-id>'),
           }),
         }),
       ],

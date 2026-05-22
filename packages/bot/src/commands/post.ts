@@ -48,19 +48,19 @@ const command: Command = {
   data: new SlashCommandBuilder()
     .setName('post')
     .setDescription('Post a bot message to a channel or thread (staff only)')
-    .addChannelOption((option) =>
-      option
-        .setName('channel')
-        .setDescription('Channel or thread to post in')
-        .setRequired(true)
-        .addChannelTypes(...POSTABLE_CHANNEL_TYPES),
-    )
     .addStringOption((option) =>
       option
         .setName('text')
         .setDescription('Message text to post')
         .setRequired(true)
         .setMaxLength(2000),
+    )
+    .addChannelOption((option) =>
+      option
+        .setName('channel')
+        .setDescription('Channel or thread to post in; defaults to here')
+        .setRequired(false)
+        .addChannelTypes(...POSTABLE_CHANNEL_TYPES),
     ) as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -81,10 +81,12 @@ const command: Command = {
       return;
     }
 
-    const target = interaction.options.getChannel('channel', true);
+    const target = interaction.options.getChannel('channel') ?? interaction.channel;
     if (!isPostableChannel(target)) {
       await interaction.editReply({
-        embeds: [errorEmbed('Choose a text channel, public thread, or private thread.')],
+        embeds: [
+          errorEmbed('Choose a text channel/thread or run this command from one.'),
+        ],
       });
       return;
     }

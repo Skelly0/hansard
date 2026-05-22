@@ -9,8 +9,13 @@ const auth = vi.hoisted(() => ({
 
 const serviceMocks = vi.hoisted(() => ({
   getTicket: vi.fn(),
+  addMessage: vi.fn(),
   updateTicket: vi.fn(),
   assignTicket: vi.fn(),
+}));
+
+const notifierMocks = vi.hoisted(() => ({
+  notifyTicketOwnerOfReply: vi.fn(),
 }));
 
 const errorStubs = vi.hoisted(() => {
@@ -37,10 +42,15 @@ vi.mock('../middleware/requireStaff.js', () => ({
 vi.mock('../services/ticketService.js', () => ({
   TicketService: class {
     getTicket = serviceMocks.getTicket;
+    addMessage = serviceMocks.addMessage;
     updateTicket = serviceMocks.updateTicket;
     assignTicket = serviceMocks.assignTicket;
   },
   TicketAssigneeNotStaffError: errorStubs.TicketAssigneeNotStaffErrorStub,
+}));
+
+vi.mock('../services/ticketOwnerNotifier.js', () => ({
+  notifyTicketOwnerOfReply: notifierMocks.notifyTicketOwnerOfReply,
 }));
 
 async function appWithDb() {
@@ -64,6 +74,14 @@ describe('ticket routes', () => {
       id: 'ticket-1',
       discordThreadId: 'attacker-thread',
     });
+    serviceMocks.addMessage.mockResolvedValue({
+      id: 'message-1',
+      ticketId: 'ticket-1',
+      authorId: auth.userId,
+      content: 'A public reply',
+      isInternal: false,
+    });
+    notifierMocks.notifyTicketOwnerOfReply.mockResolvedValue(undefined);
   });
 
   it('does not let non-staff change the Discord thread mirror target', async () => {
@@ -126,5 +144,41 @@ describe('ticket routes', () => {
     expect(res.statusCode).toBe(400);
     const body = res.json();
     expect(body.error).toContain('non-staff');
+  });
+
+  it('notifies the ticket creator by DM when a web/API public reply is posted by someone else', async () => {
+    auth.userId = 'staff-player';
+    auth.isStaff = true;
+    serviceMocks.getTicket.mockResolvedValue({
+      id: 'ticket-1',
+      number: 42,
+      title: 'Favourite transfer',
+      createdById: 'creator-player',
+      assignedToId: null,
+    });
+
+    const app = await appWithDb();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tickets/ticket-1/messages',
+      payload: {
+        content: 'Yes, that transfer can go ahead.',
+        isInternal: false,
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(notifierMocks.notifyTicketOwnerOfReply).toHaveBeenCalledWith({
+      db: app.db,
+      ticket: expect.objectContaining({
+        id: 'ticket-1',
+        number: 42,
+        title: 'Favourite transfer',
+        createdById: 'creator-player',
+      }),
+      authorId: 'staff-player',
+      content: 'Yes, that transfer can go ahead.',
+    });
   });
 });

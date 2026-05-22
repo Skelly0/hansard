@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireStaff } from '../middleware/requireStaff.js';
 import { TicketService, TicketAssigneeNotStaffError } from '../services/ticketService.js';
+import { notifyTicketOwnerOfReply } from '../services/ticketOwnerNotifier.js';
 import '../plugins/db.js'; // augments FastifyInstance with .db
 import type { TicketStatus, TicketPriority } from '@hansard/shared';
 import type { TicketAccessContext, UpdateTicketData } from '../services/ticketService.js';
@@ -310,6 +311,15 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
 
       if (!message) {
         return reply.status(404).send({ error: 'Ticket not found' });
+      }
+
+      if (!isInternal) {
+        await notifyTicketOwnerOfReply({
+          db: fastify.db,
+          ticket,
+          authorId: user.id,
+          content,
+        });
       }
 
       return reply.status(201).send(message);

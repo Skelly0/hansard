@@ -108,6 +108,18 @@ function makeMessage(content = 'call me back') {
   };
 }
 
+function makeThreadMessage(content = 'ticket reply') {
+  return {
+    id: 'discord-message-1',
+    partial: false,
+    author: { id: 'discord-caller', bot: false },
+    channel: { id: 'thread-42', type: ChannelType.PrivateThread },
+    content,
+    react: vi.fn().mockResolvedValue(undefined),
+    reply: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 function setupResolvedPlayer() {
   mocks.dbRows.push([{ id: 'player-caller', isAlive: true, characterName: 'Caller' }]);
 }
@@ -294,5 +306,17 @@ describe('messageCreate phone text DM routing', () => {
       senderDiscordMessageId: 'discord-message-1',
     });
     expect(mocks.relayMessage).toHaveBeenCalledWith(client, participants, expect.any(Object), true);
+  });
+
+  it('ignores non-DM messages, including ticket threads', async () => {
+    const { handler } = makeClient();
+    mocks.dbRows.push([{ id: 'ticket-42', number: 42, discordThreadId: 'thread-42' }]);
+    mocks.dbRows.push([{ id: 'player-caller', isAlive: true, isStaff: false, characterName: 'Caller' }]);
+    const message = makeThreadMessage("that's quite a few favours eh");
+
+    await handler(message);
+
+    expect(mocks.svc.findOpenCallForPlayer).not.toHaveBeenCalled();
+    expect(mocks.textSvc.resolveReplyConversation).not.toHaveBeenCalled();
   });
 });

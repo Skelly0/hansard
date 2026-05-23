@@ -60,9 +60,25 @@ export interface TicketAccessContext {
   isStaff: boolean;
 }
 
+interface TicketPlayerSummary {
+  id: string;
+  characterName: string | null;
+  discordUsername: string;
+}
+
+interface TicketMessageWithAuthor extends TicketMessage {
+  author?: TicketPlayerSummary;
+}
+
+interface TicketAuditLogEntryWithActor extends TicketAuditLogEntry {
+  actor?: TicketPlayerSummary;
+}
+
 export interface TicketWithDetails extends Ticket {
-  messages?: TicketMessage[];
-  auditLog?: TicketAuditLogEntry[];
+  createdBy?: TicketPlayerSummary;
+  assignedTo?: TicketPlayerSummary;
+  messages?: TicketMessageWithAuthor[];
+  auditLog?: TicketAuditLogEntryWithActor[];
   category?: TicketCategory;
 }
 
@@ -143,6 +159,22 @@ export class TicketService {
     return row?.characterName || row?.discordUsername || 'Unknown';
   }
 
+  private async lookupPlayerSummaries(ids: Iterable<string | null | undefined>): Promise<Map<string, TicketPlayerSummary>> {
+    const playerIds = [...new Set([...ids].filter((id): id is string => !!id))];
+    if (playerIds.length === 0) return new Map();
+
+    const rows = await this.db
+      .select({
+        id: players.id,
+        characterName: players.characterName,
+        discordUsername: players.discordUsername,
+      })
+      .from(players)
+      .where(inArray(players.id, playerIds));
+
+    return new Map(rows.map((row) => [row.id, row]));
+  }
+
   // ----------------------------------------------------------
   // createTicket
   // ----------------------------------------------------------
@@ -214,10 +246,25 @@ export class TicketService {
       .where(eq(ticketCategories.id, ticket.categoryId))
       .limit(1);
 
+    const playerSummaries = await this.lookupPlayerSummaries([
+      ticket.createdById,
+      ticket.assignedToId,
+      ...messages.map((message) => message.authorId),
+      ...auditLog.map((entry) => entry.actorId),
+    ]);
+
     return {
       ...(ticket as unknown as Ticket),
-      messages: messages as unknown as TicketMessage[],
-      auditLog: auditLog as unknown as TicketAuditLogEntry[],
+      createdBy: playerSummaries.get(ticket.createdById),
+      assignedTo: ticket.assignedToId ? playerSummaries.get(ticket.assignedToId) : undefined,
+      messages: messages.map((message) => ({
+        ...(message as unknown as TicketMessage),
+        author: playerSummaries.get(message.authorId),
+      })),
+      auditLog: auditLog.map((entry) => ({
+        ...(entry as unknown as TicketAuditLogEntry),
+        actor: playerSummaries.get(entry.actorId),
+      })),
       category: category as unknown as TicketCategory | undefined,
     };
   }

@@ -10,6 +10,23 @@ vi.mock('./ticketThreadNotifier.js', () => ({
 
 import { TicketService, TicketAssigneeNotStaffError } from './ticketService.js';
 
+function makeGetTicketDb(selectRows: unknown[][]) {
+  const queue = [...selectRows];
+  const take = vi.fn().mockImplementation(() => Promise.resolve(queue.shift() ?? []));
+
+  const query: Record<string, unknown> = {};
+  query.where = vi.fn().mockReturnValue(query);
+  query.limit = vi.fn().mockImplementation(take);
+  query.orderBy = vi.fn().mockImplementation(take);
+  query.then = (resolve: (value: unknown[]) => unknown, reject: (reason: unknown) => unknown) =>
+    take().then(resolve, reject);
+
+  const from = vi.fn().mockReturnValue(query);
+  const select = vi.fn().mockReturnValue({ from });
+
+  return { db: { select } };
+}
+
 function makeTicket(overrides: Record<string, unknown> = {}) {
   return {
     id: 'ticket-a',
@@ -20,6 +37,77 @@ function makeTicket(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+describe('TicketService.getTicket detail enrichment', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('includes player summaries needed by the ticket webapp detail view', async () => {
+    const ticket = makeTicket({
+      categoryId: 'category-a',
+      createdById: 'creator-player',
+      assignedToId: 'staff-player',
+    });
+    const message = {
+      id: 'message-a',
+      ticketId: 'ticket-a',
+      authorId: 'creator-player',
+      content: 'Please transfer my favours.',
+      isInternal: false,
+      discordMessageId: null,
+      createdAt: new Date('2026-05-22T15:28:00Z'),
+      editedAt: null,
+    };
+    const auditEntry = {
+      id: 'audit-a',
+      ticketId: 'ticket-a',
+      actorId: 'staff-player',
+      action: 'assigned',
+      oldValue: null,
+      newValue: 'staff-player',
+      createdAt: new Date('2026-05-22T15:29:00Z'),
+    };
+    const category = { id: 'category-a', name: 'Favours' };
+    const creator = {
+      id: 'creator-player',
+      characterName: 'Ada Vance',
+      discordUsername: 'ada',
+    };
+    const staff = {
+      id: 'staff-player',
+      characterName: null,
+      discordUsername: 'staffer',
+    };
+    const { db } = makeGetTicketDb([
+      [ticket],
+      [message],
+      [auditEntry],
+      [category],
+      [creator, staff],
+    ]);
+
+    const result = await new TicketService(db as any).getTicket('ticket-a', {
+      userId: 'staff-player',
+      isStaff: true,
+    });
+
+    expect(result).toMatchObject({
+      createdBy: creator,
+      assignedTo: staff,
+      messages: [
+        expect.objectContaining({
+          author: creator,
+        }),
+      ],
+      auditLog: [
+        expect.objectContaining({
+          actor: staff,
+        }),
+      ],
+    });
+  });
+});
 
 function makeDb(selectRows: unknown[][]) {
   const queue = [...selectRows];

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApplicationCommandOptionType } from 'discord.js';
 import {
   installStaffActionReplyLogging,
   postGenericStaffCommandActionLog,
@@ -19,12 +20,18 @@ vi.mock('./modLog.js', () => ({
   postStaffActionLog: mocks.postStaffActionLog,
 }));
 
-function makeInteraction(commandName = 'bill', subcommand = 'npc-vote') {
+function makeInteraction(
+  commandName = 'bill',
+  subcommand = 'npc-vote',
+  data: unknown[] = [],
+  group: string | null = null,
+) {
   return {
     commandName,
     member: { roles: [] },
     options: {
-      getSubcommandGroup: vi.fn().mockReturnValue(null),
+      data,
+      getSubcommandGroup: vi.fn().mockReturnValue(group),
       getSubcommand: vi.fn().mockReturnValue(subcommand),
     },
   };
@@ -48,6 +55,174 @@ describe('postGenericStaffCommandActionLog', () => {
         title: 'Staff Command Used',
         system: 'bills',
         fields: [{ name: 'Command', value: '/bill npc-vote', inline: true }],
+      }),
+    );
+  });
+
+  it('includes slash command option details in fallback mod logs', async () => {
+    const interaction = makeInteraction('vote', 'create', [
+      {
+        name: 'create',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'title',
+            type: ApplicationCommandOptionType.String,
+            value: 'Confidence vote',
+          },
+          {
+            name: 'days',
+            type: ApplicationCommandOptionType.Integer,
+            value: 3,
+          },
+          {
+            name: 'channel',
+            type: ApplicationCommandOptionType.Channel,
+            value: '123456789012345678',
+            channel: {
+              id: '123456789012345678',
+              toString: () => '<#123456789012345678>',
+            },
+          },
+        ],
+      },
+    ]);
+
+    await postGenericStaffCommandActionLog(interaction as any);
+
+    expect(mocks.postStaffActionLog).toHaveBeenCalledWith(
+      interaction,
+      expect.objectContaining({
+        fields: expect.arrayContaining([
+          {
+            name: 'Details',
+            value: [
+              '`title`: "Confidence vote"',
+              '`days`: 3',
+              '`channel`: <#123456789012345678>',
+            ].join('\n'),
+          },
+        ]),
+      }),
+    );
+  });
+
+  it('keeps audit-intended free-text details for ticket notes', async () => {
+    const interaction = makeInteraction('ticket', 'note', [
+      {
+        name: 'note',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'number',
+            type: ApplicationCommandOptionType.Integer,
+            value: 42,
+          },
+          {
+            name: 'message',
+            type: ApplicationCommandOptionType.String,
+            value: 'Escalated because the player supplied screenshots.',
+          },
+        ],
+      },
+    ]);
+
+    await postGenericStaffCommandActionLog(interaction as any);
+
+    expect(mocks.postStaffActionLog).toHaveBeenCalledWith(
+      interaction,
+      expect.objectContaining({
+        fields: expect.arrayContaining([
+          {
+            name: 'Details',
+            value: [
+              '`number`: 42',
+              '`message`: "Escalated because the player supplied screenshots."',
+            ].join('\n'),
+          },
+        ]),
+      }),
+    );
+  });
+
+  it('keeps audit-intended free-text details for phone tap revocation notes', async () => {
+    const interaction = makeInteraction('phone', 'tap-revoke', [
+      {
+        name: 'admin',
+        type: ApplicationCommandOptionType.SubcommandGroup,
+        options: [
+          {
+            name: 'tap-revoke',
+            type: ApplicationCommandOptionType.Subcommand,
+            options: [
+              {
+                name: 'target-number',
+                type: ApplicationCommandOptionType.String,
+                value: '+15551234567',
+              },
+              {
+                name: 'notes',
+                type: ApplicationCommandOptionType.String,
+                value: 'Investigation ended; preserving final audit context.',
+              },
+            ],
+          },
+        ],
+      },
+    ], 'admin');
+
+    await postGenericStaffCommandActionLog(interaction as any);
+
+    expect(mocks.postStaffActionLog).toHaveBeenCalledWith(
+      interaction,
+      expect.objectContaining({
+        fields: expect.arrayContaining([
+          {
+            name: 'Details',
+            value: [
+              '`target-number`: "+15551234567"',
+              '`notes`: "Investigation ended; preserving final audit context."',
+            ].join('\n'),
+          },
+        ]),
+      }),
+    );
+  });
+
+  it('still redacts bulky document body options', async () => {
+    const interaction = makeInteraction('doc', 'edit', [
+      {
+        name: 'edit',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'slug',
+            type: ApplicationCommandOptionType.String,
+            value: 'policy-index',
+          },
+          {
+            name: 'content',
+            type: ApplicationCommandOptionType.String,
+            value: '# Full document body\nDo not pour this into modlog.',
+          },
+        ],
+      },
+    ]);
+
+    await postGenericStaffCommandActionLog(interaction as any);
+
+    expect(mocks.postStaffActionLog).toHaveBeenCalledWith(
+      interaction,
+      expect.objectContaining({
+        fields: expect.arrayContaining([
+          {
+            name: 'Details',
+            value: [
+              '`slug`: "policy-index"',
+              '`content`: [redacted]',
+            ].join('\n'),
+          },
+        ]),
       }),
     );
   });
@@ -95,5 +270,60 @@ describe('postGenericStaffCommandActionLog', () => {
     } as any);
 
     expect(mocks.postStaffActionLog).not.toHaveBeenCalled();
+  });
+
+  it('adds the ticket command success summary to fallback mod logs', async () => {
+    const editReply = vi.fn().mockResolvedValue(undefined);
+    const interaction = {
+      ...makeInteraction('ticket', 'close', [
+        {
+          name: 'close',
+          type: ApplicationCommandOptionType.Subcommand,
+          options: [
+            {
+              name: 'number',
+              type: ApplicationCommandOptionType.Integer,
+              value: 42,
+            },
+            {
+              name: 'reason',
+              type: ApplicationCommandOptionType.String,
+              value: 'Resolved after staff review.',
+            },
+          ],
+        },
+      ]),
+      editReply,
+    };
+
+    installStaffActionReplyLogging(interaction as any);
+    await interaction.editReply({
+      embeds: [{
+        toJSON: () => ({
+          title: '✅ Ticket Closed',
+          description: [
+            '**Ticket:** #42 — Missing thread messages',
+            '**Closed by:** <@staff-discord-id>',
+            '**Resolution:** Resolved after staff review.',
+          ].join('\n'),
+        }),
+      }],
+    } as any);
+
+    expect(mocks.postStaffActionLog).toHaveBeenCalledWith(
+      interaction,
+      expect.objectContaining({
+        fields: expect.arrayContaining([
+          {
+            name: 'Result',
+            value: [
+              '**Ticket:** #42 — Missing thread messages',
+              '**Closed by:** <@staff-discord-id>',
+              '**Resolution:** Resolved after staff review.',
+            ].join('\n'),
+          },
+        ]),
+      }),
+    );
   });
 });

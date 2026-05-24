@@ -1,4 +1,5 @@
-import { pgTable, uuid, varchar, text, integer, boolean, timestamp, serial, jsonb, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, integer, boolean, timestamp, serial, jsonb, uniqueIndex, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { players } from './players';
 
 export const ticketCategories = pgTable('ticket_categories', {
@@ -85,7 +86,11 @@ export const ticketMessages = pgTable('ticket_messages', {
 
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   editedAt: timestamp('edited_at', { withTimezone: true, mode: 'date' }),
-});
+}, (table) => ({
+  discordMessageUnique: uniqueIndex('ticket_messages_discord_message_unique')
+    .on(table.ticketId, table.discordMessageId)
+    .where(sql`discord_message_id IS NOT NULL`),
+}));
 
 export const ticketAuditLog = pgTable('ticket_audit_log', {
   id: uuid('id').primaryKey().defaultRandom(),

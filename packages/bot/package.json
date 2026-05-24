@@ -9,6 +9,8 @@
     "test": "vitest",
     "test:run": "vitest run",
     "backfill:phone-threads": "tsx scripts/backfillPhoneThreads.ts",
+    "backfill:ticket-thread-messages": "tsx src/scripts/backfillTicketThreadMessages.ts",
+    "backfill:ticket-thread-mirrors": "tsx src/scripts/backfillTicketThreadMirrors.ts",
     "close:due-votes": "tsx src/scripts/closeDueVotes.ts",
     "post:party-join": "tsx src/scripts/postPartyJoinMessage.ts",
     "refresh:party-join": "tsx src/scripts/refreshPartyJoinMessage.ts",

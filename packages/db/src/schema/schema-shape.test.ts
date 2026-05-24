@@ -46,3 +46,13 @@ describe('schema shape: simulation clock', () => {
     expect(text).toContain("tickUnit: varchar('tick_unit', { length: 32 }).default('year').notNull()");
   });
 });
+
+describe('schema shape: ticket Discord message idempotency', () => {
+  it('enforces one ticket message per Discord message id', () => {
+    const text = readFileSync(join(here, 'tickets.ts'), 'utf8');
+
+    expect(text).toContain("uniqueIndex('ticket_messages_discord_message_unique')");
+    expect(text).toContain('.on(table.ticketId, table.discordMessageId)');
+    expect(text).toContain("discord_message_id IS NOT NULL");
+  });
+});

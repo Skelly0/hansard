@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   postCallOpenedToStaffThread: vi.fn(),
   relayRecordedPhoneText: vi.fn(),
   flushQueuedPhoneTextsForPlayer: vi.fn(),
+  ticketAddMessage: vi.fn(),
+  notifyTicketOwnerOfReply: vi.fn(),
+  isStaff: vi.fn(),
 }));
 
 class MockPhoneServiceError extends Error {
@@ -70,6 +73,18 @@ vi.mock('@hansard/api/services/phoneTextService', () => ({
   },
 }));
 
+vi.mock('@hansard/api/services/ticketService', () => ({
+  TicketService: vi.fn(function TicketService() {
+    return {
+      addMessage: mocks.ticketAddMessage,
+    };
+  }),
+}));
+
+vi.mock('@hansard/api/services/ticketOwnerNotifier', () => ({
+  notifyTicketOwnerOfReply: mocks.notifyTicketOwnerOfReply,
+}));
+
 vi.mock('../utils/phoneRelay.js', () => ({
   RecipientDmClosedError: MockRecipientDmClosedError,
   hangUpAndNotify: mocks.hangUpAndNotify,
@@ -80,6 +95,10 @@ vi.mock('../utils/phoneRelay.js', () => ({
 vi.mock('../utils/phoneTextRelay.js', () => ({
   flushQueuedPhoneTextsForPlayer: mocks.flushQueuedPhoneTextsForPlayer,
   relayRecordedPhoneText: mocks.relayRecordedPhoneText,
+}));
+
+vi.mock('../utils/permissions.js', () => ({
+  isStaff: mocks.isStaff,
 }));
 
 const { clearNoCallCache, registerMessageCreateEvent } = await import('./messageCreate.js');
@@ -113,8 +132,11 @@ function makeThreadMessage(content = 'ticket reply') {
     id: 'discord-message-1',
     partial: false,
     author: { id: 'discord-caller', bot: false },
+    member: { roles: { cache: new Map() } },
     channel: { id: 'thread-42', type: ChannelType.PrivateThread },
     content,
+    attachments: new Map(),
+    stickers: new Map(),
     react: vi.fn().mockResolvedValue(undefined),
     reply: vi.fn().mockResolvedValue(undefined),
   };
@@ -190,6 +212,9 @@ describe('messageCreate voicemail DM flow', () => {
     mocks.relayMessage.mockResolvedValue(undefined);
     mocks.relayRecordedPhoneText.mockResolvedValue(undefined);
     mocks.flushQueuedPhoneTextsForPlayer.mockResolvedValue(0);
+    mocks.ticketAddMessage.mockResolvedValue({ id: 'ticket-message-1' });
+    mocks.notifyTicketOwnerOfReply.mockResolvedValue(undefined);
+    mocks.isStaff.mockResolvedValue(false);
   });
 
   it('does not record voicemail before the peep has sounded', async () => {
@@ -308,15 +333,132 @@ describe('messageCreate phone text DM routing', () => {
     expect(mocks.relayMessage).toHaveBeenCalledWith(client, participants, expect.any(Object), true);
   });
 
-  it('ignores non-DM messages, including ticket threads', async () => {
+  it('records text typed in a ticket thread as a public ticket reply', async () => {
     const { handler } = makeClient();
-    mocks.dbRows.push([{ id: 'ticket-42', number: 42, discordThreadId: 'thread-42' }]);
-    mocks.dbRows.push([{ id: 'player-caller', isAlive: true, isStaff: false, characterName: 'Caller' }]);
-    const message = makeThreadMessage("that's quite a few favours eh");
+    const content = "that's quite a few favours eh";
+    mocks.dbRows.push([{
+      id: 'ticket-42',
+      number: 42,
+      title: 'Missing thread messages',
+      createdById: 'owner-player',
+      assignedToId: null,
+      discordThreadId: 'thread-42',
+    }]);
+    mocks.dbRows.push([{ id: 'player-caller' }]);
+    mocks.isStaff.mockResolvedValueOnce(true);
+    const message = makeThreadMessage(content);
 
     await handler(message);
 
+    expect(mocks.ticketAddMessage).toHaveBeenCalledWith(
+      'ticket-42',
+      content,
+      'player-caller',
+      false,
+      'discord-message-1',
+      true,
+      false,
+    );
+    expect(mocks.notifyTicketOwnerOfReply).toHaveBeenCalledWith({
+      db: expect.any(Object),
+      ticket: expect.objectContaining({
+        id: 'ticket-42',
+        number: 42,
+        title: 'Missing thread messages',
+        createdById: 'owner-player',
+      }),
+      authorId: 'player-caller',
+      content,
+    });
     expect(mocks.svc.findOpenCallForPlayer).not.toHaveBeenCalled();
     expect(mocks.textSvc.resolveReplyConversation).not.toHaveBeenCalled();
+  });
+
+  it('uses the author staff flag when a ticket thread message has no guild member payload', async () => {
+    const { handler } = makeClient();
+    mocks.dbRows.push([{
+      id: 'ticket-42',
+      number: 42,
+      title: 'Missing thread messages',
+      createdById: 'owner-player',
+      assignedToId: null,
+      discordThreadId: 'thread-42',
+    }]);
+    mocks.dbRows.push([{ id: 'staff-player', isStaff: true }]);
+    const message = makeThreadMessage('staff reply with no member payload');
+    message.member = null as any;
+
+    await handler(message);
+
+    expect(mocks.isStaff).not.toHaveBeenCalled();
+    expect(mocks.ticketAddMessage).toHaveBeenCalledWith(
+      'ticket-42',
+      'staff reply with no member payload',
+      'staff-player',
+      false,
+      'discord-message-1',
+      true,
+      false,
+    );
+  });
+
+  it('records attachment-only ticket thread replies using the attachment URL', async () => {
+    const { handler } = makeClient();
+    mocks.dbRows.push([{
+      id: 'ticket-42',
+      number: 42,
+      title: 'Missing thread messages',
+      createdById: 'owner-player',
+      assignedToId: null,
+      discordThreadId: 'thread-42',
+    }]);
+    mocks.dbRows.push([{ id: 'staff-player', isStaff: true }]);
+    const message = makeThreadMessage('   ');
+    message.member = null as any;
+    message.attachments = new Map([
+      ['attachment-1', { name: 'receipt.png', url: 'https://cdn.discordapp.com/receipt.png' }],
+    ]) as any;
+
+    await handler(message);
+
+    expect(mocks.ticketAddMessage).toHaveBeenCalledWith(
+      'ticket-42',
+      '**Attachments:**\n- receipt.png: https://cdn.discordapp.com/receipt.png',
+      'staff-player',
+      false,
+      'discord-message-1',
+      true,
+      false,
+    );
+  });
+
+  it('records sticker-only ticket thread replies using the sticker name', async () => {
+    const { handler } = makeClient();
+    mocks.dbRows.push([{
+      id: 'ticket-42',
+      number: 42,
+      title: 'Missing thread messages',
+      createdById: 'owner-player',
+      assignedToId: null,
+      discordThreadId: 'thread-42',
+    }]);
+    mocks.dbRows.push([{ id: 'staff-player', isStaff: true }]);
+    const message = makeThreadMessage('');
+    message.member = null as any;
+    message.stickers = new Map([
+      ['sticker-1', { name: 'thumbs up' }],
+    ]) as any;
+
+    await handler(message);
+
+    expect(mocks.ticketAddMessage).toHaveBeenCalledWith(
+      'ticket-42',
+      '**Stickers:**\n- thumbs up',
+      'staff-player',
+      false,
+      'discord-message-1',
+      true,
+      false,
+    );
   });
 });

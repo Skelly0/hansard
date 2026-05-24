@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './env.js';
 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

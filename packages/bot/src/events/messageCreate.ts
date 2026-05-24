@@ -1,12 +1,14 @@
 import { ChannelType, Events, type Client, type Message } from 'discord.js';
 import { eq } from 'drizzle-orm';
-import { players } from '@hansard/db';
+import { players, tickets } from '@hansard/db';
 import { db } from '../db.js';
 import {
   PhoneService,
   PhoneServiceError,
   type CallParticipants,
 } from '@hansard/api/services/phoneService';
+import { TicketService } from '@hansard/api/services/ticketService';
+import { notifyTicketOwnerOfReply } from '@hansard/api/services/ticketOwnerNotifier';
 import {
   PhoneTextService,
   PhoneTextServiceError,
@@ -19,6 +21,7 @@ import {
   RecipientDmClosedError,
 } from '../utils/phoneRelay.js';
 import { flushQueuedPhoneTextsForPlayer, relayRecordedPhoneText } from '../utils/phoneTextRelay.js';
+import { isStaff } from '../utils/permissions.js';
 import { PHONE_HINT_COOLDOWN_MS, PHONE_DM_CHUNK_BUDGET } from '@hansard/shared';
 
 const HINT_MAP_MAX = 500;
@@ -99,6 +102,97 @@ async function resolvePlayer(discordId: string): Promise<{ id: string; isAlive: 
     .where(eq(players.discordId, discordId))
     .limit(1);
   return row ?? null;
+}
+
+function isThreadChannelType(type: ChannelType): boolean {
+  return (
+    type === ChannelType.PrivateThread ||
+    type === ChannelType.PublicThread ||
+    type === ChannelType.AnnouncementThread
+  );
+}
+
+async function handleTicketThreadMessage(message: Message): Promise<void> {
+  if (!isThreadChannelType(message.channel.type)) return;
+
+  if (message.partial) {
+    try {
+      await message.fetch();
+    } catch (err) {
+      console.error(`[ticket:event] failed to hydrate thread message ${message.id}:`, err);
+      return;
+    }
+  }
+  if (message.author.bot) return;
+  const content = formatTicketThreadMessageContent(message);
+  if (!content) return;
+
+  const [ticket] = await db
+    .select({
+      id: tickets.id,
+      number: tickets.number,
+      title: tickets.title,
+      createdById: tickets.createdById,
+      assignedToId: tickets.assignedToId,
+      discordThreadId: tickets.discordThreadId,
+    })
+    .from(tickets)
+    .where(eq(tickets.discordThreadId, message.channel.id))
+    .limit(1);
+
+  if (!ticket) return;
+
+  const [author] = await db
+    .select({ id: players.id, isStaff: players.isStaff })
+    .from(players)
+    .where(eq(players.discordId, message.author.id))
+    .limit(1);
+
+  if (!author) return;
+
+  const actorIsStaff = (message.member ? await isStaff(message.member) : false) || author.isStaff;
+  const saved = await new TicketService(db).addMessage(
+    ticket.id,
+    content,
+    author.id,
+    false,
+    message.id,
+    actorIsStaff,
+    false,
+  );
+
+  if (!saved) return;
+
+  await notifyTicketOwnerOfReply({
+    db,
+    ticket,
+    authorId: author.id,
+    content,
+  });
+}
+
+function formatTicketThreadMessageContent(message: Message): string {
+  const body = message.content.trim();
+  const attachmentLines = [...message.attachments.values()]
+    .map((attachment) => {
+      const url = attachment.url?.trim();
+      if (!url) return null;
+      const name = attachment.name?.trim() || 'attachment';
+      return `- ${name}: ${url}`;
+    })
+    .filter((line): line is string => Boolean(line));
+  const stickerLines = [...message.stickers.values()]
+    .map((sticker) => sticker.name?.trim())
+    .filter((name): name is string => Boolean(name))
+    .map((name) => `- ${name}`);
+
+  if (attachmentLines.length === 0 && stickerLines.length === 0) return body;
+
+  return [
+    body,
+    attachmentLines.length > 0 ? `**Attachments:**\n${attachmentLines.join('\n')}` : '',
+    stickerLines.length > 0 ? `**Stickers:**\n${stickerLines.join('\n')}` : '',
+  ].filter(Boolean).join('\n\n');
 }
 
 async function routePhoneTextReply(
@@ -419,10 +513,13 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
 export function registerMessageCreateEvent(client: Client): void {
   client.on(Events.MessageCreate, async (message) => {
     try {
-      if (message.channel.type !== ChannelType.DM) return;
-      await handleDmMessage(client, message);
+      if (message.channel.type === ChannelType.DM) {
+        await handleDmMessage(client, message);
+        return;
+      }
+      await handleTicketThreadMessage(message);
     } catch (err) {
-      console.error('[phone:event] unhandled error in messageCreate:', err);
+      console.error('[messageCreate:event] unhandled error:', err);
     }
   });
 }

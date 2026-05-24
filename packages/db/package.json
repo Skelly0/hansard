@@ -18,6 +18,7 @@
     "migrate:aging-config": "tsx scripts/migrate-aging-config.ts",
     "migrate:year-tick-unit": "tsx scripts/migrate-year-tick-unit.ts",
     "migrate:sessions-table": "tsx scripts/migrate-sessions-table.ts",
+    "migrate:ticket-message-discord-unique": "tsx scripts/migrate-ticket-message-discord-unique.ts",
     "fix:bill-5-status": "tsx scripts/fix-bill-5-status.ts",
     "fix:character-birth-dates": "tsx scripts/fix-character-birth-dates.ts",
     "cleanup:backfill-phone-test-players": "tsx scripts/cleanup-backfill-phone-test-players.ts",

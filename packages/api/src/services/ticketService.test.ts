@@ -194,6 +194,73 @@ describe('TicketService link mirroring', () => {
   });
 });
 
+describe('TicketService.addMessage Discord idempotency', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeAddMessageDb(selectRows: unknown[][]) {
+    const queue = [...selectRows];
+    const limit = vi.fn().mockImplementation(() => Promise.resolve(queue.shift() ?? []));
+    const where = vi.fn().mockReturnValue({ limit });
+    const from = vi.fn().mockReturnValue({ where });
+    const select = vi.fn().mockReturnValue({ from });
+
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const set = vi.fn().mockReturnValue({ where: updateWhere });
+    const update = vi.fn().mockReturnValue({ set });
+
+    const returning = vi.fn().mockResolvedValue([{
+      id: 'new-message',
+      ticketId: 'ticket-a',
+      authorId: 'staff-player',
+      content: 'already handled',
+      isInternal: false,
+      discordMessageId: 'discord-message-1',
+    }]);
+    const values = vi.fn().mockReturnValue({ returning });
+    const insert = vi.fn().mockReturnValue({ values });
+
+    return {
+      db: { select, update, insert },
+      update,
+      insert,
+    };
+  }
+
+  it('does not insert or mirror a Discord-origin message that was already recorded', async () => {
+    const ticket = makeTicket({
+      createdById: 'owner-player',
+      assignedToId: null,
+      firstResponseAt: null,
+    });
+    const existingMessage = {
+      id: 'existing-message',
+      ticketId: 'ticket-a',
+      authorId: 'staff-player',
+      content: 'already handled',
+      isInternal: false,
+      discordMessageId: 'discord-message-1',
+    };
+    const { db, update, insert } = makeAddMessageDb([[ticket], [existingMessage]]);
+
+    const result = await new TicketService(db as any).addMessage(
+      'ticket-a',
+      'already handled',
+      'staff-player',
+      false,
+      'discord-message-1',
+      true,
+      false,
+    );
+
+    expect(result).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+    expect(notifierMocks.postToTicketThread).not.toHaveBeenCalled();
+  });
+});
+
 describe('TicketService.assignTicket staff guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -526,6 +526,7 @@ export class TicketService {
     isInternal = false,
     discordMessageId?: string,
     actorIsStaff = false,
+    mirrorToThread = true,
   ): Promise<TicketMessage | null> {
     // Check if this is the first staff response — track firstResponseAt
     const [ticket] = await this.db
@@ -541,6 +542,17 @@ export class TicketService {
     if (isInternal && !actorIsStaff) {
       return null;
     }
+    if (discordMessageId) {
+      const [existingDiscordMessage] = await this.db
+        .select({ id: ticketMessages.id })
+        .from(ticketMessages)
+        .where(and(
+          eq(ticketMessages.ticketId, ticketId),
+          eq(ticketMessages.discordMessageId, discordMessageId),
+        ))
+        .limit(1);
+      if (existingDiscordMessage) return null;
+    }
 
     if (!ticket.firstResponseAt && authorId !== ticket.createdById) {
       await this.db
@@ -554,16 +566,22 @@ export class TicketService {
         .where(eq(tickets.id, ticketId));
     }
 
-    const [message] = await this.db
-      .insert(ticketMessages)
-      .values({
-        ticketId,
-        authorId,
-        content,
-        isInternal,
-        discordMessageId: discordMessageId ?? null,
-      })
-      .returning();
+    let message;
+    try {
+      [message] = await this.db
+        .insert(ticketMessages)
+        .values({
+          ticketId,
+          authorId,
+          content,
+          isInternal,
+          discordMessageId: discordMessageId ?? null,
+        })
+        .returning();
+    } catch (err) {
+      if (isTicketDiscordMessageUniqueViolation(err)) return null;
+      throw err;
+    }
 
     // Audit log
     await this.db.insert(ticketAuditLog).values({
@@ -573,7 +591,7 @@ export class TicketService {
       newValue: { messageId: message.id },
     });
 
-    if (ticket.discordThreadId) {
+    if (mirrorToThread && ticket.discordThreadId) {
       const authorName = await this.resolvePlayerDisplayName(authorId);
       const prefix = isInternal
         ? `🔒 **${authorName}** (internal note):`
@@ -864,4 +882,12 @@ export class TicketService {
       avgResponseTimeMs,
     };
   }
+}
+
+function isTicketDiscordMessageUniqueViolation(err: unknown): boolean {
+  const maybePgError = err as { code?: unknown; constraint?: unknown };
+  return (
+    maybePgError.code === '23505' &&
+    maybePgError.constraint === 'ticket_messages_discord_message_unique'
+  );
 }

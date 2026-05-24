@@ -272,25 +272,25 @@ describe('validateTapMirrorChannel', () => {
     expect(validateTapMirrorChannel(channel)).toBeNull();
   });
 
-  it('REFUSES a private thread whose parent is public (the inheritance leak)', () => {
-    // This is the security-critical case: threads have no @everyone overwrites of their own,
-    // so the old check (raw permissionOverwrites.cache) returned null (safe) for any thread.
-    // The new check walks to the parent and refuses.
+  it('passes a private thread even when its parent channel is public', () => {
+    // Private threads have their own membership boundary; parent visibility does not make
+    // the thread public. Tap mirrors should therefore work in private threads under normal
+    // public text channels, not only in private channels.
     const channel = makeGuildChannel({
       type: ChannelTypeEnum.PrivateThread,
       everyoneCanView: false,
       parent: { everyoneCanView: true },
     });
-    expect(validateTapMirrorChannel(channel)).toMatch(/must be private/i);
+    expect(validateTapMirrorChannel(channel)).toBeNull();
   });
 
-  it('refuses a private thread with no resolvable parent', () => {
+  it('passes a private thread with no resolvable parent', () => {
     const channel = makeGuildChannel({
       type: ChannelTypeEnum.PrivateThread,
       everyoneCanView: false,
       parent: null,
     });
-    expect(validateTapMirrorChannel(channel)).toMatch(/no resolvable parent/i);
+    expect(validateTapMirrorChannel(channel)).toBeNull();
   });
 
   it('passes a GuildText channel with category-inherited @everyone deny (effective check, not raw overwrites)', () => {

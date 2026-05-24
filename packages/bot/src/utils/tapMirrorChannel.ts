@@ -3,8 +3,8 @@ import { ChannelType, type GuildChannel } from 'discord.js';
 /**
  * Return null if the channel is safe for wiretap mirroring, otherwise an error message.
  *
- * Allowed: `GuildText` and `PrivateThread`. Private threads are checked through their parent
- * channel because thread visibility inherits from the parent.
+ * Allowed: `GuildText` and `PrivateThread`. Private threads are accepted by type; a public
+ * parent channel does not make a private thread visible to @everyone.
  */
 export function validateTapMirrorChannel(
   channel: { id: string; type: ChannelType } | GuildChannel,
@@ -13,21 +13,16 @@ export function validateTapMirrorChannel(
     return 'Wiretap mirror channel must be a text channel or private thread (no public threads or announcement channels).';
   }
 
-  const guildChannel = channel as GuildChannel & { parent?: GuildChannel | null };
-  let channelToCheck: GuildChannel = guildChannel;
   if (channel.type === ChannelType.PrivateThread) {
-    const parent = guildChannel.parent;
-    if (!parent) {
-      return 'Private thread has no resolvable parent channel — refusing to use as wiretap mirror.';
-    }
-    channelToCheck = parent;
+    return null;
   }
 
-  if (!('permissionsFor' in channelToCheck) || typeof channelToCheck.permissionsFor !== 'function') {
+  const guildChannel = channel as GuildChannel;
+  if (!('permissionsFor' in guildChannel) || typeof guildChannel.permissionsFor !== 'function') {
     return 'Cannot resolve permissions for the chosen channel.';
   }
-  const everyone = channelToCheck.guild.roles.everyone;
-  const everyonePerms = channelToCheck.permissionsFor(everyone);
+  const everyone = guildChannel.guild.roles.everyone;
+  const everyonePerms = guildChannel.permissionsFor(everyone);
   if (!everyonePerms) {
     return 'Cannot resolve @everyone permissions for the chosen channel.';
   }

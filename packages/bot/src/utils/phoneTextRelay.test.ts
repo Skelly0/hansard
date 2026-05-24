@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     markDeliveryDelivered: vi.fn(),
     markDeliveryFailed: vi.fn(),
     releaseDeliveryClaim: vi.fn(),
+    setStaffThread: vi.fn(),
+    updateMessageMirrorIds: vi.fn(),
   },
 }));
 
@@ -32,7 +34,7 @@ vi.mock('@hansard/api/services/phoneTextService', () => ({
   }),
 }));
 
-const { __internal, flushQueuedPhoneTextsForPlayer } = await import('./phoneTextRelay.js');
+const { __internal, flushQueuedPhoneTextsForPlayer, relayRecordedPhoneText } = await import('./phoneTextRelay.js');
 
 function participant(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -99,6 +101,8 @@ beforeEach(() => {
   mocks.textSvc.markDeliveryDelivered.mockResolvedValue(undefined);
   mocks.textSvc.markDeliveryFailed.mockResolvedValue(undefined);
   mocks.textSvc.releaseDeliveryClaim.mockResolvedValue(undefined);
+  mocks.textSvc.setStaffThread.mockResolvedValue(undefined);
+  mocks.textSvc.updateMessageMirrorIds.mockResolvedValue(undefined);
 });
 
 describe('flushQueuedPhoneTextsForPlayer', () => {
@@ -185,5 +189,110 @@ describe('phone text tap delivery', () => {
     );
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(client.users.fetch).not.toHaveBeenCalled();
+  });
+
+  it('suppresses all mention parsing when posting tap text copies to a mirror channel', async () => {
+    const { client } = makeClient();
+    const channelSend = vi.fn(async () => ({ id: 'tap-channel-message' }));
+    (client.channels.fetch as any).mockResolvedValue({
+      id: 'tap-channel',
+      type: 0,
+      guild: { id: 'G1', roles: { everyone: { id: 'G1' } } },
+      permissionsFor: () => ({ has: () => false }),
+      send: channelSend,
+    });
+
+    await (__internal as any).deliverTapCopy(
+      client,
+      mocks.textSvc,
+      {
+        id: 'tap-1',
+        mirrorChannelId: 'tap-channel',
+        mirrorDiscordUserId: null,
+      },
+      'tap-delivery-1',
+      {
+        conversation: { id: 'conversation-1' },
+        message: { id: 'message-1', content: 'secret <@123> <@&456> @everyone' },
+        sender: participant(),
+        recipient: participant({
+          playerId: 'player-b',
+          numberId: 'number-b',
+          numberRaw: '222',
+          numberNormalized: '222',
+          characterName: 'Bob',
+          discordId: 'discord-b',
+          discordUsername: 'Bob',
+        }),
+      },
+    );
+
+    expect(channelSend).toHaveBeenCalledWith(expect.objectContaining({
+      allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+    }));
+  });
+});
+
+describe('phone text staff thread opener mentions', () => {
+  it('does not allow participant names to mention users or everyone when opening a text log', async () => {
+    const previousPhoneLogChannelId = process.env.PHONE_LOG_CHANNEL_ID;
+    const previousStaffRoleIds = process.env.STAFF_ROLE_IDS;
+    const previousStaffRoleId = process.env.STAFF_ROLE_ID;
+    process.env.PHONE_LOG_CHANNEL_ID = 'phone-log-channel';
+    process.env.STAFF_ROLE_IDS = 'staff-role';
+    delete process.env.STAFF_ROLE_ID;
+    try {
+      const threadSend = vi.fn(async () => ({ id: 'thread-message' }));
+      const thread = { id: 'text-thread', send: threadSend };
+      const logChannel = {
+        id: 'phone-log-channel',
+        type: 0,
+        guild: { roles: { cache: new Map(), fetch: vi.fn() } },
+        threads: { create: vi.fn(async () => thread) },
+      };
+      const client = {
+        channels: { fetch: vi.fn(async () => logChannel) },
+        users: { fetch: vi.fn() },
+      } as any;
+
+      await relayRecordedPhoneText(client, {
+        conversation: { id: 'conversation-1', staffThreadId: null },
+        message: { id: 'message-1', content: 'hello' },
+        sender: participant({ characterName: '<@123>' }),
+        recipient: participant({
+          playerId: 'player-b',
+          numberId: 'number-b',
+          numberRaw: '222',
+          numberNormalized: '222',
+          characterName: '@everyone',
+          discordId: 'discord-b',
+          discordUsername: 'Bob',
+        }),
+        tapDeliveries: [],
+      } as any);
+
+      expect(threadSend).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+      }));
+      expect(threadSend).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        allowedMentions: { parse: [], users: [], roles: ['staff-role'], repliedUser: false },
+      }));
+    } finally {
+      if (previousPhoneLogChannelId === undefined) {
+        delete process.env.PHONE_LOG_CHANNEL_ID;
+      } else {
+        process.env.PHONE_LOG_CHANNEL_ID = previousPhoneLogChannelId;
+      }
+      if (previousStaffRoleIds === undefined) {
+        delete process.env.STAFF_ROLE_IDS;
+      } else {
+        process.env.STAFF_ROLE_IDS = previousStaffRoleIds;
+      }
+      if (previousStaffRoleId === undefined) {
+        delete process.env.STAFF_ROLE_ID;
+      } else {
+        process.env.STAFF_ROLE_ID = previousStaffRoleId;
+      }
+    }
   });
 });

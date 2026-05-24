@@ -5,6 +5,7 @@ import {
   escapeMarkdown,
   type Client,
   type Guild,
+  type MessageMentionOptions,
   type TextChannel,
   type ThreadChannel,
 } from 'discord.js';
@@ -30,6 +31,13 @@ const PHONE_TAP_CHANNEL_ENV = 'PHONE_TAP_CHANNEL_ID';
 const TEXT_COLOR = 0x4f8f88;
 const STAFF_COLOR = 0x6d7d9c;
 const TAP_COLOR = 0xc25b4e;
+const NO_MENTIONS: MessageMentionOptions = { parse: [], users: [], roles: [], repliedUser: false };
+const staffRoleMentions = (roles: readonly string[]): MessageMentionOptions => ({
+  parse: [],
+  users: [],
+  roles,
+  repliedUser: false,
+});
 const DM_CONTENT_BUDGET = PHONE_DM_CHUNK_BUDGET;
 const EMBED_DESC_BUDGET = 4000;
 
@@ -99,7 +107,7 @@ async function sendStaffJoinPing(
 ): Promise<void> {
   try {
     await thread.send({
-      allowedMentions: { roles: [] },
+      allowedMentions: NO_MENTIONS,
       content: `Phone text conversation opened: **${firstName}** <-> **${secondName}**.`,
     });
   } catch (err) {
@@ -111,7 +119,7 @@ async function sendStaffJoinPing(
     if (staffRoleIds.length === 0) return;
     const mentions = staffRoleIds.map((id) => `<@&${id}>`).join(' ');
     await thread.send({
-      allowedMentions: { roles: staffRoleIds },
+      allowedMentions: staffRoleMentions(staffRoleIds),
       content: `${mentions} new phone text log requires oversight.`,
     });
   } catch (err) {
@@ -268,7 +276,7 @@ async function deliverTapCopy(
         } else if (channel && 'send' in channel && typeof (channel as { send?: unknown }).send === 'function') {
           const sent = await (channel as TextChannel | ThreadChannel).send({
             embeds: [embed],
-            allowedMentions: { parse: [] },
+            allowedMentions: NO_MENTIONS,
           });
           if (i === 0) mirrorMessageId = sent.id;
         } else {
@@ -283,7 +291,7 @@ async function deliverTapCopy(
     if (tap.mirrorDiscordUserId) {
       try {
         const user = await client.users.fetch(tap.mirrorDiscordUserId);
-        const dm = await user.send({ embeds: [embed], allowedMentions: { parse: [] } });
+        const dm = await user.send({ embeds: [embed], allowedMentions: NO_MENTIONS });
         if (!mirrorMessageId && i === 0) mirrorMessageId = dm.id;
       } catch (err) {
         errors.push(err instanceof Error ? err.message : String(err));

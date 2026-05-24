@@ -5,6 +5,7 @@ import {
   escapeMarkdown,
   type Client,
   type Guild,
+  type MessageMentionOptions,
   type TextChannel,
   type ThreadChannel,
 } from 'discord.js';
@@ -34,6 +35,13 @@ const CALL_COLOR = 0x9b7cb8;
 const STAFF_PALETTE = 0x788c5d;
 const ENDED_PALETTE = 0x9c9890;
 const TAP_PALETTE = 0xc25b4e;
+const NO_MENTIONS: MessageMentionOptions = { parse: [], users: [], roles: [], repliedUser: false };
+const staffRoleMentions = (roles: readonly string[]): MessageMentionOptions => ({
+  parse: [],
+  users: [],
+  roles,
+  repliedUser: false,
+});
 
 /** Discord DM content cap is 2000; budget for the "+number:" prefix leaves us ~1900 safe. */
 const DM_CONTENT_BUDGET = PHONE_DM_CHUNK_BUDGET;
@@ -296,7 +304,7 @@ export async function sendStaffJoinPing(
 ): Promise<void> {
   try {
     await thread.send({
-      allowedMentions: { roles: [] },
+      allowedMentions: NO_MENTIONS,
       content: `\u{1F4DE} Phone log opened: **${callerName}** \u{2194} **${recipientName}**.`,
     });
   } catch (err) {
@@ -307,7 +315,7 @@ export async function sendStaffJoinPing(
     if (staffRoleIds.length === 0) return;
     const mentions = staffRoleIds.map((id) => `<@&${id}>`).join(' ');
     await thread.send({
-      allowedMentions: { roles: staffRoleIds },
+      allowedMentions: staffRoleMentions(staffRoleIds),
       content: `${mentions} new phone log requires oversight.`,
     });
     // Fire-and-forget the staff member auto-add. `Guild.members.fetch()` without args pulls
@@ -620,7 +628,7 @@ async function deliverTapCopy(
         } else if (channel && 'send' in channel && typeof (channel as { send?: unknown }).send === 'function') {
           const sent = await (channel as TextChannel | ThreadChannel).send({
             embeds: [embed],
-            allowedMentions: { parse: [] },
+            allowedMentions: NO_MENTIONS,
           });
           if (i === 0) mirrorMessageId = sent.id;
         } else {
@@ -635,7 +643,7 @@ async function deliverTapCopy(
     if (tap.mirrorDiscordUserId) {
       try {
         const user = await client.users.fetch(tap.mirrorDiscordUserId);
-        const dm = await user.send({ embeds: [embed], allowedMentions: { parse: [] } });
+        const dm = await user.send({ embeds: [embed], allowedMentions: NO_MENTIONS });
         if (!mirrorMessageId && i === 0) mirrorMessageId = dm.id;
       } catch (err) {
         errors.push(err instanceof Error ? err.message : String(err));

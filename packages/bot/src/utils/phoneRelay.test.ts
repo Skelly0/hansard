@@ -23,6 +23,8 @@ vi.mock('@hansard/api/services/phoneService', () => ({
 const {
   __internal,
   RecipientDmClosedError,
+  relayMessage,
+  sendStaffJoinPing,
   sendVoicemailBeep,
   sendVoicemailIntro,
 } = await import('./phoneRelay.js');
@@ -379,5 +381,93 @@ describe('phoneRelay tap mirror channel validation', () => {
 
   it('allows a private env fallback tap channel', () => {
     expect(__internal.validateTapMirrorChannel(makeChannel(false) as never)).toBeNull();
+  });
+});
+
+describe('phoneRelay tap delivery', () => {
+  it('suppresses all mention parsing when posting tap copies to a mirror channel', async () => {
+    const previousPhoneLogChannelId = process.env.PHONE_LOG_CHANNEL_ID;
+    delete process.env.PHONE_LOG_CHANNEL_ID;
+    try {
+      const channelSend = vi.fn(async () => ({ id: 'tap-channel-message' }));
+      const recipientSend = vi.fn(async () => ({ id: 'recipient-message' }));
+      const tapChannel = {
+        id: 'tap-channel',
+        type: 0,
+        guild: { id: 'G1', roles: { everyone: { id: 'G1' } } },
+        permissionsFor: () => ({ has: () => false }),
+        send: channelSend,
+      };
+      const client = {
+        channels: { fetch: vi.fn(async () => tapChannel) },
+        users: { fetch: vi.fn(async () => ({ send: recipientSend })) },
+      } as any;
+
+      mocks.svc.getActiveTapsForNumbers.mockResolvedValueOnce([
+        { id: 'tap-1', mirrorChannelId: 'tap-channel', mirrorDiscordUserId: null },
+      ]);
+
+      await relayMessage(
+        client,
+        {
+          call: { id: 'call-12345678', staffThreadId: null },
+          callerNumber: { id: 'caller-number', numberRaw: '111', pseudonym: null },
+          recipientNumber: { id: 'recipient-number', numberRaw: '222', pseudonym: null },
+          callerPlayer: { id: 'caller-player', characterName: 'Alice', discordId: 'alice-discord', isAlive: true },
+          recipientPlayer: { id: 'recipient-player', characterName: 'Bob', discordId: 'bob-discord', isAlive: true },
+        } as any,
+        {
+          message: { id: 'message-1', content: 'hey <@123> <@&456> @everyone' },
+          tapDeliveries: [{ id: 'delivery-1', tapId: 'tap-1' }],
+        } as any,
+        true,
+      );
+
+      expect(channelSend).toHaveBeenCalledWith(expect.objectContaining({
+        allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+      }));
+    } finally {
+      if (previousPhoneLogChannelId === undefined) {
+        delete process.env.PHONE_LOG_CHANNEL_ID;
+      } else {
+        process.env.PHONE_LOG_CHANNEL_ID = previousPhoneLogChannelId;
+      }
+    }
+  });
+});
+
+describe('phoneRelay staff thread opener mentions', () => {
+  it('does not allow player names to mention users or everyone when opening a phone log', async () => {
+    const previousStaffRoleIds = process.env.STAFF_ROLE_IDS;
+    const previousStaffRoleId = process.env.STAFF_ROLE_ID;
+    process.env.STAFF_ROLE_IDS = 'staff-role';
+    delete process.env.STAFF_ROLE_ID;
+    try {
+      const thread = { send: vi.fn(async () => ({ id: 'thread-message' })) };
+      const guild = {
+        members: { cache: new Map(), fetch: vi.fn(async () => new Map()) },
+        roles: { cache: new Map(), fetch: vi.fn() },
+      };
+
+      await sendStaffJoinPing(thread as any, guild as any, '<@123>', '@everyone');
+
+      expect(thread.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+      }));
+      expect(thread.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        allowedMentions: { parse: [], users: [], roles: ['staff-role'], repliedUser: false },
+      }));
+    } finally {
+      if (previousStaffRoleIds === undefined) {
+        delete process.env.STAFF_ROLE_IDS;
+      } else {
+        process.env.STAFF_ROLE_IDS = previousStaffRoleIds;
+      }
+      if (previousStaffRoleId === undefined) {
+        delete process.env.STAFF_ROLE_ID;
+      } else {
+        process.env.STAFF_ROLE_ID = previousStaffRoleId;
+      }
+    }
   });
 });

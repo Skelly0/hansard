@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PhoneTextService } from './phoneTextService.js';
+import { PhoneTextService, phoneTextReplyHintForResolution } from './phoneTextService.js';
 
 type DbPlan = {
   selectQueues?: unknown[][];
@@ -213,6 +213,16 @@ describe('PhoneTextService reply resolution', () => {
 
     expect(resolution.status).toBe('multiple');
     expect(resolution.status === 'multiple' ? resolution.conversations : []).toHaveLength(2);
+  });
+});
+
+describe('phoneTextReplyHintForResolution', () => {
+  it('tells players with multiple conversations how to list, switch, or close one', () => {
+    const hint = phoneTextReplyHintForResolution({ status: 'multiple', conversations: [] });
+
+    expect(hint).toContain('/phone conversations');
+    expect(hint).toContain('/phone switch');
+    expect(hint).toContain('/phone close-conversation');
   });
 });
 

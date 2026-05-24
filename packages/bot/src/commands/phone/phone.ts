@@ -20,6 +20,7 @@ import {
 import {
   PhoneTextService,
   PhoneTextServiceError,
+  type RecordedPhoneText,
   type PhoneTextConversationContext,
 } from '@hansard/api/services/phoneTextService';
 import { buildIncomingCallActions } from '../../components/phoneButtons.js';
@@ -574,17 +575,66 @@ async function handleHistory(interaction: ChatInputCommandInteraction): Promise<
 // asynchronous text conversations
 // -----------------------------------------------------------------------------
 
-function formatConversationLine(context: PhoneTextConversationContext): string {
+function formatConversationLine(
+  context: PhoneTextConversationContext,
+  currentReplyConversationId: string | null = null,
+): string {
   const stamp = `<t:${Math.floor(context.conversation.lastMessageAt.getTime() / 1000)}:R>`;
   const otherName = context.counterparty.pseudonym
     ?? context.counterparty.characterName
     ?? context.counterparty.numberRaw;
+  const replyTarget = currentReplyConversationId === context.conversation.id
+    ? '**Current DM reply target**'
+    : null;
   return [
     `• \`${context.conversation.id}\``,
     `with **${escapeMarkdown(otherName)}** (${context.counterparty.numberRaw})`,
     `from ${formatPublicLineIdentity(context.participant)}`,
     stamp,
-  ].join(' — ');
+    replyTarget,
+  ].filter(Boolean).join(' — ');
+}
+
+type TextSentDescriptionContext = Pick<RecordedPhoneText, 'conversation' | 'sender' | 'recipient'>;
+
+function formatTextSentDescription(recorded: TextSentDescriptionContext): string {
+  return [
+    `From: ${formatPublicLineIdentity(recorded.sender)}`,
+    `To: ${formatPublicLineIdentity(recorded.recipient)}`,
+    `Conversation: ${formatInlineCode(recorded.conversation.id.slice(0, 8))}`,
+    '',
+    'You can keep multiple text conversations open. Freeform DMs reply to this selected conversation until you use `/phone switch`, and delivery waits if the recipient is on a call.',
+    `Close this one with \`/phone close-conversation conversation-id:${recorded.conversation.id}\`, or run \`/phone close-conversation\` when it is your selected/only active conversation.`,
+  ].join('\n');
+}
+
+type CloseConversationIdResult =
+  | { ok: true; conversationId: string }
+  | { ok: false; message: string };
+
+async function resolveCloseConversationId(
+  service: Pick<PhoneTextService, 'resolveReplyConversation'>,
+  playerId: string,
+  explicitConversationId: string | null,
+): Promise<CloseConversationIdResult> {
+  if (explicitConversationId?.trim()) {
+    return { ok: true, conversationId: explicitConversationId.trim() };
+  }
+
+  const resolution = await service.resolveReplyConversation(playerId);
+  if (resolution.status === 'selected' || resolution.status === 'sole') {
+    return { ok: true, conversationId: resolution.context.conversation.id };
+  }
+  if (resolution.status === 'multiple') {
+    return {
+      ok: false,
+      message: 'You have multiple active text conversations. Choose one with the `conversation-id` option; `/phone conversations` lists them.',
+    };
+  }
+  return {
+    ok: false,
+    message: 'No active text conversation to close. Start one with `/phone text`.',
+  };
 }
 
 async function chooseOwnedTextNumber(
@@ -636,15 +686,7 @@ async function handleText(interaction: ChatInputCommandInteraction): Promise<voi
     await relayRecordedPhoneText(interaction.client, recorded);
     await interaction.editReply({
       embeds: [
-        successEmbed(
-          'Text sent',
-          [
-            `From: ${formatPublicLineIdentity(recorded.sender)}`,
-            `To: ${formatPublicLineIdentity(recorded.recipient)}`,
-            '',
-            'Freeform DMs now reply to this text conversation. If the recipient is on a call, delivery waits until their line is free.',
-          ].join('\n'),
-        ),
+        successEmbed('Text sent', formatTextSentDescription(recorded)),
       ],
     });
   } catch (err) {
@@ -661,7 +703,8 @@ async function handleConversations(interaction: ChatInputCommandInteraction): Pr
   const player = await requirePlayer(interaction);
   if (!player) return;
 
-  const conversations = await textSvc().listConversationsForPlayer(player.id, { limit: 20 });
+  const service = textSvc();
+  const conversations = await service.listConversationsForPlayer(player.id, { limit: 20 });
   if (!conversations.length) {
     await interaction.editReply({
       embeds: [
@@ -674,12 +717,20 @@ async function handleConversations(interaction: ChatInputCommandInteraction): Pr
     return;
   }
 
+  const resolution = await service.resolveReplyConversation(player.id);
+  const currentReplyConversationId = resolution.status === 'selected' || resolution.status === 'sole'
+    ? resolution.context.conversation.id
+    : null;
+
   await interaction.editReply({
     embeds: [
       new EmbedBuilder()
         .setTitle('Text conversations')
         .setColor(CALL_COLOUR)
-        .setDescription(conversations.map(formatConversationLine).join('\n')),
+        .setDescription(conversations.map((context) => formatConversationLine(context, currentReplyConversationId)).join('\n'))
+        .setFooter({
+          text: 'Use /phone switch to change DM replies. /phone close-conversation closes selected/only, or choose a conversation id.',
+        }),
     ],
     allowedMentions: { parse: [] },
   });
@@ -714,13 +765,26 @@ async function handleSwitchConversation(interaction: ChatInputCommandInteraction
 async function handleCloseConversation(interaction: ChatInputCommandInteraction): Promise<void> {
   const player = await requirePlayer(interaction);
   if (!player) return;
-  const conversationId = interaction.options.getString('conversation-id', true);
+  const conversationIdInput = interaction.options.getString('conversation-id');
 
   try {
-    await textSvc().archiveConversation(player.id, conversationId);
+    const service = textSvc();
+    const resolved = await resolveCloseConversationId(service, player.id, conversationIdInput);
+    if (!resolved.ok) {
+      await interaction.editReply({ embeds: [errorEmbed(resolved.message)] });
+      return;
+    }
+
+    const conversationId = resolved.conversationId;
+    await service.archiveConversation(player.id, conversationId);
     clearNoCallCache(interaction.user.id);
     await interaction.editReply({
-      embeds: [successEmbed('Text conversation closed', 'Freeform DMs will no longer reply to that conversation.')],
+      embeds: [
+        successEmbed(
+          'Text conversation closed',
+          `Conversation ${formatInlineCode(conversationId.slice(0, 8))} is archived. Freeform DMs will no longer reply to it.`,
+        ),
+      ],
     });
   } catch (err) {
     if (err instanceof PhoneTextServiceError) {
@@ -976,7 +1040,7 @@ async function handleAdminForceEnd(interaction: ChatInputCommandInteraction): Pr
 const command: Command = {
   data: new SlashCommandBuilder()
     .setName('phone')
-    .setDescription('Phone registry: register numbers, dial others, manage wiretaps (staff only)')
+    .setDescription('Phone registry: numbers, calls, text conversations, and staff wiretaps')
     // Available in both guild channels and DMs so /phone hangup works from the call DM.
     .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM)
     .addSubcommand((sub) =>
@@ -1104,12 +1168,12 @@ const command: Command = {
     .addSubcommand((sub) =>
       sub
         .setName('close-conversation')
-        .setDescription('Archive a phone text conversation')
+        .setDescription('Archive the selected/only phone text conversation, or choose one by id')
         .addStringOption((opt) =>
           opt
             .setName('conversation-id')
-            .setDescription('Text conversation id')
-            .setRequired(true)
+            .setDescription('Optional; defaults to your selected/only active text conversation')
+            .setRequired(false)
             .setAutocomplete(true),
         ),
     )
@@ -1413,4 +1477,11 @@ const command: Command = {
 
 export default command;
 export { validateTapMirrorChannel };
-export const __testables = { ensureStaff, discordUserIsStaff, isPhoneSchemaMissing };
+export const __testables = {
+  ensureStaff,
+  discordUserIsStaff,
+  isPhoneSchemaMissing,
+  formatConversationLine,
+  formatTextSentDescription,
+  resolveCloseConversationId,
+};

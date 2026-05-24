@@ -13,6 +13,10 @@ describe('/phone command metadata', () => {
     expect(json.name).toBe('phone');
   });
 
+  it('describes calls and text conversations at the parent command level', () => {
+    expect(json.description).toMatch(/text/i);
+  });
+
   it('contains the player-facing subcommands', () => {
     const subNames = json.options
       ?.filter((o) => o.type === 1) // SUB_COMMAND
@@ -91,6 +95,76 @@ describe('/phone command metadata', () => {
         .options?.find((o) => o.name === 'conversation-id');
       expect(idOpt).toMatchObject({ type: 3, autocomplete: true });
     }
+  });
+
+  it('lets close-conversation default to the selected or only active conversation', () => {
+    const sub = json.options?.find((o) => o.type === 1 && o.name === 'close-conversation');
+    const idOpt = (sub as { options?: Array<{ name: string; type: number; required?: boolean; description?: string }> })
+      .options?.find((o) => o.name === 'conversation-id');
+    expect(idOpt).toMatchObject({
+      type: 3,
+      required: false,
+      description: expect.stringMatching(/selected|only/i),
+    });
+  });
+
+  it('formats text-sent copy as a selected reply target, not a single open conversation', () => {
+    const description = __testables.formatTextSentDescription({
+      conversation: { id: 'conversation-123456789' },
+      sender: { numberRaw: '911', pseudonym: null },
+      recipient: { numberRaw: '488901', pseudonym: null },
+    } as never);
+
+    expect(description).toContain('Conversation: `conversa`');
+    expect(description).toContain('You can keep multiple text conversations open.');
+    expect(description).toContain('/phone switch');
+    expect(description).toContain('/phone close-conversation');
+  });
+
+  it('marks the current DM reply target in conversation list lines', () => {
+    const line = __testables.formatConversationLine({
+      conversation: {
+        id: 'conversation-123456789',
+        lastMessageAt: new Date('2026-05-21T12:00:00.000Z'),
+      },
+      counterparty: {
+        numberRaw: '488901',
+        pseudonym: null,
+        characterName: 'Counterparty',
+      },
+      participant: {
+        numberRaw: '911',
+        pseudonym: null,
+      },
+    } as never, 'conversation-123456789');
+
+    expect(line).toContain('Current DM reply target');
+  });
+
+  it('resolves close-conversation without an id to the selected or sole conversation', async () => {
+    const selectedSvc = {
+      resolveReplyConversation: async () => ({ status: 'selected', context: { conversation: { id: 'selected-conv' } } }),
+    };
+    const soleSvc = {
+      resolveReplyConversation: async () => ({ status: 'sole', context: { conversation: { id: 'sole-conv' } } }),
+    };
+
+    await expect(__testables.resolveCloseConversationId(selectedSvc as never, 'player-1', null))
+      .resolves.toEqual({ ok: true, conversationId: 'selected-conv' });
+    await expect(__testables.resolveCloseConversationId(soleSvc as never, 'player-1', null))
+      .resolves.toEqual({ ok: true, conversationId: 'sole-conv' });
+  });
+
+  it('asks for a conversation id before closing when multiple conversations are active', async () => {
+    const svc = {
+      resolveReplyConversation: async () => ({ status: 'multiple', conversations: [] }),
+    };
+
+    await expect(__testables.resolveCloseConversationId(svc as never, 'player-1', null))
+      .resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining('conversation-id'),
+      });
   });
 
   it('register subcommand exposes an optional pseudonym string option', () => {

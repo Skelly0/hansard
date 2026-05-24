@@ -92,7 +92,7 @@ export const PHONE_RECIPIENT_DM_CLOSED = 'Recipient has DMs closed and could not
 export const PHONE_TEXT_NO_CONVERSATION =
   'You are not in a call and do not have a selected text conversation. Use `/phone dial` to call, `/phone text` to start texting, or `/phone conversations` and `/phone switch` to pick an existing conversation.';
 export const PHONE_TEXT_MULTIPLE_CONVERSATIONS =
-  'You have multiple active text conversations. Use `/phone conversations` and `/phone switch` before replying in DM.';
+  'You have multiple active text conversations. Use `/phone conversations` to list them, `/phone switch` to pick a DM reply target, or `/phone close-conversation` with a conversation id to archive one.';
 export const PHONE_TEXT_ARCHIVED =
   'That text conversation is archived. Start a new one with `/phone text`.';
 

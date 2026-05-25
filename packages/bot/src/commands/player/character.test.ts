@@ -4,12 +4,16 @@ import command from './character.js';
 const mocks = vi.hoisted(() => ({
   select: vi.fn(),
   transaction: vi.fn(),
+  update: vi.fn(),
+  insert: vi.fn(),
 }));
 
 vi.mock('../../db.js', () => ({
   db: {
     select: mocks.select,
     transaction: mocks.transaction,
+    update: mocks.update,
+    insert: mocks.insert,
   },
 }));
 
@@ -169,8 +173,116 @@ describe('/character create', () => {
       .find((payload) => containsText(payload, /Character Summary/));
 
     expect(uploadedMsg.delete).not.toHaveBeenCalled();
-    expect(containsText(confirmPayload, /\[View Image\]\(https:\/\/cdn\.discordapp\.com\/attachments\/111\/222\/Portrait_%281%29\.png\)/)).toBe(true);
-    expect(containsText(confirmPayload, /ex=65d903de|hm=abc123/)).toBe(false);
+    expect(containsText(confirmPayload, /\[View Image\]\(https:\/\/cdn\.discordapp\.com\/attachments\/111\/222\/Portrait_%281%29\.png\?ex=65d903de&is=65c68ede&hm=abc123&\)/)).toBe(true);
+  });
+
+  it('stores source attachment metadata for direct-upload portraits', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      if (selectCall === 6) return selectLimitResult([]);
+      if (selectCall === 7) return selectLimitResult([]);
+      if (selectCall === 8) return selectLimitOnlyResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const attachmentUrl = 'https://cdn.discordapp.com/attachments/channel-1/attachment-1/Portrait_(1).png?ex=65d903de&is=65c68ede&hm=abc123&';
+    const storedAttachmentUrl = 'https://cdn.discordapp.com/attachments/channel-1/attachment-1/Portrait_%281%29.png?ex=65d903de&is=65c68ede&hm=abc123&';
+    const uploadedMsg = {
+      id: 'message-1',
+      channelId: 'channel-1',
+      author: { id: 'discord-user-1' },
+      attachments: {
+        first: vi.fn(() => ({
+          id: 'attachment-1',
+          name: 'Portrait_(1).png',
+          contentType: 'image/png',
+          url: attachmentUrl,
+        })),
+      },
+      content: '',
+      delete: vi.fn(),
+    };
+
+    const messageCollector = {
+      on: vi.fn((event: string, handler: (msg: typeof uploadedMsg) => void) => {
+        if (event === 'collect') {
+          queueMicrotask(() => handler(uploadedMsg));
+        }
+        return messageCollector;
+      }),
+      stop: vi.fn(),
+    };
+
+    const buttonCollector = {
+      on: vi.fn(() => buttonCollector),
+      stop: vi.fn(),
+    };
+
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => buttonCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({ customId: 'char_confirm_discord-user-1', deferUpdate: vi.fn() }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const playerValues = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 'player-1' }]),
+    });
+    const eventValues = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      insert: vi.fn()
+        .mockReturnValueOnce({ values: playerValues })
+        .mockReturnValueOnce({ values: eventValues }),
+    };
+    mocks.transaction.mockImplementation(async (fn: (transaction: typeof tx) => Promise<unknown>) => fn(tx));
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: null,
+      channel: {
+        createMessageCollector: vi.fn(() => messageCollector),
+      },
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    expect(playerValues).toHaveBeenCalledWith(expect.objectContaining({
+      characterPortraitUrl: storedAttachmentUrl,
+      profileData: {
+        characterPortraitAttachment: {
+          channelId: 'channel-1',
+          messageId: 'message-1',
+          attachmentId: 'attachment-1',
+          filename: 'Portrait_(1).png',
+        },
+      },
+    }));
+    expect(uploadedMsg.delete).not.toHaveBeenCalled();
   });
 
   it('accepts character names with straight quotes (the case the user reported)', async () => {
@@ -834,5 +946,176 @@ describe('/character view', () => {
     expect(replyPayload).toBeDefined();
     expect(containsText(replyPayload, /Favours/i)).toBe(false);
     expect(containsText(replyPayload, /Court Influence|42/)).toBe(false);
+  });
+
+  it('refreshes a Discord attachment portrait from stored source-message metadata', async () => {
+    let selectCall = 0;
+    const freshPortraitUrl = 'https://cdn.discordapp.com/attachments/channel-1/attachment-1/Kaylie.png?ex=fresh&is=fresh&hm=fresh';
+    const stalePortraitUrl = 'https://cdn.discordapp.com/attachments/channel-1/attachment-1/Kaylie.png?ex=65d903de&is=65c68ede&hm=old';
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) {
+        return selectLimitResult([{
+          id: 'player-1',
+          characterName: 'Kaylie Lykos',
+          characterBio: 'Wolf at the chamber door.',
+          characterPortraitUrl: stalePortraitUrl,
+          profileData: {
+            characterPortraitAttachment: {
+              channelId: 'channel-1',
+              messageId: 'message-1',
+              attachmentId: 'attachment-1',
+            },
+          },
+          currentAge: 27,
+          startingAge: 27,
+          factionId: null,
+          partyId: null,
+          healthStatus: 'healthy',
+          ailments: [],
+          isAlive: true,
+          causeOfDeath: null,
+        }]);
+      }
+      if (selectCall === 2) return selectInnerJoinWhereResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const interaction = {
+      user: { id: 'discord-user-1', displayName: 'Kaylie' },
+      client: {
+        channels: {
+          fetch: vi.fn().mockResolvedValue({
+            messages: {
+              fetch: vi.fn().mockResolvedValue({
+                attachments: new Map([
+                  ['attachment-1', {
+                    id: 'attachment-1',
+                    contentType: 'image/png',
+                    url: freshPortraitUrl,
+                  }],
+                ]),
+              }),
+            },
+          }),
+        },
+      },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('view'),
+        getSubcommandGroup: vi.fn().mockReturnValue(null),
+        getUser: vi.fn().mockReturnValue(null),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    const replyPayload = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(replyPayload?.embeds?.[0]?.data?.thumbnail?.url).toBe(freshPortraitUrl);
+  });
+
+  it('does not send an expired Discord attachment URL when there is no source metadata to refresh', async () => {
+    let selectCall = 0;
+    const expiredPortraitUrl = 'https://cdn.discordapp.com/attachments/channel-1/attachment-1/Kaylie.png?ex=65d903de&is=65c68ede&hm=old';
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) {
+        return selectLimitResult([{
+          id: 'player-1',
+          characterName: 'Kaylie Lykos',
+          characterBio: 'Wolf at the chamber door.',
+          characterPortraitUrl: expiredPortraitUrl,
+          profileData: null,
+          currentAge: 27,
+          startingAge: 27,
+          factionId: null,
+          partyId: null,
+          healthStatus: 'healthy',
+          ailments: [],
+          isAlive: true,
+          causeOfDeath: null,
+        }]);
+      }
+      if (selectCall === 2) return selectInnerJoinWhereResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const interaction = {
+      user: { id: 'discord-user-1', displayName: 'Kaylie' },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('view'),
+        getSubcommandGroup: vi.fn().mockReturnValue(null),
+        getUser: vi.fn().mockReturnValue(null),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+
+    await command.execute(interaction as any);
+
+    const replyPayload = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(replyPayload?.embeds?.[0]?.data?.thumbnail).toBeUndefined();
+    expect(containsText(replyPayload, /portrait link has expired/i)).toBe(true);
+  });
+});
+
+describe('/character edit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('clears direct-upload attachment metadata when the portrait URL changes', async () => {
+    const oldPortraitUrl = 'https://cdn.discordapp.com/attachments/channel-1/attachment-1/Old.png?ex=fresh&is=fresh&hm=fresh';
+    const newPortraitUrl = 'https://example.com/new-kaylie.png';
+
+    mocks.select.mockImplementation(() => selectLimitResult([{
+      id: 'player-1',
+      characterName: 'Kaylie Lykos',
+      characterBio: 'Wolf at the chamber door.',
+      characterPortraitUrl: oldPortraitUrl,
+      profileData: {
+        pronouns: 'she/her',
+        characterPortraitAttachment: {
+          channelId: 'channel-1',
+          messageId: 'message-1',
+          attachmentId: 'attachment-1',
+        },
+      },
+    }]));
+
+    const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+    mocks.update.mockReturnValue({ set: updateSet });
+    mocks.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_bio: 'Wolf at the chamber door.',
+          character_portrait: newPortraitUrl,
+        })[field] ?? ''),
+      },
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1' },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('edit'),
+        getSubcommandGroup: vi.fn().mockReturnValue(null),
+      },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({
+      characterPortraitUrl: newPortraitUrl,
+      profileData: { pronouns: 'she/her' },
+    }));
   });
 });

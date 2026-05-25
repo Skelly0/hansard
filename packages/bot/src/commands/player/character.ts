@@ -55,6 +55,23 @@ const DEFAULT_STARTING_AGE = 30;
 const CHARACTER_ALREADY_EXISTS_ERROR = 'CHARACTER_ALREADY_EXISTS';
 const DISCORD_ATTACHMENT_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 
+interface CharacterPortraitAttachmentRef {
+  channelId: string;
+  messageId: string;
+  attachmentId: string;
+  filename?: string;
+}
+
+interface ResolvedPortrait {
+  url: string | null;
+  warning: string | null;
+}
+
+interface PortraitSelection {
+  url: string | null;
+  attachment: CharacterPortraitAttachmentRef | null;
+}
+
 function isDiscordAttachmentUrl(url: URL): boolean {
   return DISCORD_ATTACHMENT_HOSTS.has(url.hostname.toLowerCase())
     && url.pathname.startsWith('/attachments/');
@@ -69,12 +86,6 @@ function normalizePortraitUrl(rawUrl: string): string {
 
   try {
     const url = new URL(trimmed);
-
-    if (isDiscordAttachmentUrl(url)) {
-      url.search = '';
-      url.hash = '';
-    }
-
     return encodeMarkdownLinkUrl(url.href);
   } catch {
     return trimmed;
@@ -83,6 +94,92 @@ function normalizePortraitUrl(rawUrl: string): string {
 
 function viewImageLink(url: string): string {
   return `[View Image](${encodeMarkdownLinkUrl(url)})`;
+}
+
+function isExpiredOrUnsignedDiscordAttachmentUrl(rawUrl: string | null): boolean {
+  if (!rawUrl) return false;
+
+  try {
+    const url = new URL(rawUrl);
+    if (!isDiscordAttachmentUrl(url)) return false;
+
+    const expiresHex = url.searchParams.get('ex');
+    if (!expiresHex || !/^[0-9a-f]+$/i.test(expiresHex)) return true;
+
+    const expiresAtMs = Number.parseInt(expiresHex, 16) * 1000;
+    return !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function getPortraitAttachmentRef(profileData: unknown): CharacterPortraitAttachmentRef | null {
+  if (!profileData || typeof profileData !== 'object') return null;
+
+  const rawRef = (profileData as { characterPortraitAttachment?: unknown }).characterPortraitAttachment;
+  if (!rawRef || typeof rawRef !== 'object') return null;
+
+  const {
+    channelId,
+    messageId,
+    attachmentId,
+  } = rawRef as Partial<CharacterPortraitAttachmentRef>;
+
+  if (!channelId || !messageId || !attachmentId) return null;
+
+  return { channelId, messageId, attachmentId };
+}
+
+function profileDataWithPortraitAttachment(
+  profileData: unknown,
+  attachment: CharacterPortraitAttachmentRef | null,
+): Record<string, unknown> | null {
+  const next = profileData && typeof profileData === 'object'
+    ? { ...(profileData as Record<string, unknown>) }
+    : {};
+
+  if (attachment) {
+    next.characterPortraitAttachment = attachment;
+  } else {
+    delete next.characterPortraitAttachment;
+  }
+
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+async function resolvePortraitUrl(
+  interaction: ChatInputCommandInteraction,
+  player: { characterPortraitUrl: string | null; profileData?: unknown },
+): Promise<ResolvedPortrait> {
+  const attachmentRef = getPortraitAttachmentRef(player.profileData);
+  const expiredWarning = 'Saved Discord portrait link has expired. Use `/character edit` with a fresh non-Discord image URL.';
+  if (!attachmentRef) {
+    return isExpiredOrUnsignedDiscordAttachmentUrl(player.characterPortraitUrl)
+      ? { url: null, warning: expiredWarning }
+      : { url: player.characterPortraitUrl ?? null, warning: null };
+  }
+
+  try {
+    const channel = await interaction.client.channels.fetch(attachmentRef.channelId);
+    if (!channel || !('messages' in channel)) {
+      return isExpiredOrUnsignedDiscordAttachmentUrl(player.characterPortraitUrl)
+        ? { url: null, warning: expiredWarning }
+        : { url: player.characterPortraitUrl ?? null, warning: null };
+    }
+
+    const message = await channel.messages.fetch(attachmentRef.messageId);
+    const attachment = message.attachments.get(attachmentRef.attachmentId);
+    if (attachment?.url) return { url: attachment.url, warning: null };
+
+    return isExpiredOrUnsignedDiscordAttachmentUrl(player.characterPortraitUrl)
+      ? { url: null, warning: expiredWarning }
+      : { url: player.characterPortraitUrl ?? null, warning: null };
+  } catch (error) {
+    console.warn('Failed to refresh character portrait attachment URL:', error);
+    return isExpiredOrUnsignedDiscordAttachmentUrl(player.characterPortraitUrl)
+      ? { url: null, warning: expiredWarning }
+      : { url: player.characterPortraitUrl ?? null, warning: null };
+  }
 }
 
 // ─── Health display ────────────────────────────────────────────────────────
@@ -237,7 +334,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   });
 
   // Wait for portrait or skip
-  const portraitUrl = await new Promise<string | null>((resolve) => {
+  const portrait = await new Promise<PortraitSelection>((resolve) => {
     let resolved = false;
 
     const buttonCollector = portraitMsg.createMessageComponentCollector({
@@ -264,7 +361,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
         resolved = true;
         messageCollector?.stop();
         await btn.deferUpdate();
-        resolve(null);
+        resolve({ url: null, attachment: null });
       }
     });
 
@@ -277,11 +374,19 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
         const attachment = msg.attachments.first();
         if (attachment?.contentType?.startsWith('image/')) {
           shouldDeleteMessage = false;
-          resolve(normalizePortraitUrl(attachment.url));
+          resolve({
+            url: normalizePortraitUrl(attachment.url),
+            attachment: {
+              channelId: msg.channelId,
+              messageId: msg.id,
+              attachmentId: attachment.id,
+              filename: attachment.name,
+            },
+          });
         } else if (msg.content.match(/^https?:\/\/.+\.(png|jpg|jpeg|gif|webp)/i)) {
-          resolve(normalizePortraitUrl(msg.content));
+          resolve({ url: normalizePortraitUrl(msg.content), attachment: null });
         } else {
-          resolve(null);
+          resolve({ url: null, attachment: null });
         }
 
         if (shouldDeleteMessage) {
@@ -294,10 +399,12 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       if (!resolved) {
         resolved = true;
         messageCollector?.stop();
-        resolve(null);
+        resolve({ url: null, attachment: null });
       }
     });
   });
+  const portraitUrl = portrait.url;
+  const portraitAttachment = portrait.attachment;
 
   // Step 3: Faction select
   const allFactions = await db
@@ -547,7 +654,10 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
           isReincarnation = true;
           previousCharacterName = prior.characterName;
           const archive = buildArchivedCharacter(prior);
-          const newProfileData = profileDataWithArchive(prior.profileData, archive);
+          const newProfileData = profileDataWithPortraitAttachment(
+            profileDataWithArchive(prior.profileData, archive),
+            portraitAttachment,
+          );
 
           const [updatedPlayer] = await tx
             .update(players)
@@ -594,6 +704,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
               startingFavoursGranted: false,
               isActive: true,
               lastActiveAt: new Date(),
+              profileData: profileDataWithPortraitAttachment(prior.profileData, portraitAttachment),
             })
             .where(and(eq(players.id, playerId), isNull(players.characterName)))
             .returning({ id: players.id });
@@ -617,6 +728,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
             factionId: selectedFactionId,
             partyId: selectedPartyId,
             startingFavoursGranted: false,
+            profileData: profileDataWithPortraitAttachment(null, portraitAttachment),
           })
           .returning({ id: players.id });
         playerId = newPlayer.id;
@@ -838,11 +950,16 @@ async function handleView(interaction: ChatInputCommandInteraction): Promise<voi
     );
   }
 
+  const portrait = await resolvePortraitUrl(interaction, player);
+  if (portrait.warning) {
+    fields.push({ name: 'Portrait', value: portrait.warning });
+  }
+
   const embed = createEmbed({
     title: player.characterName ?? 'Unknown Character',
     description: `> ${bio}`,
     system: 'players',
-    thumbnail: player.characterPortraitUrl ?? undefined,
+    thumbnail: portrait.url ?? undefined,
     fields,
   });
 
@@ -933,6 +1050,7 @@ async function handleEdit(interaction: ChatInputCommandInteraction): Promise<voi
   }
   if (newPortrait !== player.characterPortraitUrl) {
     updateData.characterPortraitUrl = newPortrait;
+    updateData.profileData = profileDataWithPortraitAttachment(player.profileData, null);
     changes.push('portrait');
   }
 

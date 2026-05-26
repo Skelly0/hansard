@@ -9,6 +9,7 @@ import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { postStaffActionLog } from '../../utils/modLog.js';
+import { sendFavourAdjustmentDmSafely } from '../../utils/favourNotifications.js';
 import { autocompleteFavourCategory } from './_categoryAutocomplete.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -126,6 +127,16 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
     const playerName = targetPlayer.characterName ?? targetUser.username;
     const emoji = category.emoji ? `${category.emoji} ` : '';
+    const dmSent = await sendFavourAdjustmentDmSafely({
+      user: targetUser,
+      kind: 'grant',
+      amount,
+      categoryName: category.name,
+      categoryEmoji: category.emoji,
+      balanceAfter: newBalance,
+      reason,
+      characterName: targetPlayer.characterName,
+    }, { playerId: targetPlayer.id });
 
     const embed = successEmbed(
       'Favours Granted',
@@ -133,6 +144,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         `${emoji}**+${amount}** ${category.name} favours granted to **${playerName}**.`,
         `New balance: \`${newBalance}\``,
         reason ? `**Reason:** ${reason}` : '',
+        '',
+        dmSent ? 'DM sent to player.' : 'DM could not be delivered; check bot logs.',
       ].filter(Boolean).join('\n'),
     );
 

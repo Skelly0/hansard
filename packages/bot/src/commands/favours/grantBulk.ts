@@ -17,7 +17,21 @@ import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { postStaffActionLog } from '../../utils/modLog.js';
+import { sendFavourAdjustmentDmSafely } from '../../utils/favourNotifications.js';
 import { autocompleteFavourCategory } from './_categoryAutocomplete.js';
+
+const BULK_FAVOUR_DM_CONCURRENCY = 5;
+
+type BulkFavourTarget = {
+  id: string;
+  discordId: string | null;
+  discordUsername: string | null;
+  characterName: string | null;
+};
+
+type BulkFavourDmTarget = BulkFavourTarget & {
+  balanceAfter: number;
+};
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
@@ -75,7 +89,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  let targets: { id: string; characterName: string | null }[] = [];
+  let targets: BulkFavourTarget[] = [];
   let groupLabel = '';
 
   if (partyName) {
@@ -90,7 +104,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       return;
     }
     targets = await db
-      .select({ id: players.id, characterName: players.characterName })
+      .select({
+        id: players.id,
+        discordId: players.discordId,
+        discordUsername: players.discordUsername,
+        characterName: players.characterName,
+      })
       .from(players)
       .where(and(eq(players.partyId, party.id), eq(players.isActive, true), eq(players.isAlive, true)));
     groupLabel = `party **${party.name}**`;
@@ -106,7 +125,12 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       return;
     }
     const rows = await db
-      .select({ id: players.id, characterName: players.characterName })
+      .select({
+        id: players.id,
+        discordId: players.discordId,
+        discordUsername: players.discordUsername,
+        characterName: players.characterName,
+      })
       .from(officeHolders)
       .innerJoin(players, eq(officeHolders.playerId, players.id))
       .where(and(eq(officeHolders.officeId, office.id), isNull(officeHolders.endDate)));
@@ -122,6 +146,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   let succeeded = 0;
   const failures: string[] = [];
+  const dmTargets: BulkFavourDmTarget[] = [];
 
   try {
     await db.transaction(async (tx) => {
@@ -141,6 +166,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         }
 
         const newBalance = balanceRow.balance + amount;
+        dmTargets.push({
+          ...target,
+          balanceAfter: newBalance,
+        });
 
         await tx
           .update(favourBalances)
@@ -168,10 +197,45 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   const emoji = category.emoji ? `${category.emoji} ` : '';
   const totalGranted = succeeded * amount;
+  const dmResults = await mapWithConcurrency(dmTargets, BULK_FAVOUR_DM_CONCURRENCY, async (target) => {
+    if (!target.discordId) {
+      console.warn('[favour-notify] skipped bulk favour DM without Discord id', {
+        playerId: target.id,
+        categoryName: category.name,
+        amount,
+      });
+      return false;
+    }
+
+    try {
+      const user = await interaction.client.users.fetch(target.discordId);
+      return sendFavourAdjustmentDmSafely({
+        user,
+        kind: 'grant',
+        amount,
+        categoryName: category.name,
+        categoryEmoji: category.emoji,
+        balanceAfter: target.balanceAfter,
+        reason,
+        characterName: target.characterName,
+      }, { playerId: target.id });
+    } catch (err) {
+      console.warn('[favour-notify] failed to fetch Discord user for bulk favour grant', {
+        playerId: target.id,
+        discordId: target.discordId,
+        categoryName: category.name,
+        amount,
+        err,
+      });
+      return false;
+    }
+  });
+  const dmSent = dmResults.filter(Boolean).length;
 
   const description = [
     `${emoji}Granted **${amount}** ${category.name} favour${amount === 1 ? '' : 's'} to **${succeeded}** recipient${succeeded === 1 ? '' : 's'} in ${groupLabel}.`,
     `**Total favours distributed:** ${totalGranted}`,
+    `Favour DMs: ${dmSent}/${dmTargets.length} sent`,
     reason ? `**Reason:** ${reason}` : '',
     failures.length > 0 ? `\n**Failures (${failures.length}):**\n${failures.slice(0, 10).join('\n')}` : '',
   ].filter(Boolean).join('\n');
@@ -193,4 +257,23 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
 export async function autocomplete(interaction: AutocompleteInteraction): Promise<void> {
   await autocompleteFavourCategory(interaction);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      results[currentIndex] = await mapper(items[currentIndex]!);
+    }
+  }));
+
+  return results;
 }

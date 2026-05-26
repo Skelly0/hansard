@@ -47,6 +47,12 @@ export interface FavourTransaction {
   createdAt: string;
 }
 
+export interface FavourAdjustmentResponse {
+  transaction: FavourTransaction;
+  dmSent: boolean;
+  dmMessage: string;
+}
+
 // ---- Hooks ----
 
 export function useFavourCategories() {
@@ -104,7 +110,7 @@ export function useGrantFavours() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { playerId: string; categoryId: string; amount: number; reason?: string }) =>
-      api.post('/favours/grant', body),
+      api.post<FavourAdjustmentResponse>('/favours/grant', body),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['favours'] });
       qc.invalidateQueries({ queryKey: ['players', vars.playerId] });
@@ -116,7 +122,7 @@ export function useSpendFavours() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { playerId: string; categoryId: string; amount: number; reason?: string }) =>
-      api.post('/favours/spend', body),
+      api.post<FavourAdjustmentResponse>('/favours/spend', body),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['favours'] });
       qc.invalidateQueries({ queryKey: ['players', vars.playerId] });
@@ -128,7 +134,7 @@ export function useRemoveFavours() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { playerId: string; categoryId: string; amount: number; reason?: string }) =>
-      api.post('/favours/remove', body),
+      api.post<FavourAdjustmentResponse>('/favours/remove', body),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['favours'] });
       qc.invalidateQueries({ queryKey: ['players', vars.playerId] });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { execute } from './grant.js';
+import { execute } from './spend.js';
 
 const mocks = vi.hoisted(() => {
   const selectResults: unknown[][] = [];
@@ -20,13 +20,14 @@ const mocks = vi.hoisted(() => {
     update: vi.fn(() => ({
       set: vi.fn(() => ({
         where: vi.fn(() => ({
-          returning: vi.fn(() => Promise.resolve([{ balance: 7 }])),
+          returning: vi.fn(() => Promise.resolve([{ balance: 4 }])),
         })),
       })),
     })),
     insert: vi.fn(() => ({
       values: vi.fn(() => Promise.resolve(undefined)),
     })),
+    select: vi.fn(),
   };
 
   return {
@@ -70,7 +71,7 @@ function makeInteraction(send = vi.fn().mockResolvedValue({ id: 'dm-1' })) {
         getUser: vi.fn().mockReturnValue(targetUser),
         getString: vi.fn((name: string) => ({
           category: 'Crown',
-          reason: 'excellent diplomacy',
+          reason: 'royal petition',
         })[name] ?? null),
         getInteger: vi.fn().mockReturnValue(3),
       },
@@ -80,7 +81,7 @@ function makeInteraction(send = vi.fn().mockResolvedValue({ id: 'dm-1' })) {
   };
 }
 
-describe('/favour grant', () => {
+describe('/favour spend', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.selectResults.length = 0;
@@ -103,7 +104,7 @@ describe('/favour grant', () => {
     );
   });
 
-  it('DMs the target player when staff grants favours', async () => {
+  it('DMs the target player when staff spends favours from their balance', async () => {
     const { interaction, targetUser } = makeInteraction();
 
     await execute(interaction as any);
@@ -114,13 +115,13 @@ describe('/favour grant', () => {
     }));
     const dmPayload = targetUser.send.mock.calls[0][0];
     const dmJson = dmPayload.embeds[0].toJSON();
-    expect(dmJson.description).toContain('+3');
+    expect(dmJson.description).toContain('-3');
     expect(dmJson.description).toContain('Crown');
-    expect(dmJson.description).toContain('New balance: `7`');
-    expect(dmJson.description).toContain('excellent diplomacy');
+    expect(dmJson.description).toContain('New balance: `4`');
+    expect(dmJson.description).toContain('royal petition');
   });
 
-  it('still confirms the grant when the target DM fails', async () => {
+  it('still confirms the spend when the target DM fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { interaction } = makeInteraction(vi.fn().mockRejectedValue(new Error('DMs closed')));
 
@@ -135,37 +136,6 @@ describe('/favour grant', () => {
     }));
     const reply = interaction.editReply.mock.calls.at(-1)?.[0];
     expect(reply.embeds[0].toJSON().description).toContain('DM could not be delivered');
-    expect(mocks.postStaffActionLog).toHaveBeenCalledTimes(1);
-  });
-
-  it('posts a staff action log when staff grants favours', async () => {
-    const { interaction } = makeInteraction();
-
-    await execute(interaction as any);
-
-    expect(mocks.postStaffActionLog).toHaveBeenCalledTimes(1);
-    expect(mocks.postStaffActionLog).toHaveBeenCalledWith(
-      interaction,
-      expect.objectContaining({
-        title: 'Favours Granted',
-        system: 'favours',
-        fields: expect.arrayContaining([
-          expect.objectContaining({ name: 'Player', value: '**Mira Sol** (<@discord-target>)' }),
-          expect.objectContaining({ name: 'Category', value: 'Crown' }),
-          expect.objectContaining({ name: 'Amount', value: '+3' }),
-          expect.objectContaining({ name: 'Reason', value: 'excellent diplomacy' }),
-        ]),
-      }),
-    );
-  });
-
-  it('posts the staff action log before replying so reply failures do not hide committed grants', async () => {
-    const { interaction } = makeInteraction();
-    interaction.editReply.mockRejectedValueOnce(new Error('Discord reply failed'));
-
-    await execute(interaction as any);
-
-    expect(mocks.db.transaction).toHaveBeenCalledTimes(1);
     expect(mocks.postStaffActionLog).toHaveBeenCalledTimes(1);
   });
 });

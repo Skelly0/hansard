@@ -14,7 +14,15 @@ import {
   getHistory,
   getAllHistory,
 } from '../services/favourService.js';
-import { FavourTransactionType, type FavourTransactionType as FavourTransactionTypeValue } from '@hansard/shared';
+import { notifyFavourAdjustment } from '../services/favourAdjustmentNotifier.js';
+import {
+  FavourTransactionType,
+  type FavourTransaction,
+  type FavourTransactionType as FavourTransactionTypeValue,
+} from '@hansard/shared';
+
+const FAVOUR_DM_SENT_MESSAGE = 'DM sent to player.';
+const FAVOUR_DM_FAILED_MESSAGE = 'DM could not be delivered; check API logs.';
 
 /**
  * Favour routes plugin — categories, balances, and transactions.
@@ -160,7 +168,8 @@ export default async function favourRoutes(fastify: FastifyInstance) {
           request.body.reason ?? null,
           request.session.user!.id,
         );
-        return reply.status(201).send(transaction);
+        const dmSent = await notifyFavourAdjustmentSafely(fastify, transaction);
+        return reply.status(201).send(favourAdjustmentResponse(transaction, dmSent));
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Grant failed';
         return reply.status(400).send({ error: message });
@@ -189,7 +198,8 @@ export default async function favourRoutes(fastify: FastifyInstance) {
           request.body.reason ?? null,
           request.session.user!.id,
         );
-        return reply.status(201).send(transaction);
+        const dmSent = await notifyFavourAdjustmentSafely(fastify, transaction);
+        return reply.status(201).send(favourAdjustmentResponse(transaction, dmSent));
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Spend failed';
         return reply.status(400).send({ error: message });
@@ -218,7 +228,8 @@ export default async function favourRoutes(fastify: FastifyInstance) {
           request.body.reason ?? null,
           request.session.user!.id,
         );
-        return reply.status(201).send(transaction);
+        const dmSent = await notifyFavourAdjustmentSafely(fastify, transaction);
+        return reply.status(201).send(favourAdjustmentResponse(transaction, dmSent));
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Removal failed';
         return reply.status(400).send({ error: message });
@@ -267,4 +278,24 @@ export default async function favourRoutes(fastify: FastifyInstance) {
       });
     },
   );
+}
+
+async function notifyFavourAdjustmentSafely(
+  fastify: FastifyInstance,
+  transaction: FavourTransaction,
+): Promise<boolean> {
+  try {
+    return await notifyFavourAdjustment({ db: fastify.db, transaction });
+  } catch (err) {
+    fastify.log.warn({ err, transactionId: transaction.id }, 'Failed to notify favour adjustment by DM');
+    return false;
+  }
+}
+
+function favourAdjustmentResponse(transaction: FavourTransaction, dmSent: boolean) {
+  return {
+    transaction,
+    dmSent,
+    dmMessage: dmSent ? FAVOUR_DM_SENT_MESSAGE : FAVOUR_DM_FAILED_MESSAGE,
+  };
 }

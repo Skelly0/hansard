@@ -12,6 +12,7 @@ const serviceMocks = vi.hoisted(() => ({
   addMessage: vi.fn(),
   updateTicket: vi.fn(),
   assignTicket: vi.fn(),
+  closeTicket: vi.fn(),
 }));
 
 const notifierMocks = vi.hoisted(() => ({
@@ -45,6 +46,7 @@ vi.mock('../services/ticketService.js', () => ({
     addMessage = serviceMocks.addMessage;
     updateTicket = serviceMocks.updateTicket;
     assignTicket = serviceMocks.assignTicket;
+    closeTicket = serviceMocks.closeTicket;
   },
   TicketAssigneeNotStaffError: errorStubs.TicketAssigneeNotStaffErrorStub,
 }));
@@ -73,6 +75,12 @@ describe('ticket routes', () => {
     serviceMocks.updateTicket.mockResolvedValue({
       id: 'ticket-1',
       discordThreadId: 'attacker-thread',
+    });
+    serviceMocks.closeTicket.mockResolvedValue({
+      id: 'ticket-1',
+      status: 'closed',
+      discordThreadId: 'staff-thread-id',
+      discordChannelId: 'ticket-channel-id',
     });
     serviceMocks.addMessage.mockResolvedValue({
       id: 'message-1',
@@ -144,6 +152,67 @@ describe('ticket routes', () => {
     expect(res.statusCode).toBe(400);
     const body = res.json();
     expect(body.error).toContain('non-staff');
+  });
+
+  it('redacts Discord thread fields when a non-staff creator edits their ticket', async () => {
+    serviceMocks.getTicket.mockResolvedValue({
+      id: 'ticket-1',
+      createdById: 'creator-player',
+      assignedToId: null,
+    });
+    serviceMocks.updateTicket.mockResolvedValue({
+      id: 'ticket-1',
+      createdById: 'creator-player',
+      assignedToId: null,
+      title: 'Updated title',
+      discordChannelId: 'ticket-channel-id',
+      discordThreadId: 'staff-thread-id',
+    });
+
+    const app = await appWithDb();
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/tickets/ticket-1',
+      payload: {
+        title: 'Updated title',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      discordChannelId: null,
+      discordThreadId: null,
+    });
+  });
+
+  it('redacts Discord thread fields when a non-staff creator closes their ticket', async () => {
+    serviceMocks.getTicket.mockResolvedValue({
+      id: 'ticket-1',
+      createdById: 'creator-player',
+      assignedToId: null,
+    });
+    serviceMocks.closeTicket.mockResolvedValue({
+      id: 'ticket-1',
+      createdById: 'creator-player',
+      assignedToId: null,
+      status: 'closed',
+      discordChannelId: 'ticket-channel-id',
+      discordThreadId: 'staff-thread-id',
+    });
+    const app = await appWithDb();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tickets/ticket-1/close',
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      discordChannelId: null,
+      discordThreadId: null,
+    });
   });
 
   it('notifies the ticket creator by DM when a web/API public reply is posted by someone else', async () => {

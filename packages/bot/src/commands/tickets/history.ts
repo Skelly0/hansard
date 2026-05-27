@@ -15,8 +15,7 @@ import { db } from '../../db.js';
  * Show the full chronological history of a ticket: messages, plus audit log
  * entries (status changes, assignments, etc.) for staff viewers. Visibility
  * mirrors TicketService.getTicket — non-staff only see tickets they created
- * or are assigned to, internal notes are filtered out for them, and the audit
- * log is staff-only.
+ * or are assigned to, while ticket messages and the audit log are staff-only.
  */
 
 const MAX_DESCRIPTION_CHARS = 3800;

@@ -27,6 +27,19 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
     userId: user.id,
     isStaff: user.isStaff,
   });
+  const redactDiscordFieldsForActor = <
+    T extends { discordChannelId?: string | null; discordThreadId?: string | null },
+  >(
+    ticket: T,
+    user: { isStaff: boolean },
+  ): T => {
+    if (user.isStaff) return ticket;
+    return {
+      ...ticket,
+      discordChannelId: null,
+      discordThreadId: null,
+    };
+  };
 
   // ============================================================
   // GET /api/tickets — List tickets with filters
@@ -264,7 +277,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'Ticket not found' });
       }
 
-      return updated;
+      return redactDiscordFieldsForActor(updated, user);
     },
   );
 
@@ -362,7 +375,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'Ticket not found' });
       }
 
-      return updated;
+      return redactDiscordFieldsForActor(updated, user);
     },
   );
 
@@ -407,7 +420,7 @@ export default async function ticketRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: 'Ticket not found' });
       }
 
-      return updated;
+      return redactDiscordFieldsForActor(updated, user);
     },
   );
 

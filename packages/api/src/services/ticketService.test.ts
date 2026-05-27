@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { players, ticketCategories, ticketMessages, tickets } from '@hansard/db';
 
 const notifierMocks = vi.hoisted(() => ({
   postToTicketThread: vi.fn(),
@@ -105,6 +106,144 @@ describe('TicketService.getTicket detail enrichment', () => {
           actor: staff,
         }),
       ],
+    });
+  });
+
+  it('does not expose ticket thread messages to non-staff viewers', async () => {
+    const ticket = makeTicket({
+      categoryId: 'category-a',
+      createdById: 'creator-player',
+      assignedToId: null,
+    });
+    const publicMessage = {
+      id: 'message-a',
+      ticketId: 'ticket-a',
+      authorId: 'staff-player',
+      content: 'Staff reply that lives in the ticket thread.',
+      isInternal: false,
+      discordMessageId: 'discord-message-a',
+      createdAt: new Date('2026-05-22T15:28:00Z'),
+      editedAt: null,
+    };
+    const { db } = makeGetTicketTableDb({
+      ticket,
+      messages: [publicMessage],
+      category: { id: 'category-a', name: 'Favours' },
+      playerRows: [
+        { id: 'creator-player', characterName: 'Ada Vance', discordUsername: 'ada' },
+        { id: 'staff-player', characterName: null, discordUsername: 'staffer' },
+      ],
+    });
+
+    const result = await new TicketService(db as any).getTicket('ticket-a', {
+      userId: 'creator-player',
+      isStaff: false,
+    });
+
+    expect(result?.discordThreadId).toBeNull();
+    expect(result?.discordChannelId).toBeNull();
+    expect(result?.messages).toEqual([]);
+    expect(result?.auditLog).toEqual([]);
+  });
+});
+
+function makeGetTicketTableDb(options: {
+  ticket: unknown;
+  messages: unknown[];
+  category: unknown;
+  playerRows: unknown[];
+}) {
+  const rowsForTable = (table: unknown) => {
+    if (table === tickets) return [options.ticket];
+    if (table === ticketMessages) return options.messages;
+    if (table === ticketCategories) return [options.category];
+    if (table === players) return options.playerRows;
+    return [];
+  };
+
+  const select = vi.fn(() => ({
+    from: vi.fn((table: unknown) => {
+      const query: Record<string, unknown> = {};
+      const rows = () => Promise.resolve(rowsForTable(table));
+      query.where = vi.fn(() => query);
+      query.limit = vi.fn(rows);
+      query.orderBy = vi.fn(rows);
+      query.then = (resolve: (value: unknown[]) => unknown, reject: (reason: unknown) => unknown) =>
+        rows().then(resolve, reject);
+      return query;
+    }),
+  }));
+
+  return { db: { select } };
+}
+
+function makeListTicketsDb(ticketRows: unknown[], total = ticketRows.length) {
+  let selectCall = 0;
+
+  const select = vi.fn(() => ({
+    from: vi.fn(() => {
+      const currentCall = ++selectCall;
+      const rows = () => Promise.resolve(currentCall === 1 ? ticketRows : [{ value: total }]);
+      const query: Record<string, unknown> = {};
+      query.where = vi.fn(() => query);
+      query.orderBy = vi.fn(() => query);
+      query.limit = vi.fn(() => query);
+      query.offset = vi.fn(rows);
+      query.then = (resolve: (value: unknown[]) => unknown, reject: (reason: unknown) => unknown) =>
+        rows().then(resolve, reject);
+      return query;
+    }),
+  }));
+
+  return { db: { select } };
+}
+
+describe('TicketService non-staff ticket redaction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('redacts Discord thread fields from non-staff ticket lists', async () => {
+    const { db } = makeListTicketsDb([
+      makeTicket({
+        id: 'ticket-a',
+        createdById: 'creator-player',
+        assignedToId: null,
+        discordChannelId: 'ticket-channel-id',
+        discordThreadId: 'staff-thread-id',
+      }),
+    ]);
+
+    const result = await new TicketService(db as any).listTickets({}, {
+      userId: 'creator-player',
+      isStaff: false,
+    });
+
+    expect(result.tickets[0]).toMatchObject({
+      discordChannelId: null,
+      discordThreadId: null,
+    });
+  });
+
+  it('redacts Discord thread fields from non-staff ticket batch lookups', async () => {
+    const { db } = makeListTicketsDb([
+      makeTicket({
+        id: 'ticket-a',
+        createdById: 'creator-player',
+        assignedToId: null,
+        discordChannelId: 'ticket-channel-id',
+        discordThreadId: 'staff-thread-id',
+      }),
+    ]);
+
+    const result = await new TicketService(db as any).getTicketsByIds(['ticket-a'], {
+      userId: 'creator-player',
+      isStaff: false,
+    });
+
+    expect(result[0]).toMatchObject({
+      discordChannelId: null,
+      discordThreadId: null,
     });
   });
 });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { TextChannel } from 'discord.js';
+import { ChannelType, TextChannel } from 'discord.js';
 import command from './create.js';
 
 const mocks = vi.hoisted(() => ({
@@ -252,6 +252,61 @@ describe('/ticket command definition', () => {
         }),
       ]),
     );
+  });
+
+  it('creates the Discord ticket thread as a non-invitable private staff thread', async () => {
+    const textThreadsCreate = vi.fn().mockResolvedValue({
+      id: 'text-thread-id',
+      send: mocks.threadSend,
+    });
+    const textChannel = {
+      id: 'ticket-channel-id',
+      threads: {
+        create: textThreadsCreate,
+      },
+    };
+    Object.setPrototypeOf(textChannel, TextChannel.prototype);
+    mocks.guildChannelsFetch.mockResolvedValue(textChannel);
+    mocks.threadSend
+      .mockResolvedValueOnce({ id: 'summary-message-id', pin: mocks.threadPin })
+      .mockResolvedValueOnce({ id: 'opening-message-id' });
+    mocks.threadPin.mockResolvedValue(undefined);
+
+    await command.execute(makeInteraction() as any);
+
+    expect(textThreadsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: ChannelType.PrivateThread,
+        invitable: false,
+      }),
+    );
+  });
+
+  it('does not expose the staff thread mention in the creator confirmation', async () => {
+    const textThreadsCreate = vi.fn().mockResolvedValue({
+      id: 'text-thread-id',
+      send: mocks.threadSend,
+    });
+    const textChannel = {
+      id: 'ticket-channel-id',
+      threads: {
+        create: textThreadsCreate,
+      },
+    };
+    Object.setPrototypeOf(textChannel, TextChannel.prototype);
+    mocks.guildChannelsFetch.mockResolvedValue(textChannel);
+    mocks.threadSend
+      .mockResolvedValueOnce({ id: 'summary-message-id', pin: mocks.threadPin })
+      .mockResolvedValueOnce({ id: 'opening-message-id' });
+    mocks.threadPin.mockResolvedValue(undefined);
+
+    const interaction = makeInteraction();
+
+    await command.execute(interaction as any);
+
+    const confirmation = interaction.modalInteraction.editReply.mock.calls.at(-1)?.[0];
+    expect(JSON.stringify(confirmation)).not.toContain('<#text-thread-id>');
+    expect(JSON.stringify(confirmation)).not.toContain('**Thread:**');
   });
 
   it('suppresses mentions when posting user-controlled ticket bodies to the thread', async () => {

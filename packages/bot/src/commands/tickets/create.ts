@@ -608,6 +608,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
         const thread = await channel.threads.create({
           name: threadName,
           type: ChannelType.PrivateThread,
+          invitable: false,
           reason,
         });
 
@@ -656,7 +657,6 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     [
       `**Category:** ${selectedCategory.emoji ? `${selectedCategory.emoji} ` : ''}${selectedCategory.name}`,
       `**Title:** ${title}`,
-      threadId ? `**Thread:** <#${threadId}>` : '',
       '',
       'A staff member will review your ticket shortly.',
     ]

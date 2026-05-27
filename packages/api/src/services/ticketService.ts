@@ -120,6 +120,18 @@ export class TicketAssigneeNotStaffError extends Error {
 export class TicketService {
   constructor(private db: Database) {}
 
+  private redactDiscordFieldsForViewer<
+    T extends { discordChannelId?: string | null; discordThreadId?: string | null },
+  >(ticket: T, viewer?: TicketAccessContext): T {
+    if (!viewer || viewer.isStaff) return ticket;
+
+    return {
+      ...ticket,
+      discordChannelId: null,
+      discordThreadId: null,
+    };
+  }
+
   private visibilityCondition(viewer?: TicketAccessContext): SQL | undefined {
     if (!viewer || viewer.isStaff) return undefined;
 
@@ -221,16 +233,13 @@ export class TicketService {
     if (!ticket) return null;
     if (!this.canViewTicket(ticket, viewer)) return null;
 
-    const messageConditions = [eq(ticketMessages.ticketId, id)];
-    if (viewer && !viewer.isStaff) {
-      messageConditions.push(eq(ticketMessages.isInternal, false));
-    }
-
-    const messages = await this.db
-      .select()
-      .from(ticketMessages)
-      .where(this.combineConditions(messageConditions))
-      .orderBy(ticketMessages.createdAt);
+    const messages = viewer && !viewer.isStaff
+      ? []
+      : await this.db
+        .select()
+        .from(ticketMessages)
+        .where(eq(ticketMessages.ticketId, id))
+        .orderBy(ticketMessages.createdAt);
 
     const auditLog = viewer && !viewer.isStaff
       ? []
@@ -253,7 +262,7 @@ export class TicketService {
       ...auditLog.map((entry) => entry.actorId),
     ]);
 
-    return {
+    const detailedTicket = {
       ...(ticket as unknown as Ticket),
       createdBy: playerSummaries.get(ticket.createdById),
       assignedTo: ticket.assignedToId ? playerSummaries.get(ticket.assignedToId) : undefined,
@@ -267,6 +276,8 @@ export class TicketService {
       })),
       category: category as unknown as TicketCategory | undefined,
     };
+
+    return this.redactDiscordFieldsForViewer(detailedTicket, viewer);
   }
 
   // ----------------------------------------------------------
@@ -341,7 +352,9 @@ export class TicketService {
       .where(whereClause);
 
     return {
-      tickets: rows as unknown as Ticket[],
+      tickets: (rows as unknown as Ticket[]).map((ticket) =>
+        this.redactDiscordFieldsForViewer(ticket, viewer),
+      ),
       total,
     };
   }
@@ -362,7 +375,9 @@ export class TicketService {
       .select()
       .from(tickets)
       .where(whereClause);
-    return rows as unknown as Ticket[];
+    return (rows as unknown as Ticket[]).map((ticket) =>
+      this.redactDiscordFieldsForViewer(ticket, viewer),
+    );
   }
 
   // ----------------------------------------------------------

@@ -34,7 +34,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   await interaction.deferReply({ ephemeral: true });
 
-  const { viewer } = await getTicketViewer(interaction);
+  const { viewer, isStaff } = await getTicketViewer(interaction);
   const ticket = viewer
     ? await new TicketService(db).getTicketByNumber(ticketNumber, viewer)
     : null;
@@ -105,7 +105,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     });
   }
 
-  if (ticket.discordThreadId) {
+  if (isStaff && ticket.discordThreadId) {
     fields.push({
       name: 'Thread',
       value: `<#${ticket.discordThreadId}>`,

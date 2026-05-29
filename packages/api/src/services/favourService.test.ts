@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { grantFavours, spendFavours, removeFavours } from './favourService';
+import {
+  expireCharacterFavourBalances,
+  grantFavours,
+  spendFavours,
+  removeFavours,
+} from './favourService';
 import { FavourTransactionType } from '@hansard/shared';
 
 // ----------------------------------------------------------------
@@ -45,7 +50,86 @@ const category = {
   createdAt: new Date('2026-01-01T00:00:00Z'),
 };
 
+describe('expireCharacterFavourBalances', () => {
+  it('logs system removals for current balances and deletes the balance rows', async () => {
+    const transactions: unknown[] = [];
+    const deleted: unknown[] = [];
+    const db: any = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([
+            { playerId: player.id, categoryId: 'cat-a', balance: 4 },
+            { playerId: player.id, categoryId: 'cat-b', balance: 0 },
+            { playerId: player.id, categoryId: 'cat-c', balance: 2 },
+          ]),
+        })),
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn((values: unknown) => {
+          transactions.push(values);
+          return Promise.resolve([]);
+        }),
+      })),
+      delete: vi.fn(() => ({
+        where: vi.fn((whereArg: unknown) => {
+          deleted.push(whereArg);
+          return Promise.resolve([]);
+        }),
+      })),
+    };
+
+    const expired = await expireCharacterFavourBalances(db, player.id, {
+      reason: 'Previous character favours expired on reincarnation',
+      simTick: 12,
+      simDate: '2026-03-01',
+    });
+
+    expect(expired).toBe(2);
+    expect(transactions).toEqual([
+      expect.objectContaining({
+        playerId: player.id,
+        categoryId: 'cat-a',
+        amount: -4,
+        balanceAfter: 0,
+        type: FavourTransactionType.SYSTEM,
+        reason: 'Previous character favours expired on reincarnation',
+        simTick: 12,
+        simDate: '2026-03-01',
+      }),
+      expect.objectContaining({
+        playerId: player.id,
+        categoryId: 'cat-c',
+        amount: -2,
+        balanceAfter: 0,
+        type: FavourTransactionType.SYSTEM,
+        reason: 'Previous character favours expired on reincarnation',
+        simTick: 12,
+        simDate: '2026-03-01',
+      }),
+    ]);
+    expect(db.delete).toHaveBeenCalledTimes(1);
+    expect(deleted).toHaveLength(1);
+  });
+});
+
 describe('grantFavours', () => {
+  it('rejects grants to dead characters', async () => {
+    const deadPlayer = { ...player, isAlive: false };
+    const outer = makeSelectChain([{ rows: [deadPlayer] }, { rows: [category] }]);
+    const db: any = {
+      select: outer.select,
+      transaction: vi.fn(async () => {
+        throw new Error('transaction should not run for dead characters');
+      }),
+    };
+
+    await expect(
+      grantFavours(db, deadPlayer.id, category.id, 5, 'posthumous patronage', 'staff-1'),
+    ).rejects.toThrow(/dead character/i);
+
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
   it('writes a transaction log row inside the same db.transaction', async () => {
     const balanceRow = {
       id: 'bal-1',

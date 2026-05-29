@@ -93,6 +93,7 @@ describe('/favour spend', () => {
         discordId: 'discord-target',
         discordUsername: 'mira',
         characterName: 'Mira Sol',
+        isAlive: true,
       }],
       [{
         id: 'category-1',
@@ -137,5 +138,27 @@ describe('/favour spend', () => {
     const reply = interaction.editReply.mock.calls.at(-1)?.[0];
     expect(reply.embeds[0].toJSON().description).toContain('DM could not be delivered');
     expect(mocks.postStaffActionLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects spending favours from dead characters before mutating balances', async () => {
+    mocks.selectResults.length = 0;
+    mocks.selectResults.push(
+      [{ id: 'staff-player' }],
+      [{
+        id: 'target-player',
+        discordId: 'discord-target',
+        discordUsername: 'mira',
+        characterName: 'Mira Sol',
+        isAlive: false,
+      }],
+    );
+    const { interaction, targetUser } = makeInteraction();
+
+    await execute(interaction as any);
+
+    expect(mocks.db.transaction).not.toHaveBeenCalled();
+    expect(targetUser.send).not.toHaveBeenCalled();
+    const reply = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(reply.embeds[0].toJSON().description).toMatch(/dead character/i);
   });
 });

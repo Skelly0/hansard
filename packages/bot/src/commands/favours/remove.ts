@@ -63,6 +63,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
+  if (!targetPlayer.isAlive) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Cannot remove favours from a dead character.')],
+    });
+    return;
+  }
+
   // Resolve category (case-insensitive)
   const allCategories = await db
     .select()

@@ -4,6 +4,7 @@ import { execute } from './grantBulk.js';
 const mocks = vi.hoisted(() => {
   const selectResults: unknown[][] = [];
   const txSelectResults: unknown[][] = [];
+  const whereArgs: unknown[] = [];
 
   function makeWhereResult() {
     const nextRows = () => Promise.resolve(selectResults.shift() ?? []);
@@ -17,9 +18,16 @@ const mocks = vi.hoisted(() => {
 
   const db = {
     select: vi.fn(() => ({
-      from: vi.fn(() => ({
-        where: vi.fn(() => makeWhereResult()),
-      })),
+      from: vi.fn(() => {
+        const where = vi.fn((whereArg: unknown) => {
+          whereArgs.push(whereArg);
+          return makeWhereResult();
+        });
+        return {
+          where,
+          innerJoin: vi.fn(() => ({ where })),
+        };
+      }),
     })),
     transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(tx)),
   };
@@ -48,6 +56,7 @@ const mocks = vi.hoisted(() => {
     postStaffActionLog: vi.fn(),
     selectResults,
     txSelectResults,
+    whereArgs,
     tx,
   };
 });
@@ -93,11 +102,26 @@ function makeInteraction(usersById: Record<string, { send: ReturnType<typeof vi.
   };
 }
 
+function containsText(value: unknown, pattern: RegExp, seen = new Set<object>()): boolean {
+  if (typeof value === 'string') return pattern.test(value);
+  if (!value || typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+
+  for (const key of Reflect.ownKeys(value)) {
+    const child = (value as Record<PropertyKey, unknown>)[key];
+    if (containsText(child, pattern, seen)) return true;
+  }
+
+  return false;
+}
+
 describe('/favour grant-bulk', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.selectResults.length = 0;
     mocks.txSelectResults.length = 0;
+    mocks.whereArgs.length = 0;
     mocks.isStaff.mockResolvedValue(true);
     mocks.selectResults.push(
       [{ id: 'staff-player' }],
@@ -192,5 +216,36 @@ describe('/favour grant-bulk', () => {
 
     resolveFirstSend();
     await executePromise;
+  });
+
+  it('filters office bulk recipients to living players', async () => {
+    const { interaction } = makeInteraction({
+      'discord-a': { send: vi.fn().mockResolvedValue({ id: 'dm-a' }) },
+    });
+    interaction.options.getString = vi.fn((name: string) => ({
+      category: 'Crown',
+      party: null,
+      office: name === 'office' ? 'Chancellor' : null,
+      reason: 'office work',
+    })[name] ?? null);
+    mocks.selectResults.length = 0;
+    mocks.selectResults.push(
+      [{ id: 'staff-player' }],
+      [{ id: 'category-1', name: 'Crown', emoji: 'C', isActive: true, sortOrder: 1 }],
+      [{ id: 'office-1', name: 'Chancellor' }],
+      [{
+        id: 'target-a',
+        discordId: 'discord-a',
+        discordUsername: 'mira',
+        characterName: 'Mira Sol',
+      }],
+    );
+    mocks.txSelectResults.push([
+      { id: 'balance-a', playerId: 'target-a', categoryId: 'category-1', balance: 3 },
+    ]);
+
+    await execute(interaction as any);
+
+    expect(mocks.whereArgs.some((arg) => containsText(arg, /is_alive/i))).toBe(true);
   });
 });

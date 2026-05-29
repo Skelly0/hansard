@@ -12,6 +12,7 @@ import {
 } from '@hansard/shared';
 import { calculateStartingAgeFavourBonus } from '@hansard/api/services/playerService';
 import {
+  expireCharacterFavourBalances,
   grantStartingFactionFavours,
   type StartingFactionFavourGrant,
 } from '@hansard/api/services/favourService';
@@ -147,6 +148,12 @@ export async function executeCharacterCreate(interaction: ChatInputCommandIntera
           previousCharacterName = existing.characterName;
           const archive = buildArchivedCharacter(existing);
           const newProfileData = profileDataWithArchive(existing.profileData, archive);
+
+          await expireCharacterFavourBalances(tx, playerId, {
+            reason: 'Previous character favours expired on reincarnation',
+            simTick: clock?.currentTick ?? null,
+            simDate: simNow,
+          });
 
           const [updated] = await tx
             .update(players)

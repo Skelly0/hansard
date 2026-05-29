@@ -1,7 +1,17 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { desc } from 'drizzle-orm';
-import { simulationClock, timeAdvanceLog, players, playerEventLog, officeHolders, parties } from '@hansard/db';
-import { advanceTime, DEFAULT_AGING_CONFIG, getHistory, sanitizeTimeAdvanceLog } from './simulationService';
+import {
+  simulationClock,
+  timeAdvanceLog,
+  players,
+  playerEventLog,
+  officeHolders,
+  parties,
+  favourBalances,
+  favourTransactions,
+} from '@hansard/db';
+import { FavourTransactionType } from '@hansard/shared';
+import { advanceTime, DEFAULT_AGING_CONFIG, getHistory, manualDeath, sanitizeTimeAdvanceLog } from './simulationService';
 
 function makePlayer(overrides: Record<string, unknown> = {}): any {
   return {
@@ -40,10 +50,16 @@ function makeClock(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeSimulationDb(clock: any, playerRows: any[]) {
+function makeSimulationDb(
+  clock: any,
+  playerRows: any[],
+  options: { favourBalanceRows?: any[] } = {},
+) {
   const eventLog: any[] = [];
   const timeLog: any[] = [];
   const partyUpdates: any[] = [];
+  const favourBalanceRows = [...(options.favourBalanceRows ?? [])];
+  const favourTransactionRows: any[] = [];
 
   const db: any = {
     select: vi.fn(() => ({
@@ -65,6 +81,12 @@ function makeSimulationDb(clock: any, playerRows: any[]) {
             innerJoin: vi.fn(() => ({
               where: vi.fn(async () => []),
             })),
+          };
+        }
+
+        if (table === favourBalances) {
+          return {
+            where: vi.fn(async () => favourBalanceRows),
           };
         }
 
@@ -94,13 +116,22 @@ function makeSimulationDb(clock: any, playerRows: any[]) {
       values: vi.fn(async (values) => {
         if (table === playerEventLog) eventLog.push(values);
         if (table === timeAdvanceLog) timeLog.push(values);
+        if (table === favourTransactions) favourTransactionRows.push(values);
+        return [];
+      }),
+    })),
+    delete: vi.fn((table) => ({
+      where: vi.fn(async () => {
+        if (table === favourBalances) {
+          favourBalanceRows.splice(0, favourBalanceRows.length);
+        }
         return [];
       }),
     })),
     transaction: vi.fn(async (callback) => callback(db)),
   };
 
-  return { db, eventLog, timeLog, partyUpdates };
+  return { db, eventLog, timeLog, partyUpdates, favourBalanceRows, favourTransactionRows };
 }
 
 afterEach(() => {
@@ -215,6 +246,61 @@ describe('advanceTime death grace period', () => {
     // pass that finalizes death must run the leader cleanup.
     expect(partyUpdates).toEqual([{ leaderId: null }]);
   });
+
+  it('clears current favour balances and logs system removals when death finalizes', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const clock = makeClock();
+    const player = makePlayer();
+    const { db, favourBalanceRows, favourTransactionRows } = makeSimulationDb(clock, [player], {
+      favourBalanceRows: [
+        {
+          id: 'balance-crown',
+          playerId: 'player-1',
+          categoryId: 'category-crown',
+          balance: 4,
+        },
+        {
+          id: 'balance-guild',
+          playerId: 'player-1',
+          categoryId: 'category-guild',
+          balance: 2,
+        },
+      ],
+    });
+
+    await advanceTime(db, 1, 'staff-1');
+    expect(favourBalanceRows).toHaveLength(2);
+    expect(favourTransactionRows).toEqual([]);
+
+    await advanceTime(db, 1, 'staff-1');
+
+    expect(favourBalanceRows).toEqual([]);
+    expect(favourTransactionRows).toEqual([
+      expect.objectContaining({
+        playerId: 'player-1',
+        categoryId: 'category-crown',
+        amount: -4,
+        balanceAfter: 0,
+        type: FavourTransactionType.SYSTEM,
+        reason: 'Character death: favours expire with the character',
+        grantedById: null,
+        simTick: 2,
+        simDate: '2026-03-01',
+      }),
+      expect.objectContaining({
+        playerId: 'player-1',
+        categoryId: 'category-guild',
+        amount: -2,
+        balanceAfter: 0,
+        type: FavourTransactionType.SYSTEM,
+        reason: 'Character death: favours expire with the character',
+        grantedById: null,
+        simTick: 2,
+        simDate: '2026-03-01',
+      }),
+    ]);
+  });
 });
 
 describe('advanceTime timed ailment recovery', () => {
@@ -315,6 +401,26 @@ describe('advanceTime timed ailment recovery', () => {
       simDate: '2031-01-01',
       isAutomatic: true,
     }));
+  });
+});
+
+describe('manualDeath', () => {
+  it('runs death finalization inside a transaction', async () => {
+    const clock = makeClock();
+    const player = makePlayer({ isAlive: true });
+    const { db } = makeSimulationDb(clock, [player], {
+      favourBalanceRows: [{
+        id: 'balance-crown',
+        playerId: 'player-1',
+        categoryId: 'category-crown',
+        balance: 4,
+      }],
+    });
+
+    await manualDeath(db, 'player-1', 'industrial accident', 'staff-1');
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(player.isAlive).toBe(false);
   });
 });
 

@@ -57,6 +57,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
+  if (!targetPlayer.isAlive) {
+    await interaction.editReply({
+      embeds: [errorEmbed('Cannot grant favours to a dead character.')],
+    });
+    return;
+  }
+
   // Resolve category
   const allCategories = await db
     .select()

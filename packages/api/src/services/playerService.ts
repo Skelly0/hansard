@@ -24,7 +24,10 @@ import {
   buildArchivedCharacter,
   profileDataWithArchive,
 } from '@hansard/shared';
-import { grantStartingFactionFavours } from './favourService.js';
+import {
+  expireCharacterFavourBalances,
+  grantStartingFactionFavours,
+} from './favourService.js';
 
 // ============================================================
 // Types for service inputs
@@ -174,6 +177,12 @@ export async function createCharacter(db: Database, data: CreateCharacterInput):
       const mergedProfileData = data.profileData
         ? { ...baseProfileData, ...data.profileData, previousCharacters: baseProfileData.previousCharacters }
         : baseProfileData;
+
+      await expireCharacterFavourBalances(tx, existing.id, {
+        reason: 'Previous character favours expired on reincarnation',
+        simTick: clock?.currentTick ?? null,
+        simDate: simNow,
+      });
 
       const [updated] = await tx
         .update(players)

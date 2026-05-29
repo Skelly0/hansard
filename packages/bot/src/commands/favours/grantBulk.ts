@@ -133,7 +133,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       })
       .from(officeHolders)
       .innerJoin(players, eq(officeHolders.playerId, players.id))
-      .where(and(eq(officeHolders.officeId, office.id), isNull(officeHolders.endDate)));
+      .where(and(
+        eq(officeHolders.officeId, office.id),
+        isNull(officeHolders.endDate),
+        eq(players.isAlive, true),
+      ));
     const seen = new Set<string>();
     targets = rows.filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
     groupLabel = `office **${office.name}**`;

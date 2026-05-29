@@ -671,6 +671,146 @@ describe('createCharacter starting favours', () => {
       birthDate: '2045-01-01',
     }));
   });
+
+  it('expires stale current favour balances before reusing a dead player row', async () => {
+    const staleFavourTransactions: unknown[] = [];
+    const oldPlayer = makePlayerRow({
+      id: 'player-new',
+      characterName: 'Old Alice',
+      isAlive: false,
+      deathDate: '1909-01-01',
+      causeOfDeath: 'natural causes',
+      startingFavoursGranted: true,
+    });
+    const reincarnatedPlayer = makePlayerRow({
+      id: 'player-new',
+      characterName: 'Lady Alice',
+      startingFavoursGranted: false,
+    });
+    const finalPlayer = makePlayerRow({
+      id: 'player-new',
+      characterName: 'Lady Alice',
+      startingFavoursGranted: true,
+    });
+
+    const select = vi.fn()
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{ currentDate: '1910-01-01', currentTick: 7 }]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([oldPlayer]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{
+            playerId: 'player-new',
+            categoryId: 'category-old',
+            balance: 5,
+          }]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue([{ id: 'faction-crown', name: 'Crown', shortName: 'CRN' }]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ id: 'category-crown', name: 'Crown', shortName: null, isActive: true }]),
+        }),
+      });
+
+    const updateSet = vi.fn()
+      .mockReturnValueOnce({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([reincarnatedPlayer]),
+        }),
+      })
+      .mockReturnValueOnce({
+        where: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([finalPlayer]),
+        }),
+      });
+    const update = vi.fn().mockReturnValue({ set: updateSet });
+    const deleteWhere = vi.fn().mockResolvedValue([]);
+    const insert = vi.fn()
+      .mockReturnValueOnce({
+        values: vi.fn((values: unknown) => {
+          staleFavourTransactions.push(values);
+          return Promise.resolve([]);
+        }),
+      })
+      .mockReturnValueOnce({
+        values: vi.fn().mockResolvedValue(undefined),
+      })
+      .mockReturnValueOnce({
+        values: vi.fn().mockReturnValue({
+          onConflictDoUpdate: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([{
+              id: 'balance-new',
+              playerId: 'player-new',
+              categoryId: 'category-crown',
+              balance: 2,
+              updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+            }]),
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        values: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{
+            id: 'transaction-new',
+            playerId: 'player-new',
+            categoryId: 'category-crown',
+            amount: 2,
+            balanceAfter: 2,
+            type: FavourTransactionType.SYSTEM,
+            reason: 'Starting age favour bonus for joining Crown',
+            grantedById: null,
+            simTick: null,
+            simDate: null,
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          }]),
+        }),
+      });
+    const db: any = {
+      select,
+      update,
+      insert,
+      delete: vi.fn().mockReturnValue({ where: deleteWhere }),
+      transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)),
+    };
+
+    const result = await createCharacter(db, {
+      discordId: '123456',
+      discordUsername: 'alice',
+      characterName: 'Lady Alice',
+      startingAge: 45,
+      factionId: 'faction-crown',
+    });
+
+    expect(result.startingFavoursGranted).toBe(true);
+    expect(staleFavourTransactions[0]).toMatchObject({
+      playerId: 'player-new',
+      categoryId: 'category-old',
+      amount: -5,
+      balanceAfter: 0,
+      type: FavourTransactionType.SYSTEM,
+      reason: 'Previous character favours expired on reincarnation',
+      simTick: 7,
+      simDate: '1910-01-01',
+    });
+    expect(db.delete).toHaveBeenCalledTimes(1);
+    expect(deleteWhere).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('getPlayerVotingRecord privacy', () => {

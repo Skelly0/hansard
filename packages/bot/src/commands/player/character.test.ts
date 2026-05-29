@@ -757,6 +757,19 @@ describe('/character create', () => {
     });
 
     const tx = {
+      select: vi.fn(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{
+            id: 'old-balance',
+            playerId: oldCharacter.id,
+            categoryId: 'category-old',
+            balance: 5,
+          }]),
+        }),
+      })),
+      delete: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue([]),
+      })),
       update: vi.fn(() => ({
         set: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
@@ -827,6 +840,7 @@ describe('/character create', () => {
       deathDate: '1920-01-01',
       healthStatus: 'deceased',
     });
+    expect(tx.delete).toHaveBeenCalledTimes(1);
 
     const editPayloads = modalSubmit.editReply.mock.calls.map(([payload]) => payload);
     expect(editPayloads.some((payload) => containsText(payload, /Successor Character Registered/))).toBe(true);

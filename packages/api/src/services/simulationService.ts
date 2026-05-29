@@ -21,6 +21,7 @@ import {
   type ProfileData,
   type TimeAdvanceSummary,
 } from '@hansard/shared';
+import { expireCharacterFavourBalances } from './favourService.js';
 
 // ============================================================
 // Default Aging Config — used when simulation_clock.aging_config is null.
@@ -1008,17 +1009,19 @@ export async function manualDeath(
   const currentTick = clock?.currentTick ?? 0;
   const ailments = summarizeAilments(player.ailments);
 
-  await processPlayerDeath(
-    db,
-    playerId,
-    cause,
-    currentDate,
-    currentTick,
-    triggeredById ?? null,
-    false,
-    withoutPendingDeath(player.profileData),
-    ailments,
-  );
+  await db.transaction(async (tx) => {
+    await processPlayerDeath(
+      tx,
+      playerId,
+      cause,
+      currentDate,
+      currentTick,
+      triggeredById ?? null,
+      false,
+      withoutPendingDeath(player.profileData),
+      ailments,
+    );
+  });
 
   return { player, cause, deathDate: currentDate, ailments };
 }
@@ -1174,6 +1177,12 @@ async function processPlayerDeath(
   deathAilments: DeathAilmentDetail[] = [],
 ) {
   const ailmentsText = formatDeathAilments(deathAilments);
+
+  await expireCharacterFavourBalances(db, playerId, {
+    reason: 'Character death: favours expire with the character',
+    simTick: deathTick,
+    simDate: deathDate,
+  });
 
   // Mark player dead
   await db

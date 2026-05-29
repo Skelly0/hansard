@@ -65,6 +65,53 @@ export interface StartingFactionFavourGrant {
 
 type DbOrTx = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
 
+export interface ExpireCharacterFavourBalancesOptions {
+  reason?: string;
+  simTick?: number | null;
+  simDate?: string | null;
+}
+
+/**
+ * Expire current favour balances for a character lifecycle boundary while
+ * preserving an audit trail. Historical transactions stay intact; only the
+ * denormalized current-balance rows are removed.
+ */
+export async function expireCharacterFavourBalances(
+  db: DbOrTx,
+  playerId: string,
+  options: ExpireCharacterFavourBalancesOptions = {},
+): Promise<number> {
+  const reason = options.reason ?? 'Character favours expired';
+  const currentBalances = await db
+    .select()
+    .from(favourBalances)
+    .where(eq(favourBalances.playerId, playerId));
+
+  let expired = 0;
+  for (const balance of currentBalances) {
+    if (balance.balance === 0) continue;
+
+    await db.insert(favourTransactions).values({
+      playerId,
+      categoryId: balance.categoryId,
+      amount: -balance.balance,
+      balanceAfter: 0,
+      type: FavourTransactionType.SYSTEM,
+      reason,
+      grantedById: null,
+      simTick: options.simTick ?? null,
+      simDate: options.simDate ?? null,
+    });
+    expired++;
+  }
+
+  await db
+    .delete(favourBalances)
+    .where(eq(favourBalances.playerId, playerId));
+
+  return expired;
+}
+
 // ============================================================
 // Category Functions
 // ============================================================
@@ -347,6 +394,10 @@ async function applyTransaction(
 
   if (!player) {
     throw new Error(`Player not found: ${playerId}`);
+  }
+
+  if (!player.isAlive) {
+    throw new Error(`Cannot modify favours for dead character: ${player.characterName ?? player.discordUsername}`);
   }
 
   // Verify category exists and is active

@@ -151,17 +151,19 @@ async function handleTicketThreadMessage(message: Message): Promise<void> {
   if (!author) return;
 
   const actorIsStaff = (message.member ? await isStaff(message.member) : false) || author.isStaff;
+  const isInternalThreadMessage = actorIsStaff;
   const saved = await new TicketService(db).addMessage(
     ticket.id,
     content,
     author.id,
-    false,
+    isInternalThreadMessage,
     message.id,
     actorIsStaff,
     false,
   );
 
   if (!saved) return;
+  if (isInternalThreadMessage) return;
 
   await notifyTicketOwnerOfReply({
     db,

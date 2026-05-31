@@ -333,7 +333,7 @@ describe('messageCreate phone text DM routing', () => {
     expect(mocks.relayMessage).toHaveBeenCalledWith(client, participants, expect.any(Object), true);
   });
 
-  it('records text typed in a ticket thread as a public ticket reply', async () => {
+  it('records staff text typed in a ticket thread as an internal note without notifying the player', async () => {
     const { handler } = makeClient();
     const content = "that's quite a few favours eh";
     mocks.dbRows.push([{
@@ -354,22 +354,12 @@ describe('messageCreate phone text DM routing', () => {
       'ticket-42',
       content,
       'player-caller',
-      false,
+      true,
       'discord-message-1',
       true,
       false,
     );
-    expect(mocks.notifyTicketOwnerOfReply).toHaveBeenCalledWith({
-      db: expect.any(Object),
-      ticket: expect.objectContaining({
-        id: 'ticket-42',
-        number: 42,
-        title: 'Missing thread messages',
-        createdById: 'owner-player',
-      }),
-      authorId: 'player-caller',
-      content,
-    });
+    expect(mocks.notifyTicketOwnerOfReply).not.toHaveBeenCalled();
     expect(mocks.svc.findOpenCallForPlayer).not.toHaveBeenCalled();
     expect(mocks.textSvc.resolveReplyConversation).not.toHaveBeenCalled();
   });
@@ -395,14 +385,14 @@ describe('messageCreate phone text DM routing', () => {
       'ticket-42',
       'staff reply with no member payload',
       'staff-player',
-      false,
+      true,
       'discord-message-1',
       true,
       false,
     );
   });
 
-  it('records attachment-only ticket thread replies using the attachment URL', async () => {
+  it('records staff attachment-only ticket thread messages as internal notes', async () => {
     const { handler } = makeClient();
     mocks.dbRows.push([{
       id: 'ticket-42',
@@ -425,14 +415,15 @@ describe('messageCreate phone text DM routing', () => {
       'ticket-42',
       '**Attachments:**\n- receipt.png: https://cdn.discordapp.com/receipt.png',
       'staff-player',
-      false,
+      true,
       'discord-message-1',
       true,
       false,
     );
+    expect(mocks.notifyTicketOwnerOfReply).not.toHaveBeenCalled();
   });
 
-  it('records sticker-only ticket thread replies using the sticker name', async () => {
+  it('records staff sticker-only ticket thread messages as internal notes', async () => {
     const { handler } = makeClient();
     mocks.dbRows.push([{
       id: 'ticket-42',
@@ -455,10 +446,11 @@ describe('messageCreate phone text DM routing', () => {
       'ticket-42',
       '**Stickers:**\n- thumbs up',
       'staff-player',
-      false,
+      true,
       'discord-message-1',
       true,
       false,
     );
+    expect(mocks.notifyTicketOwnerOfReply).not.toHaveBeenCalled();
   });
 });

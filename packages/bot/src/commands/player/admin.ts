@@ -1,5 +1,5 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ilike } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { players, parties, factions, playerEventLog, simulationClock } from '@hansard/db';
 import {
@@ -25,6 +25,95 @@ export const ADMIN_MIN_AGE = 18;
 export const ADMIN_MAX_AGE = 90;
 const MIN_AGE = ADMIN_MIN_AGE;
 const MAX_AGE = ADMIN_MAX_AGE;
+
+export async function executeCharacterLookup(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  const member = interaction.member;
+  if (!member || !('roles' in member)) {
+    await interaction.editReply({ embeds: [errorEmbed('This command can only be used in a server.')] });
+    return;
+  }
+  if (!(await isStaff(member))) {
+    await interaction.editReply({ embeds: [errorEmbed('Only staff can look up player identities from character names.')] });
+    return;
+  }
+
+  const searchName = interaction.options.getString('name', true).trim();
+  if (!searchName) {
+    await interaction.editReply({ embeds: [errorEmbed('Enter a character name to search for.')] });
+    return;
+  }
+
+  const matches = await db
+    .select({
+      id: players.id,
+      discordId: players.discordId,
+      discordUsername: players.discordUsername,
+      characterName: players.characterName,
+      currentAge: players.currentAge,
+      startingAge: players.startingAge,
+      isAlive: players.isAlive,
+      isActive: players.isActive,
+    })
+    .from(players)
+    .where(ilike(players.characterName, `%${searchName}%`))
+    .limit(10);
+
+  if (matches.length === 0) {
+    await interaction.editReply({
+      embeds: [errorEmbed(`No characters found matching **${searchName}**.`)],
+      allowedMentions: { parse: [] },
+    });
+    return;
+  }
+
+  if (matches.length > 1) {
+    const lines = matches.map((player) => {
+      const status = player.isAlive ? '\u{1F7E2}' : '\u{26B0}\u{FE0F}';
+      const age = player.currentAge ?? player.startingAge ?? '?';
+      return `${status} **${player.characterName ?? 'Unknown'}** - <@${player.discordId}> (${player.discordUsername}, age ${age})`;
+    });
+
+    const embed = createEmbed({
+      title: `Character Lookup - "${searchName}"`,
+      description: lines.join('\n'),
+      system: 'players',
+      fields: [
+        {
+          name: 'Multiple matches',
+          value: `Found ${matches.length} characters. Refine the name for player UUID and Discord ID details.`,
+        },
+      ],
+    });
+
+    await interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+    return;
+  }
+
+  const player = matches[0];
+  const age = player.currentAge ?? player.startingAge ?? '?';
+  const status = [
+    player.isAlive ? '\u{1F7E2} Alive' : '\u{26B0}\u{FE0F} Deceased',
+    player.isActive ? 'active row' : 'inactive row',
+  ].join(', ');
+
+  const embed = createEmbed({
+    title: 'Character Lookup',
+    system: 'players',
+    fields: [
+      { name: 'Character', value: player.characterName ?? 'Unknown', inline: true },
+      { name: 'Discord User', value: `<@${player.discordId}>`, inline: true },
+      { name: 'Discord Username', value: player.discordUsername, inline: true },
+      { name: 'Discord ID', value: player.discordId, inline: true },
+      { name: 'Player ID', value: player.id, inline: true },
+      { name: 'Age', value: String(age), inline: true },
+      { name: 'Status', value: status, inline: true },
+    ],
+  });
+
+  await interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+}
 
 export async function executeCharacterCreate(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply({ ephemeral: true });

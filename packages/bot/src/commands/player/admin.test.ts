@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { executeChangeParty } from './admin.js';
+import { executeChangeParty, executeCharacterLookup } from './admin.js';
 
 const mocks = vi.hoisted(() => ({
   rows: [] as unknown[],
@@ -99,6 +99,18 @@ function fakeChangePartyInteraction() {
   } as any;
 }
 
+function fakeCharacterLookupInteraction() {
+  return {
+    deferReply: vi.fn().mockResolvedValue(undefined),
+    editReply: vi.fn().mockResolvedValue(undefined),
+    member: { roles: { cache: new Map() } },
+    user: { id: 'staff-discord', toString: () => '<@staff-discord>' },
+    options: {
+      getString: vi.fn(() => 'Chocolatier'),
+    },
+  } as any;
+}
+
 describe('/player admin change-party', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -189,5 +201,103 @@ describe('/player admin change-party', () => {
     expect(mocks.updateSets.some((s) => 'leaderId' in s)).toBe(false);
     expect(interaction.targetMember.roles.remove).not.toHaveBeenCalled();
     expect(interaction.targetMember.roles.add).toHaveBeenCalledWith('role-new');
+  });
+});
+
+describe('/player admin character-lookup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.rows = [];
+    mocks.selectRows = [];
+    mocks.updateSets = [];
+    mocks.insertValues = [];
+    mocks.isStaff.mockResolvedValue(true);
+    mocks.select.mockImplementation(() => new Query(mocks.selectRows.shift() ?? mocks.rows));
+    mocks.update.mockReturnValue(new UpdateQuery());
+    mocks.insert.mockReturnValue(new InsertQuery());
+  });
+
+  it('shows staff the Discord identity behind a character name match', async () => {
+    const interaction = fakeCharacterLookupInteraction();
+    mocks.selectRows = [[{
+      id: 'player-id',
+      discordId: '201134623885885440',
+      discordUsername: 'timmyjimmy',
+      characterName: 'The Chocolatier',
+      currentAge: 35,
+      startingAge: 35,
+      isAlive: true,
+      isActive: true,
+    }]];
+
+    await executeCharacterLookup(interaction);
+
+    const reply = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(reply).toBeDefined();
+    expect(JSON.stringify(reply)).toContain('The Chocolatier');
+    expect(JSON.stringify(reply)).toContain('<@201134623885885440>');
+    expect(JSON.stringify(reply)).toContain('timmyjimmy');
+    expect(JSON.stringify(reply)).toContain('201134623885885440');
+    expect(JSON.stringify(reply)).toContain('player-id');
+  });
+
+  it('blocks non-staff users before querying character identities', async () => {
+    const interaction = fakeCharacterLookupInteraction();
+    mocks.isStaff.mockResolvedValue(false);
+
+    await executeCharacterLookup(interaction);
+
+    expect(mocks.select).not.toHaveBeenCalled();
+    const reply = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(JSON.stringify(reply)).toContain('Only staff can look up player identities');
+  });
+
+  it('reports when no character name matches', async () => {
+    const interaction = fakeCharacterLookupInteraction();
+    mocks.selectRows = [[]];
+
+    await executeCharacterLookup(interaction);
+
+    const reply = interaction.editReply.mock.calls.at(-1)?.[0];
+    expect(JSON.stringify(reply)).toContain('No characters found matching');
+    expect(JSON.stringify(reply)).toContain('Chocolatier');
+  });
+
+  it('lists multiple character matches without choosing one player id', async () => {
+    const interaction = fakeCharacterLookupInteraction();
+    mocks.selectRows = [[
+      {
+        id: 'player-id-1',
+        discordId: '111111111111111111',
+        discordUsername: 'first_user',
+        characterName: 'Chocolate Envoy',
+        currentAge: 41,
+        startingAge: 41,
+        isAlive: true,
+        isActive: true,
+      },
+      {
+        id: 'player-id-2',
+        discordId: '222222222222222222',
+        discordUsername: 'second_user',
+        characterName: 'Chocolatier Prime',
+        currentAge: null,
+        startingAge: 52,
+        isAlive: false,
+        isActive: true,
+      },
+    ]];
+
+    await executeCharacterLookup(interaction);
+
+    const reply = interaction.editReply.mock.calls.at(-1)?.[0];
+    const body = JSON.stringify(reply);
+    expect(body).toContain('Multiple matches');
+    expect(body).toContain('Chocolate Envoy');
+    expect(body).toContain('<@111111111111111111>');
+    expect(body).toContain('Chocolatier Prime');
+    expect(body).toContain('<@222222222222222222>');
+    expect(body).not.toContain('player-id-1');
+    expect(body).not.toContain('player-id-2');
   });
 });

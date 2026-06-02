@@ -11,6 +11,7 @@ import * as history from './history.js';
 import * as roster from './roster.js';
 import * as whois from './whois.js';
 import {
+  executeCharacterLookup,
   executeCharacterCreate,
   executeChangeParty,
   ADMIN_MIN_AGE,
@@ -26,6 +27,7 @@ const handlers = {
 };
 
 const adminHandlers = {
+  'character-lookup': { execute: executeCharacterLookup },
   'character-create': { execute: executeCharacterCreate },
   'change-party': { execute: executeChangeParty },
 };
@@ -109,6 +111,14 @@ const command: Command = {
       group
         .setName('admin')
         .setDescription('Staff player administration')
+        .addSubcommand((sub) =>
+          sub
+            .setName('character-lookup')
+            .setDescription('Look up the Discord account behind a character name (staff only)')
+            .addStringOption((opt) =>
+              opt.setName('name').setDescription('Character name to search').setRequired(true).setMaxLength(128),
+            ),
+        )
         .addSubcommand((sub) =>
           sub
             .setName('character-create')

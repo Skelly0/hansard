@@ -109,25 +109,35 @@ describe('TicketService.getTicket detail enrichment', () => {
     });
   });
 
-  it('does not expose ticket thread messages to non-staff viewers', async () => {
+  it('exposes public replies but hides internal notes and audit rows from non-staff viewers', async () => {
     const ticket = makeTicket({
       categoryId: 'category-a',
       createdById: 'creator-player',
       assignedToId: null,
     });
     const publicMessage = {
-      id: 'message-a',
+      id: 'message-public',
       ticketId: 'ticket-a',
       authorId: 'staff-player',
-      content: 'Staff reply that lives in the ticket thread.',
+      content: 'Public reply from staff.',
       isInternal: false,
       discordMessageId: 'discord-message-a',
       createdAt: new Date('2026-05-22T15:28:00Z'),
       editedAt: null,
     };
+    const internalMessage = {
+      id: 'message-internal',
+      ticketId: 'ticket-a',
+      authorId: 'staff-player',
+      content: 'Staff-only note.',
+      isInternal: true,
+      discordMessageId: null,
+      createdAt: new Date('2026-05-22T15:29:00Z'),
+      editedAt: null,
+    };
     const { db } = makeGetTicketTableDb({
       ticket,
-      messages: [publicMessage],
+      messages: [publicMessage, internalMessage],
       category: { id: 'category-a', name: 'Favours' },
       playerRows: [
         { id: 'creator-player', characterName: 'Ada Vance', discordUsername: 'ada' },
@@ -142,7 +152,18 @@ describe('TicketService.getTicket detail enrichment', () => {
 
     expect(result?.discordThreadId).toBeNull();
     expect(result?.discordChannelId).toBeNull();
-    expect(result?.messages).toEqual([]);
+    expect(result?.messages).toEqual([
+      expect.objectContaining({
+        id: 'message-public',
+        content: 'Public reply from staff.',
+        isInternal: false,
+        author: expect.objectContaining({
+          id: 'staff-player',
+          discordUsername: 'staffer',
+        }),
+      }),
+    ]);
+    expect(result?.messages?.map((message) => message.content)).not.toContain('Staff-only note.');
     expect(result?.auditLog).toEqual([]);
   });
 });
@@ -164,8 +185,23 @@ function makeGetTicketTableDb(options: {
   const select = vi.fn(() => ({
     from: vi.fn((table: unknown) => {
       const query: Record<string, unknown> = {};
-      const rows = () => Promise.resolve(rowsForTable(table));
-      query.where = vi.fn(() => query);
+      const whereCalls: unknown[] = [];
+      const rows = () => {
+        if (table === ticketMessages) {
+          const hasInternalFilter = whereCalls.some((condition) =>
+            sqlReferencesColumn(condition, 'is_internal'),
+          );
+          const rows = hasInternalFilter
+            ? options.messages.filter((message) => !(message as { isInternal?: boolean }).isInternal)
+            : options.messages;
+          return Promise.resolve(rows);
+        }
+        return Promise.resolve(rowsForTable(table));
+      };
+      query.where = vi.fn((condition: unknown) => {
+        whereCalls.push(condition);
+        return query;
+      });
       query.limit = vi.fn(rows);
       query.orderBy = vi.fn(rows);
       query.then = (resolve: (value: unknown[]) => unknown, reject: (reason: unknown) => unknown) =>
@@ -175,6 +211,16 @@ function makeGetTicketTableDb(options: {
   }));
 
   return { db: { select } };
+}
+
+function sqlReferencesColumn(value: unknown, columnName: string): boolean {
+  if (!value || typeof value !== 'object') return false;
+
+  const maybeColumn = value as { name?: unknown; queryChunks?: unknown[] };
+  if (maybeColumn.name === columnName) return true;
+  if (!Array.isArray(maybeColumn.queryChunks)) return false;
+
+  return maybeColumn.queryChunks.some((chunk) => sqlReferencesColumn(chunk, columnName));
 }
 
 function makeListTicketsDb(ticketRows: unknown[], total = ticketRows.length) {
@@ -363,6 +409,7 @@ describe('TicketService.addMessage Discord idempotency', () => {
     return {
       db: { select, update, insert },
       update,
+      set,
       insert,
     };
   }
@@ -397,6 +444,31 @@ describe('TicketService.addMessage Discord idempotency', () => {
     expect(update).not.toHaveBeenCalled();
     expect(insert).not.toHaveBeenCalled();
     expect(notifierMocks.postToTicketThread).not.toHaveBeenCalled();
+  });
+
+  it('does not mark internal notes as first responses', async () => {
+    const ticket = makeTicket({
+      createdById: 'owner-player',
+      assignedToId: null,
+      firstResponseAt: null,
+      discordThreadId: null,
+    });
+    const { db, set } = makeAddMessageDb([[ticket]]);
+
+    const result = await new TicketService(db as any).addMessage(
+      'ticket-a',
+      'private staff note',
+      'staff-player',
+      true,
+      undefined,
+      true,
+      false,
+    );
+
+    expect(result).toBeTruthy();
+    expect(set).toHaveBeenCalledWith(
+      expect.not.objectContaining({ firstResponseAt: expect.any(Date) }),
+    );
   });
 });
 

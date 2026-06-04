@@ -60,6 +60,7 @@ export interface BackfillCandidate {
   content: string;
   discordMessageId: string;
   createdAt: Date;
+  isInternal: boolean;
 }
 
 export interface BackfillSkippedCounts {
@@ -197,6 +198,7 @@ export function selectBackfillCandidates(options: {
         content,
         discordMessageId: message.id,
         createdAt,
+        isInternal: true,
       });
     }
   }
@@ -381,7 +383,7 @@ export async function applyBackfillCandidates(
         ticketId: candidate.ticketId,
         authorId: candidate.authorPlayerId,
         content: candidate.content,
-        isInternal: false,
+        isInternal: candidate.isInternal,
         discordMessageId: candidate.discordMessageId,
         createdAt: candidate.createdAt,
       }).returning();
@@ -389,7 +391,7 @@ export async function applyBackfillCandidates(
       await tx.insert(ticketAuditLog).values({
         ticketId: candidate.ticketId,
         actorId: candidate.authorPlayerId,
-        action: 'commented',
+        action: candidate.isInternal ? 'internal_note' : 'commented',
         newValue: {
           messageId: message.id,
           backfilledFromDiscordMessageId: candidate.discordMessageId,
@@ -413,6 +415,7 @@ export async function applyBackfillCandidates(
       if (
         !candidate.ticket.firstResponseAt
         && candidate.authorPlayerId !== candidate.ticket.createdById
+        && !candidate.isInternal
         && !firstResponseSet.has(candidate.ticketId)
       ) {
         updateValues.firstResponseAt = candidate.createdAt;

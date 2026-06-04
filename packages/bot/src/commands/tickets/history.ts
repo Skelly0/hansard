@@ -15,7 +15,7 @@ import { db } from '../../db.js';
  * Show the full chronological history of a ticket: messages, plus audit log
  * entries (status changes, assignments, etc.) for staff viewers. Visibility
  * mirrors TicketService.getTicket — non-staff only see tickets they created
- * or are assigned to, while ticket messages and the audit log are staff-only.
+ * or are assigned to, public replies, and no staff-only notes or audit log.
  */
 
 const MAX_DESCRIPTION_CHARS = 3800;
@@ -49,7 +49,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   await interaction.deferReply({ ephemeral: true });
 
-  const { viewer } = await getTicketViewer(interaction);
+  const { viewer, isStaff } = await getTicketViewer(interaction);
   const ticket = viewer
     ? await new TicketService(db).getTicketByNumber(ticketNumber, viewer)
     : null;
@@ -61,8 +61,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  const messages = ticket.messages ?? [];
-  const auditLog = ticket.auditLog ?? [];
+  const messages = (ticket.messages ?? []).filter((message) => isStaff || !message.isInternal);
+  const auditLog = isStaff ? (ticket.auditLog ?? []) : [];
 
   const actorIds = [
     ...new Set([

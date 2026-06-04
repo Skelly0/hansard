@@ -8,7 +8,6 @@ import {
   type CallParticipants,
 } from '@hansard/api/services/phoneService';
 import { TicketService } from '@hansard/api/services/ticketService';
-import { notifyTicketOwnerOfReply } from '@hansard/api/services/ticketOwnerNotifier';
 import {
   PhoneTextService,
   PhoneTextServiceError,
@@ -21,7 +20,6 @@ import {
   RecipientDmClosedError,
 } from '../utils/phoneRelay.js';
 import { flushQueuedPhoneTextsForPlayer, relayRecordedPhoneText } from '../utils/phoneTextRelay.js';
-import { isStaff } from '../utils/permissions.js';
 import { PHONE_HINT_COOLDOWN_MS, PHONE_DM_CHUNK_BUDGET } from '@hansard/shared';
 
 const HINT_MAP_MAX = 500;
@@ -143,34 +141,24 @@ async function handleTicketThreadMessage(message: Message): Promise<void> {
   if (!ticket) return;
 
   const [author] = await db
-    .select({ id: players.id, isStaff: players.isStaff })
+    .select({ id: players.id })
     .from(players)
     .where(eq(players.discordId, message.author.id))
     .limit(1);
 
   if (!author) return;
 
-  const actorIsStaff = (message.member ? await isStaff(message.member) : false) || author.isStaff;
-  const isInternalThreadMessage = actorIsStaff;
   const saved = await new TicketService(db).addMessage(
     ticket.id,
     content,
     author.id,
-    isInternalThreadMessage,
+    true,
     message.id,
-    actorIsStaff,
+    true,
     false,
   );
 
   if (!saved) return;
-  if (isInternalThreadMessage) return;
-
-  await notifyTicketOwnerOfReply({
-    db,
-    ticket,
-    authorId: author.id,
-    content,
-  });
 }
 
 function formatTicketThreadMessageContent(message: Message): string {

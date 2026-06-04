@@ -233,13 +233,16 @@ export class TicketService {
     if (!ticket) return null;
     if (!this.canViewTicket(ticket, viewer)) return null;
 
-    const messages = viewer && !viewer.isStaff
-      ? []
-      : await this.db
-        .select()
-        .from(ticketMessages)
-        .where(eq(ticketMessages.ticketId, id))
-        .orderBy(ticketMessages.createdAt);
+    const messageConditions: SQL[] = [eq(ticketMessages.ticketId, id)];
+    if (viewer && !viewer.isStaff) {
+      messageConditions.push(eq(ticketMessages.isInternal, false));
+    }
+
+    const messages = await this.db
+      .select()
+      .from(ticketMessages)
+      .where(and(...messageConditions))
+      .orderBy(ticketMessages.createdAt);
 
     const auditLog = viewer && !viewer.isStaff
       ? []
@@ -569,7 +572,7 @@ export class TicketService {
       if (existingDiscordMessage) return null;
     }
 
-    if (!ticket.firstResponseAt && authorId !== ticket.createdById) {
+    if (!isInternal && !ticket.firstResponseAt && authorId !== ticket.createdById) {
       await this.db
         .update(tickets)
         .set({ firstResponseAt: new Date(), updatedAt: new Date() })

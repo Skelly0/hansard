@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  applyBackfillCandidates,
   fetchDiscordThreadMessages,
   selectBackfillCandidates,
 } from './backfillTicketThreadMessages';
+import { ticketAuditLog, ticketMessages, tickets } from '@hansard/db';
 
 describe('selectBackfillCandidates', () => {
   it('keeps only unmigrated human text messages from known ticket threads', () => {
@@ -89,6 +91,7 @@ describe('selectBackfillCandidates', () => {
       'msg-early',
       'msg-late',
     ]);
+    expect(result.candidates.every((candidate) => candidate.isInternal)).toBe(true);
     expect(result.candidates[0]).toMatchObject({
       ticketId: 'ticket-1',
       ticketNumber: 42,
@@ -141,5 +144,73 @@ describe('fetchDiscordThreadMessages', () => {
     expect(String(fetchImpl.mock.calls[1][0])).toContain(`before=${oldestFromFirstPage}`);
     expect(messages[0].id).toBe('oldest');
     expect(messages.at(-1)?.id).toBe('newer-99');
+  });
+});
+
+describe('applyBackfillCandidates', () => {
+  it('preserves internal visibility when writing staff-authored backfilled thread messages', async () => {
+    const insertedValues: { table: unknown; values: Record<string, unknown> }[] = [];
+    const updateValues: Record<string, unknown>[] = [];
+    const tx = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn().mockResolvedValue([]),
+          })),
+        })),
+      })),
+      insert: vi.fn((table: unknown) => ({
+        values: vi.fn((values: Record<string, unknown>) => {
+          insertedValues.push({ table, values });
+          return table === ticketMessages
+            ? { returning: vi.fn().mockResolvedValue([{ id: 'message-1' }]) }
+            : Promise.resolve(undefined);
+        }),
+      })),
+      update: vi.fn((table: unknown) => {
+        expect(table).toBe(tickets);
+        return {
+          set: vi.fn((values: Record<string, unknown>) => {
+            updateValues.push(values);
+            return {
+              where: vi.fn().mockResolvedValue(undefined),
+            };
+          }),
+        };
+      }),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<boolean>) =>
+        callback(tx),
+      ),
+    };
+
+    await applyBackfillCandidates(db as any, [{
+      ticket: {
+        id: 'ticket-1',
+        number: 42,
+        title: 'Missing thread messages',
+        createdById: 'creator-player',
+        assignedToId: null,
+        discordThreadId: 'thread-42',
+        firstResponseAt: null,
+        updatedAt: new Date('2026-05-20T10:00:00.000Z'),
+      },
+      ticketId: 'ticket-1',
+      ticketNumber: 42,
+      authorPlayerId: 'staff-player',
+      content: 'Staff thread chatter',
+      discordMessageId: 'discord-message-1',
+      createdAt: new Date('2026-05-20T10:05:00.000Z'),
+      isInternal: true,
+    }]);
+
+    expect(insertedValues.find((entry) => entry.table === ticketMessages)?.values).toMatchObject({
+      isInternal: true,
+    });
+    expect(insertedValues.find((entry) => entry.table === ticketAuditLog)?.values).toMatchObject({
+      action: 'internal_note',
+    });
+    expect(updateValues[0]).not.toHaveProperty('firstResponseAt');
   });
 });

@@ -364,6 +364,35 @@ describe('messageCreate phone text DM routing', () => {
     expect(mocks.textSvc.resolveReplyConversation).not.toHaveBeenCalled();
   });
 
+  it('records raw ticket thread messages as internal even when staff status cannot be proven', async () => {
+    const { handler } = makeClient();
+    mocks.dbRows.push([{
+      id: 'ticket-42',
+      number: 42,
+      title: 'Missing thread messages',
+      createdById: 'owner-player',
+      assignedToId: null,
+      discordThreadId: 'thread-42',
+    }]);
+    mocks.dbRows.push([{ id: 'player-caller', isStaff: false }]);
+    const message = makeThreadMessage('raw thread message');
+    message.member = null as any;
+
+    await handler(message);
+
+    expect(mocks.isStaff).not.toHaveBeenCalled();
+    expect(mocks.ticketAddMessage).toHaveBeenCalledWith(
+      'ticket-42',
+      'raw thread message',
+      'player-caller',
+      true,
+      'discord-message-1',
+      true,
+      false,
+    );
+    expect(mocks.notifyTicketOwnerOfReply).not.toHaveBeenCalled();
+  });
+
   it('uses the author staff flag when a ticket thread message has no guild member payload', async () => {
     const { handler } = makeClient();
     mocks.dbRows.push([{

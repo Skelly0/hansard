@@ -60,19 +60,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     return;
   }
 
-  // Touch updatedAt; firstResponseAt logic intentionally mirrored
-  const now = new Date();
-  if (!ticket.firstResponseAt && authorPlayer.id !== ticket.createdById) {
-    await db
-      .update(tickets)
-      .set({ firstResponseAt: now, updatedAt: now })
-      .where(eq(tickets.id, ticket.id));
-  } else {
-    await db
-      .update(tickets)
-      .set({ updatedAt: now })
-      .where(eq(tickets.id, ticket.id));
-  }
+  // Internal notes are staff-only and must not count as player-visible responses.
+  await db
+    .update(tickets)
+    .set({ updatedAt: new Date() })
+    .where(eq(tickets.id, ticket.id));
 
   // Insert internal message
   const [message] = await db

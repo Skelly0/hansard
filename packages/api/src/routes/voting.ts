@@ -26,6 +26,32 @@ import { aggregatePermissionsForPlayer } from '../services/playerService.js';
  *   POST   /api/elections/:id/create-runoff - Create runoff
  *   GET    /api/elections/:id/rounds        - All rounds
  */
+/**
+ * Restrict which election fields a non-staff caller may change via PATCH.
+ *
+ * The election *creator* is allowed to PATCH their election, but lifecycle and
+ * integrity-sensitive fields (status, the voting window, eligibility config,
+ * Discord routing ids) must only move through the dedicated staff endpoints
+ * (`/open`, `/close`, `/certify`, ...). Without this, any authenticated player
+ * could create a generic election and then PATCH `status: 'certified'` (or
+ * reopen/extend it, or flip `sealedResults`), bypassing the requireStaff gates.
+ *
+ * Staff get the body untouched. Non-staff are narrowed to benign metadata.
+ */
+const NON_STAFF_ELECTION_PATCH_FIELDS = ['title', 'description'] as const;
+
+export function sanitizeElectionUpdate(
+  body: Record<string, unknown>,
+  isStaff: boolean,
+): Record<string, unknown> {
+  if (isStaff) return body;
+  const sanitized: Record<string, unknown> = {};
+  for (const field of NON_STAFF_ELECTION_PATCH_FIELDS) {
+    if (body[field] !== undefined) sanitized[field] = body[field];
+  }
+  return sanitized;
+}
+
 export default async function votingRoutes(fastify: FastifyInstance) {
   // The VoteService needs a DB instance — in a real setup this comes from
   // the db plugin. For now we construct it lazily using the decorated db.
@@ -142,7 +168,8 @@ export default async function votingRoutes(fastify: FastifyInstance) {
         request.staffActionLog = true;
       }
 
-      const updated = await service.updateElection(id, body);
+      const patch = sanitizeElectionUpdate(body, !!request.player?.isStaff);
+      const updated = await service.updateElection(id, patch as Parameters<typeof service.updateElection>[1]);
       return updated;
     },
   );

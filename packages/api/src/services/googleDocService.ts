@@ -21,6 +21,30 @@ export function extractDocId(url: string): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * Validate that a string is a genuine, browser-safe Google Docs URL.
+ *
+ * `extractDocId` alone is NOT a safety check: its regex matches any string
+ * that merely *contains* `/document/d/<id>` — including hostile schemes such
+ * as `javascript:alert(1)//x/document/d/abc`. Because bill URLs are rendered
+ * into an <a href> on the web, we must parse the URL and pin both the scheme
+ * (https) and host (docs.google.com) before trusting it.
+ */
+export function isValidGoogleDocUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'docs.google.com' && !host.endsWith('.docs.google.com')) {
+    return false;
+  }
+  return extractDocId(url) !== null;
+}
+
 // ============================================================
 // Content Fetching (stub)
 // ============================================================

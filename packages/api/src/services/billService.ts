@@ -17,7 +17,7 @@ import type {
   BillType,
 } from '@hansard/shared';
 import { BillStatus, DEFAULT_VOTE_DURATION_MS } from '@hansard/shared';
-import { extractDocId, cacheDocContent } from './googleDocService.js';
+import { extractDocId, cacheDocContent, isValidGoogleDocUrl } from './googleDocService.js';
 import { updateDocument } from './documentService.js';
 
 // ============================================================
@@ -329,6 +329,9 @@ export async function submitBillFor(
   }
   if (billType === 'google_doc' && !data.googleDocUrl?.trim()) {
     throw new Error('Google Doc bills require a googleDocUrl');
+  }
+  if (billType === 'google_doc' && !isValidGoogleDocUrl(data.googleDocUrl!.trim())) {
+    throw new Error('Google Doc bills require a valid https://docs.google.com/document/d/... URL');
   }
 
   const googleDocUrl = billType === 'google_doc' ? data.googleDocUrl!.trim() : null;

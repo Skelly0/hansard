@@ -22,7 +22,7 @@ import {
   getBillStatusLog,
   getVoters,
 } from '../services/billService.js';
-import { cacheDocContent } from '../services/googleDocService.js';
+import { cacheDocContent, isValidGoogleDocUrl } from '../services/googleDocService.js';
 import { aggregatePermissionsForPlayer } from '../services/playerService.js';
 
 /**
@@ -237,6 +237,11 @@ export default async function billRoutes(fastify: FastifyInstance) {
       }
       if (requestedBillType === 'google_doc' && !googleDocUrl?.trim()) {
         return reply.status(400).send({ error: 'title and googleDocUrl are required for Google Doc bills' });
+      }
+      if (requestedBillType === 'google_doc' && !isValidGoogleDocUrl(googleDocUrl!.trim())) {
+        return reply.status(400).send({
+          error: 'googleDocUrl must be a valid https://docs.google.com/document/d/... URL',
+        });
       }
       if (requestedBillType !== 'short' && requestedBillType !== 'google_doc') {
         return reply.status(400).send({ error: 'billType must be google_doc or short' });

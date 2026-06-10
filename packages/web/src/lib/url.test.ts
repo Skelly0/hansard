@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSafeHttpUrl } from './url';
+import { isSafeHttpUrl, isGoogleDocsHttpUrl } from './url';
 
 describe('isSafeHttpUrl', () => {
   it('accepts http and https URLs', () => {
@@ -18,5 +18,24 @@ describe('isSafeHttpUrl', () => {
     expect(isSafeHttpUrl(undefined)).toBe(false);
     expect(isSafeHttpUrl('')).toBe(false);
     expect(isSafeHttpUrl('not a url')).toBe(false);
+  });
+});
+
+describe('isGoogleDocsHttpUrl', () => {
+  it('accepts safe URLs whose host is exactly docs.google.com', () => {
+    expect(isGoogleDocsHttpUrl('https://docs.google.com/document/d/abc/edit')).toBe(true);
+  });
+
+  it('rejects other hosts that would render behind the "Open in Google Docs" label', () => {
+    // The phishing vector: a safe https scheme but a non-Google host.
+    expect(isGoogleDocsHttpUrl('https://evil.example/login')).toBe(false);
+    expect(isGoogleDocsHttpUrl('https://docs.google.com.evil.test/document/d/abc')).toBe(false);
+    expect(isGoogleDocsHttpUrl('https://docs.google.com@evil.test/document/d/abc')).toBe(false);
+  });
+
+  it('rejects active schemes and nullish values just like isSafeHttpUrl', () => {
+    expect(isGoogleDocsHttpUrl('javascript:alert(1)//docs.google.com')).toBe(false);
+    expect(isGoogleDocsHttpUrl(null)).toBe(false);
+    expect(isGoogleDocsHttpUrl(undefined)).toBe(false);
   });
 });

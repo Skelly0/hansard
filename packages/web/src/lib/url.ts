@@ -17,3 +17,20 @@ export function isSafeHttpUrl(url: string | null | undefined): url is string {
   }
   return parsed.protocol === 'https:' || parsed.protocol === 'http:';
 }
+
+/**
+ * Return true only for safe http(s) URLs whose host is exactly docs.google.com.
+ *
+ * `isSafeHttpUrl` blocks active schemes but not hosts, so a stored
+ * `https://evil.example/...` would otherwise render behind an "Open in Google
+ * Docs" label — a phishing-shaped link. Use this when the link is presented as
+ * a Google Docs link so the host matches the claim.
+ */
+export function isGoogleDocsHttpUrl(url: string | null | undefined): url is string {
+  if (!isSafeHttpUrl(url)) return false;
+  try {
+    return new URL(url).hostname.toLowerCase() === 'docs.google.com';
+  } catch {
+    return false;
+  }
+}

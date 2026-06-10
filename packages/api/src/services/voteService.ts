@@ -34,6 +34,70 @@ import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
 import { appointToOffice } from './officeService.js';
 
 // ============================================================
+// Election update allowlist
+// ============================================================
+
+// Fields a PATCH may write directly. Anything else (id, createdById, results,
+// type, relatedBillId, …) is intentionally NOT here so a raw request body can't
+// mass-assign integrity columns via `.set({ ...body })`. Lifecycle changes
+// (status moves through certify/open/close, the voting window, etc.) are gated
+// at the route layer; this list is the last-line boundary for any caller.
+const ELECTION_UPDATE_PASSTHROUGH_FIELDS = [
+  'title',
+  'description',
+  'config',
+  'status',
+  'discordMessageId',
+  'discordChannelId',
+] as const;
+
+const ELECTION_UPDATE_DATE_FIELDS = [
+  'votingOpensAt',
+  'votingClosesAt',
+  'nominationsOpenAt',
+  'nominationsCloseAt',
+] as const;
+
+/**
+ * Build the Drizzle `.set(...)` payload for an election update from an explicit
+ * allowlist, coercing JSON date strings to `Date`.
+ *
+ * Exported so the allowlist + coercion can be unit-tested without a DB. Throws
+ * on an unparseable date so a bad value surfaces instead of silently no-op'ing.
+ */
+export function buildElectionUpdateSet(
+  data: Record<string, unknown>,
+  now: Date,
+): Record<string, unknown> {
+  const set: Record<string, unknown> = { updatedAt: now };
+
+  for (const key of ELECTION_UPDATE_PASSTHROUGH_FIELDS) {
+    if (data[key] !== undefined) set[key] = data[key];
+  }
+
+  // JSON can only carry dates as strings; coerce them so Drizzle's mode:'date'
+  // columns don't call .toISOString() on a string and throw.
+  for (const key of ELECTION_UPDATE_DATE_FIELDS) {
+    const value = data[key];
+    if (value === undefined) continue;
+    if (value instanceof Date) {
+      set[key] = value;
+      continue;
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+      const coerced = new Date(value);
+      if (!Number.isNaN(coerced.getTime())) {
+        set[key] = coerced;
+        continue;
+      }
+    }
+    throw new Error(`Invalid value for ${key}`);
+  }
+
+  return set;
+}
+
+// ============================================================
 // Types for service inputs
 // ============================================================
 
@@ -623,21 +687,15 @@ export class VoteService {
     return updated ?? null;
   }
 
-  async updateElection(id: string, data: Partial<{
-    title: string;
-    description: string;
-    config: ElectionConfig;
-    votingOpensAt: Date;
-    votingClosesAt: Date;
-    nominationsOpenAt: Date;
-    nominationsCloseAt: Date;
-    status: string;
-    discordMessageId: string;
-    discordChannelId: string;
-  }>) {
+  // Accepts a loose record (often a raw HTTP body). The writable fields and
+  // their coercion are enforced by buildElectionUpdateSet, not by this type, so
+  // no caller can mass-assign columns outside the allowlist.
+  async updateElection(id: string, data: Record<string, unknown>) {
+    const set = buildElectionUpdateSet(data, new Date());
+
     const [updated] = await this.db
       .update(elections)
-      .set({ ...data, updatedAt: new Date() })
+      .set(set)
       .where(eq(elections.id, id))
       .returning();
 

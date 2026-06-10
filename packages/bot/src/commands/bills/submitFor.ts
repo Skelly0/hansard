@@ -11,7 +11,7 @@ import { db } from '../../db.js';
 import { bills, billStatusLog, players } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
-import { extractDocId } from './shared.js';
+import { extractDocId, isValidGoogleDocUrl } from './shared.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const member = interaction.guild?.members.cache.get(interaction.user.id);
@@ -37,15 +37,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const title = interaction.options.getString('title', true);
   const googleDocUrl = interaction.options.getString('google_doc_url', true);
 
-  // Validate Google Doc URL
-  const docId = extractDocId(googleDocUrl);
-  if (!docId) {
+  // Validate Google Doc URL (scheme + host pinned, not just a path match)
+  if (!isValidGoogleDocUrl(googleDocUrl)) {
     await interaction.reply({
-      embeds: [errorEmbed('That doesn\'t look like a valid Google Docs URL.')],
+      embeds: [errorEmbed('That doesn\'t look like a valid Google Docs URL. Expected format: `https://docs.google.com/document/d/.../edit`')],
       ephemeral: true,
     });
     return;
   }
+  const docId = extractDocId(googleDocUrl);
 
   // Open modal for summary, tags, policy areas
   const modal = new ModalBuilder()

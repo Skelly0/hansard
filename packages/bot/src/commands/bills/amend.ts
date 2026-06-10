@@ -10,7 +10,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { bills, billStatusLog, documents, players } from '@hansard/db';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
-import { extractDocId } from './shared.js';
+import { extractDocId, isValidGoogleDocUrl } from './shared.js';
 import { postLegislationEmbed } from '../../utils/legislationChannel.js';
 
 /**
@@ -60,15 +60,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   const parent = interaction.options.getString('parent', true);
   const url = interaction.options.getString('url', true);
 
-  // Validate Google Doc URL
-  const docId = extractDocId(url);
-  if (!docId) {
+  // Validate Google Doc URL (scheme + host pinned, not just a path match)
+  if (!isValidGoogleDocUrl(url)) {
     await interaction.reply({
       embeds: [errorEmbed('That doesn\'t look like a valid Google Docs URL. Expected format: `https://docs.google.com/document/d/.../edit`')],
       ephemeral: true,
     });
     return;
   }
+  const docId = extractDocId(url);
 
   // Resolve parent bill or document
   const resolved = await resolveParent(parent);

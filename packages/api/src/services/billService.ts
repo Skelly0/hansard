@@ -327,14 +327,16 @@ export async function submitBillFor(
   if (billType === 'short' && !content) {
     throw new Error('Short bills require content');
   }
-  if (billType === 'google_doc' && !data.googleDocUrl?.trim()) {
+
+  const trimmedDocUrl = data.googleDocUrl?.trim() ?? '';
+  if (billType === 'google_doc' && !trimmedDocUrl) {
     throw new Error('Google Doc bills require a googleDocUrl');
   }
-  if (billType === 'google_doc' && !isValidGoogleDocUrl(data.googleDocUrl!.trim())) {
+  if (billType === 'google_doc' && !isValidGoogleDocUrl(trimmedDocUrl)) {
     throw new Error('Google Doc bills require a valid https://docs.google.com/document/d/... URL');
   }
 
-  const googleDocUrl = billType === 'google_doc' ? data.googleDocUrl!.trim() : null;
+  const googleDocUrl = billType === 'google_doc' ? trimmedDocUrl : null;
   const googleDocId = googleDocUrl ? extractDocId(googleDocUrl) : null;
   const now = new Date();
 

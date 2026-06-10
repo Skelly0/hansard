@@ -22,7 +22,7 @@ import {
 import type { Command } from '../../client.js';
 import { dispatchSubcommand } from '../../utils/parentCommand.js';
 import { SHORT_BILL_TEXT_MAX_LENGTH } from './display.js';
-import { extractDocId } from './shared.js';
+import { extractDocId, isValidGoogleDocUrl } from './shared.js';
 import { STATUS_CHOICES } from './list.js';
 import * as view from './view.js';
 import * as list from './list.js';
@@ -236,15 +236,16 @@ async function executeSubmit(interaction: ChatInputCommandInteraction): Promise<
 
   const { summary, tags, policyAreas } = parseModalMetadata(modalSubmit);
   const googleDocUrl = isShortBill ? null : modalSubmit.fields.getTextInputValue('google_doc_url').trim();
-  const docId = googleDocUrl ? extractDocId(googleDocUrl) : null;
   const shortBillText = isShortBill ? modalSubmit.fields.getTextInputValue('bill_text').trim() : null;
 
-  if (!isShortBill && !docId) {
+  if (!isShortBill && !(googleDocUrl && isValidGoogleDocUrl(googleDocUrl))) {
     await modalSubmit.editReply({
       embeds: [errorEmbed('That doesn\'t look like a valid Google Docs URL. Expected format: `https://docs.google.com/document/d/.../edit`')],
     });
     return;
   }
+
+  const docId = googleDocUrl ? extractDocId(googleDocUrl) : null;
 
   if (isShortBill && !shortBillText) {
     await modalSubmit.editReply({

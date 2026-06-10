@@ -13,6 +13,7 @@ import {
   rollbackDocument,
 } from '../services/documentService.js';
 import { computeDiff } from '../services/diffService.js';
+import { isValidGoogleDocUrl } from '../services/googleDocService.js';
 
 /**
  * Document routes plugin.
@@ -248,6 +249,19 @@ export default async function documentRoutes(fastify: FastifyInstance) {
 
       if (!collectionId || !title) {
         return reply.status(400).send({ error: 'collectionId and title are required' });
+      }
+
+      // A document's googleDocUrl is stored and later surfaced to clients, so
+      // validate scheme/host the same way bills do rather than trusting an
+      // arbitrary (possibly `javascript:`) string.
+      const docUrl = request.body.googleDocUrl?.trim();
+      if (docUrl) {
+        if (!isValidGoogleDocUrl(docUrl)) {
+          return reply.status(400).send({
+            error: 'googleDocUrl must be a valid https://docs.google.com/document/d/... URL',
+          });
+        }
+        request.body.googleDocUrl = docUrl;
       }
 
       const doc = await createDocument(db, request.body, user.id);

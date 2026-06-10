@@ -2,13 +2,12 @@
  * Shared utilities for bill commands.
  */
 
-/**
- * Extract the Google Doc ID from a URL.
- */
-export function extractDocId(url: string): string | null {
-  const match = url.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
-  return match?.[1] ?? null;
-}
+// Re-export the API's URL helpers so the bot validates Google Doc URLs through
+// exactly the same scheme/host-pinned logic as the API boundary. A bot-local
+// regex previously diverged: it accepted hostile schemes and arbitrary hosts
+// (e.g. `javascript:...//document/d/x`, `https://evil.test/document/d/x`),
+// making the bot the ingress for malicious bill rows.
+export { extractDocId, isValidGoogleDocUrl } from '@hansard/api/services/googleDocService';
 
 /**
  * Format a bill status for display.

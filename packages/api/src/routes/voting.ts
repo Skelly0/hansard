@@ -40,10 +40,19 @@ import { aggregatePermissionsForPlayer } from '../services/playerService.js';
  */
 const NON_STAFF_ELECTION_PATCH_FIELDS = ['title', 'description'] as const;
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export function sanitizeElectionUpdate(
-  body: Record<string, unknown>,
+  body: unknown,
   isStaff: boolean,
 ): Record<string, unknown> {
+  // A PATCH body can be absent, null, an array, or a primitive (no/odd
+  // Content-Type). Treat anything that isn't a plain object as "no fields"
+  // so the loop below never dereferences undefined and the staff fast-path
+  // never forwards a non-object into updateElection's spread.
+  if (!isPlainObject(body)) return {};
   if (isStaff) return body;
   const sanitized: Record<string, unknown> = {};
   for (const field of NON_STAFF_ELECTION_PATCH_FIELDS) {
@@ -168,8 +177,26 @@ export default async function votingRoutes(fastify: FastifyInstance) {
         request.staffActionLog = true;
       }
 
-      const patch = sanitizeElectionUpdate(body, !!request.player?.isStaff);
-      const updated = await service.updateElection(id, patch as Parameters<typeof service.updateElection>[1]);
+      const isStaff = !!request.player?.isStaff;
+      const patch = sanitizeElectionUpdate(body, isStaff);
+
+      // title is NOT NULL — reject null/empty/non-string before it reaches the DB.
+      if ('title' in patch && (typeof patch.title !== 'string' || patch.title.trim() === '')) {
+        return reply.status(400).send({ error: 'title must be a non-empty string' });
+      }
+      // No editable field survived. For a non-staff creator this means every
+      // field they sent was a privileged one that got stripped — surface that
+      // instead of returning a misleading 200 that silently no-ops (and bumps
+      // updatedAt) while the denied write looks like it succeeded.
+      if (Object.keys(patch).length === 0) {
+        return reply.status(400).send({
+          error: isStaff
+            ? 'No editable fields provided'
+            : 'You may only edit the title or description of this election',
+        });
+      }
+
+      const updated = await service.updateElection(id, patch);
       return updated;
     },
   );

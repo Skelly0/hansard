@@ -13,7 +13,7 @@ import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { StatusTimeline } from '../components/shared/StatusTimeline';
 import { ResultsBars } from '../components/shared/ResultsBars';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
-import { isSafeHttpUrl } from '../lib/url';
+import { isGoogleDocsHttpUrl } from '../lib/url';
 import { RedlineDiff, type DiffHunk } from '../components/shared/RedlineDiff';
 import { Modal } from '../components/shared/Modal';
 import type { BillVoter, BillDetail as BillDetailType } from '../api/hooks/useBills';
@@ -145,7 +145,7 @@ export function BillDetail() {
           <h1 className="text-display">{bill.title}</h1>
         </div>
 
-        {isSafeHttpUrl(bill.googleDocUrl) ? (
+        {isGoogleDocsHttpUrl(bill.googleDocUrl) ? (
           <a
             href={bill.googleDocUrl}
             target="_blank"

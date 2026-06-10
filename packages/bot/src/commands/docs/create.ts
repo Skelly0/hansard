@@ -4,6 +4,7 @@ import { db } from '../../db.js';
 import { documents, documentCollections, documentVersions, players } from '@hansard/db';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
+import { isValidGoogleDocUrl } from '@hansard/api/services/googleDocService';
 
 function generateSlug(title: string): string {
   return title
@@ -53,6 +54,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
   if (!content && !googleDocUrl) {
     await interaction.editReply({ embeds: [errorEmbed('Must provide either `content` or `google-doc-url`.')] });
+    return;
+  }
+
+  if (googleDocUrl && !isValidGoogleDocUrl(googleDocUrl)) {
+    await interaction.editReply({
+      embeds: [errorEmbed('That doesn\'t look like a valid Google Docs URL. Expected format: `https://docs.google.com/document/d/.../edit`')],
+    });
     return;
   }
 

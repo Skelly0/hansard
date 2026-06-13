@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     update: vi.fn(),
   },
   hasPermission: vi.fn(),
+  wakeVoteAutoCloseWorker: vi.fn(),
 }));
 
 vi.mock('drizzle-orm', () => ({
@@ -33,6 +34,10 @@ vi.mock('../../db.js', () => ({
 
 vi.mock('../../utils/permissions.js', () => ({
   hasPermission: mocks.hasPermission,
+}));
+
+vi.mock('../../services/voteAutoClose.js', () => ({
+  wakeVoteAutoCloseWorker: mocks.wakeVoteAutoCloseWorker,
 }));
 
 import {
@@ -126,6 +131,23 @@ describe('handleVoteCreateModal', () => {
 
     expect(insertedElection.votingOpensAt.toISOString()).toBe('2026-01-01T00:00:00.000Z');
     expect(insertedElection.votingClosesAt.toISOString()).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  it('wakes the auto-close worker after creating an open vote', async () => {
+    mocks.db.select.mockImplementationOnce(() => selectLimit([{ id: 'player-1' }]));
+    mocks.db.insert.mockReturnValue({
+      values: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: 'election-1' }]),
+      })),
+    });
+
+    const interaction = makeModalInteraction({
+      customId: 'vote-create:referendum:yea_nay_abstain:simple:buttons',
+    });
+
+    await handleVoteCreateModal(interaction as any);
+
+    expect(mocks.wakeVoteAutoCloseWorker).toHaveBeenCalledWith('vote-created');
   });
 });
 

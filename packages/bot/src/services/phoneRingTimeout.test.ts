@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { and, eq, isNotNull, lt } from 'drizzle-orm';
 
 // phoneRingTimeout pulls in phoneRelay which pulls in `../db.js`, which throws at
@@ -22,10 +22,12 @@ vi.mock('../utils/phoneTextRelay.js', () => textRelayMocks);
 const {
   expireRingingCalls,
   processPendingVoicemailBeeps,
+  startPhoneRingTimeoutWorker,
   sweepClaimedVoicemailBeeps,
   sweepAbandonedVoicemails,
   sweepStalePhoneTextDeliveryClaims,
   sweepStalePhoneTextTapDeliveries,
+  wakePhoneRingTimeoutWorker,
 } = await import('./phoneRingTimeout.js');
 const { phoneCalls } = await import('@hansard/db');
 
@@ -100,6 +102,18 @@ beforeEach(() => {
   relayMocks.sendVoicemailBeep.mockResolvedValue(undefined);
   textRelayMocks.flushQueuedPhoneTextsForPlayer.mockResolvedValue(0);
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+  delete process.env.PHONE_RING_WORKER_INTERVAL_MS;
+  delete process.env.PHONE_RING_WORKER_IDLE_INTERVAL_MS;
+});
+
+async function flushAsyncWork(): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    await Promise.resolve();
+  }
+}
 
 /**
  * Cycle-safe recursive collector for string values nested anywhere inside a Drizzle SQL
@@ -364,5 +378,91 @@ describe('phone text worker sweeps', () => {
     const predicate = collectStrings(captured.whereArg);
     expect(predicate.filter((s) => s.includes('is null'))).toHaveLength(2);
     expect(predicate).toContain('created_at');
+  });
+});
+
+describe('startPhoneRingTimeoutWorker scheduling', () => {
+  it('defaults the idle cadence to six hours', async () => {
+    vi.useFakeTimers();
+    const { db } = buildDb([]);
+
+    const handle = startPhoneRingTimeoutWorker(db as any, {
+      runImmediately: true,
+      runStartupSweep: false,
+      logger: { error: vi.fn(), log: vi.fn() },
+    } as any);
+
+    try {
+      await flushAsyncWork();
+      expect((db as any).select).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync((6 * 60 * 60 * 1000) - 1);
+      expect((db as any).select).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect((db as any).select).toHaveBeenCalledTimes(2);
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('honours PHONE_RING_WORKER_INTERVAL_MS for the active polling cadence', async () => {
+    vi.useFakeTimers();
+    process.env.PHONE_RING_WORKER_INTERVAL_MS = '120000';
+    const { db } = buildDb([]);
+
+    const handle = startPhoneRingTimeoutWorker(db as any, {
+      runImmediately: false,
+      runStartupSweep: false,
+      logger: { error: vi.fn(), log: vi.fn() },
+    } as any);
+
+    try {
+      expect(handle.wake('test')).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect((db as any).select).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect((db as any).select).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect((db as any).select).toHaveBeenCalledTimes(2);
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('uses the idle cadence after an empty tick and wakes immediately on phone activity', async () => {
+    vi.useFakeTimers();
+    const { db } = buildDb([]);
+
+    const handle = startPhoneRingTimeoutWorker(db as any, {
+      activeIntervalMs: 100,
+      idleIntervalMs: 1_000,
+      activeWindowMs: 500,
+      runImmediately: true,
+      runStartupSweep: false,
+      logger: { error: vi.fn(), log: vi.fn() },
+    } as any);
+
+    try {
+      await flushAsyncWork();
+      expect((db as any).select).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect((db as any).select).toHaveBeenCalledTimes(1);
+
+      expect(wakePhoneRingTimeoutWorker('test')).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect((db as any).select).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(99);
+      expect((db as any).select).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect((db as any).select).toHaveBeenCalledTimes(3);
+    } finally {
+      handle.stop();
+    }
   });
 });

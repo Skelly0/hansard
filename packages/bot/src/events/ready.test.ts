@@ -10,11 +10,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/voteAutoClose.js', () => ({
-  startVoteAutoCloseWorker: vi.fn(() => ({ unref: vi.fn() })),
+  startVoteAutoCloseWorker: vi.fn(() => ({ stop: vi.fn(), unref: vi.fn(), wake: vi.fn() })),
 }));
 
 vi.mock('../services/phoneRingTimeout.js', () => ({
-  startPhoneRingTimeoutWorker: vi.fn(() => ({ unref: vi.fn() })),
+  startPhoneRingTimeoutWorker: vi.fn(() => ({ stop: vi.fn(), unref: vi.fn(), wake: vi.fn() })),
 }));
 
 vi.mock('@hansard/api/services/voteService', () => ({

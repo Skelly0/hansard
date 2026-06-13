@@ -3,12 +3,12 @@ import { VoteService } from '@hansard/api/services/voteService';
 import { commands } from '../client.js';
 import { db } from '../db.js';
 import { renderReactionResult } from '../commands/vote/close.js';
-import { startVoteAutoCloseWorker } from '../services/voteAutoClose.js';
-import { startPhoneRingTimeoutWorker } from '../services/phoneRingTimeout.js';
+import { startVoteAutoCloseWorker, type VoteAutoCloseWorkerHandle } from '../services/voteAutoClose.js';
+import { startPhoneRingTimeoutWorker, type PhoneRingTimeoutWorkerHandle } from '../services/phoneRingTimeout.js';
 import { autoEnactPassedBillFromElection } from '../commands/bills/autoEnact.js';
 
-let voteAutoCloseWorker: NodeJS.Timeout | null = null;
-let phoneRingTimeoutWorker: NodeJS.Timeout | null = null;
+let voteAutoCloseWorker: VoteAutoCloseWorkerHandle | null = null;
+let phoneRingTimeoutWorker: PhoneRingTimeoutWorkerHandle | null = null;
 
 /**
  * Stop all background workers. Called from the shutdown handler so a SIGTERM doesn't
@@ -16,11 +16,11 @@ let phoneRingTimeoutWorker: NodeJS.Timeout | null = null;
  */
 export function stopBackgroundWorkers(): void {
   if (voteAutoCloseWorker) {
-    clearInterval(voteAutoCloseWorker);
+    voteAutoCloseWorker.stop();
     voteAutoCloseWorker = null;
   }
   if (phoneRingTimeoutWorker) {
-    clearInterval(phoneRingTimeoutWorker);
+    phoneRingTimeoutWorker.stop();
     phoneRingTimeoutWorker = null;
   }
 }

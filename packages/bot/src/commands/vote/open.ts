@@ -8,6 +8,7 @@ import { REACTION_FPTP_MAX_CANDIDATES } from '@hansard/shared';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { hasPermission } from '../../utils/permissions.js';
 import { db } from '../../db.js';
+import { wakeVoteAutoCloseWorker } from '../../services/voteAutoClose.js';
 import { seedAllReactionsForOpenVote } from './_seedFptpReactions.js';
 import { findElectionByReference } from './_electionReference.js';
 
@@ -74,6 +75,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       });
       return;
     }
+
+    wakeVoteAutoCloseWorker('vote-opened');
 
     await interaction.editReply({
       embeds: [

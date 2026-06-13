@@ -26,6 +26,7 @@ import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { hasPermission, type Permission } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
+import { wakeVoteAutoCloseWorker } from '../../services/voteAutoClose.js';
 import { getRequestedVoteInterface } from './_electionReference.js';
 import {
   buildSubmittedBillSelectOptions,
@@ -991,6 +992,8 @@ async function handleLegislativeBillVoteCreate(
     }
   }
 
+  wakeVoteAutoCloseWorker('vote-created');
+
   await modalSubmit.editReply({
     embeds: [
       createEmbed({
@@ -1112,6 +1115,7 @@ export async function handleVoteCreateModal(
       })
       .returning({ id: elections.id });
     electionId = row.id;
+    wakeVoteAutoCloseWorker('vote-created');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create election';
     await interaction.editReply({ embeds: [errorEmbed(message)] });

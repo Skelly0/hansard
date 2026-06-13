@@ -1,6 +1,6 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance } from 'fastify';
-import { createDb, type Database } from '@hansard/db';
+import { closeDb, createDb, type Database } from '@hansard/db';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -16,4 +16,7 @@ export default fp(async function dbPlugin(fastify: FastifyInstance) {
 
   const db = createDb(connectionString);
   fastify.decorate('db', db);
+  fastify.addHook('onClose', async () => {
+    await closeDb(db);
+  });
 }, { name: 'db' });

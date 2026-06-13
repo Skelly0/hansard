@@ -8,6 +8,7 @@ import { registerReadyEvent, stopBackgroundWorkers } from './events/ready.js';
 import { registerInteractionCreateEvent } from './events/interactionCreate.js';
 import { registerMessageReactionAddEvent } from './events/messageReactionAdd.js';
 import { registerMessageCreateEvent } from './events/messageCreate.js';
+import { shutdownDatabase } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +56,11 @@ async function shutdown(signal: string): Promise<void> {
     await client.destroy();
   } catch (err) {
     console.error('Error destroying client:', err);
+  }
+  try {
+    await shutdownDatabase();
+  } catch (err) {
+    console.error('Error closing database pools:', err);
   }
   process.exit(0);
 }

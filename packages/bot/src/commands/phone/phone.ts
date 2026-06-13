@@ -26,6 +26,7 @@ import {
 import { buildIncomingCallActions } from '../../components/phoneButtons.js';
 import { hangUpAndNotify, sendVoicemailIntro } from '../../utils/phoneRelay.js';
 import { relayRecordedPhoneText } from '../../utils/phoneTextRelay.js';
+import { wakePhoneRingTimeoutWorker } from '../../services/phoneRingTimeout.js';
 import { resolveStaffRoleIds } from '../../utils/staffRoles.js';
 import { clearNoCallCache } from '../../events/messageCreate.js';
 import { resolvePhonePlayer } from './playerLookup.js';
@@ -396,6 +397,7 @@ async function handleDial(interaction: ChatInputCommandInteraction): Promise<voi
       callerNumberId: callerNumber.id,
       recipientNumberId: recipient.id,
     });
+    wakePhoneRingTimeoutWorker('dial');
   } catch (err) {
     if (err instanceof PhoneServiceError) {
       await interaction.editReply({ embeds: [errorEmbed(err.message)] });
@@ -683,6 +685,7 @@ async function handleText(interaction: ChatInputCommandInteraction): Promise<voi
       content,
     });
     clearNoCallCache(interaction.user.id);
+    wakePhoneRingTimeoutWorker('text');
     await relayRecordedPhoneText(interaction.client, recorded);
     await interaction.editReply({
       embeds: [

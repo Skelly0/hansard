@@ -15,8 +15,12 @@ import { disableRingDmButtons, hangUpAndNotify, sendVoicemailBeep } from '../uti
 import { flushQueuedPhoneTextsForPlayer } from '../utils/phoneTextRelay.js';
 
 export type PhoneRingWorkerOptions = {
+  activeIntervalMs?: number;
+  activeWindowMs?: number;
+  idleIntervalMs?: number;
   intervalMs?: number;
   runImmediately?: boolean;
+  runStartupSweep?: boolean;
   logger?: Pick<Console, 'error' | 'log'>;
   /**
    * Optional client used to notify both parties on timeout. If omitted (e.g. in tests),
@@ -24,6 +28,26 @@ export type PhoneRingWorkerOptions = {
    */
   client?: Client;
 };
+
+export type PhoneRingTimeoutWorkerHandle = {
+  stop: () => void;
+  wake: (reason?: string) => boolean;
+  unref: () => void;
+};
+
+const DEFAULT_IDLE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_ACTIVE_WINDOW_MS = 12 * 60 * 1000;
+let currentWorker: PhoneRingTimeoutWorkerHandle | null = null;
+
+function resolvePositiveMs(value: unknown, fallback: number): number {
+  if (typeof value !== 'string') return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function wakePhoneRingTimeoutWorker(reason?: string): boolean {
+  return currentWorker?.wake(reason) ?? false;
+}
 
 export type ExpireResult = { expired: PhoneCall[] };
 
@@ -290,53 +314,116 @@ export async function sweepStalePhoneTextTapDeliveries(
 export function startPhoneRingTimeoutWorker(
   db: Database,
   options: PhoneRingWorkerOptions = {},
-): NodeJS.Timeout {
-  const intervalMs = options.intervalMs ?? PHONE_RING_WORKER_INTERVAL_MS;
+): PhoneRingTimeoutWorkerHandle {
+  const activeIntervalMs = options.activeIntervalMs
+    ?? options.intervalMs
+    ?? resolvePositiveMs(process.env.PHONE_RING_WORKER_INTERVAL_MS, PHONE_RING_WORKER_INTERVAL_MS);
+  const idleIntervalMs = options.idleIntervalMs
+    ?? resolvePositiveMs(process.env.PHONE_RING_WORKER_IDLE_INTERVAL_MS, DEFAULT_IDLE_INTERVAL_MS);
+  const activeWindowMs = options.activeWindowMs
+    ?? resolvePositiveMs(process.env.PHONE_RING_WORKER_ACTIVE_WINDOW_MS, DEFAULT_ACTIVE_WINDOW_MS);
   const logger = options.logger ?? console;
   let running = false;
+  let stopped = false;
+  let timer: NodeJS.Timeout | null = null;
+  let activeUntil = 0;
+
+  const markActive = () => {
+    activeUntil = Math.max(activeUntil, Date.now() + activeWindowMs);
+  };
+
+  const clearTimer = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = null;
+  };
+
+  const schedule = (delayMs: number) => {
+    if (stopped) return;
+    clearTimer();
+    timer = setTimeout(() => {
+      void tick();
+    }, delayMs);
+    timer.unref?.();
+  };
+
+  const scheduleNext = () => {
+    schedule(Date.now() < activeUntil ? activeIntervalMs : idleIntervalMs);
+  };
 
   // One-shot startup sweep for stranded active calls. Runs alongside the interval tick.
-  void sweepStrandedActiveCalls(db, { client: options.client, logger });
+  if (options.runStartupSweep !== false) {
+    void sweepStrandedActiveCalls(db, { client: options.client, logger }).then(({ ended }) => {
+      if (ended.length > 0) handle.wake('startup-sweep');
+    });
+  }
 
   const tick = async () => {
-    if (running) return;
+    if (stopped || running) return;
     running = true;
+    let workCount = 0;
     try {
       const now = new Date();
       const { expired } = await expireRingingCalls(db, { now, client: options.client, logger });
+      workCount += expired.length;
       if (expired.length > 0) {
         logger.log(`[phone:worker] expired ${expired.length} unanswered call(s)`);
       }
       const { processed } = await processPendingVoicemailBeeps(db, { now, client: options.client, logger });
+      workCount += processed.length;
       if (processed.length > 0) {
         logger.log(`[phone:worker] processed ${processed.length} pending voicemail peep(s)`);
       }
       const { recovered } = await sweepClaimedVoicemailBeeps(db, { now, client: options.client, logger });
+      workCount += recovered.length;
       if (recovered.length > 0) {
         logger.log(`[phone:worker] recovered ${recovered.length} claimed voicemail peep(s)`);
       }
       const { ended } = await sweepAbandonedVoicemails(db, { now, client: options.client, logger });
+      workCount += ended.length;
       if (ended.length > 0) {
         logger.log(`[phone:worker] ended ${ended.length} abandoned voicemail session(s)`);
       }
       // Reconcile any tap-delivery placeholders left pending by a crashed/throwing relay.
-      await sweepStaleTapDeliveries(db, { logger });
-      await sweepStalePhoneTextDeliveryClaims(db, { now, logger });
-      await sweepStalePhoneTextTapDeliveries(db, { now, logger });
+      const { swept: sweptTapDeliveries } = await sweepStaleTapDeliveries(db, { logger });
+      workCount += sweptTapDeliveries.length;
+      const { swept: sweptTextClaims } = await sweepStalePhoneTextDeliveryClaims(db, { now, logger });
+      workCount += sweptTextClaims.length;
+      const { swept: sweptTextTapDeliveries } = await sweepStalePhoneTextTapDeliveries(db, { now, logger });
+      workCount += sweptTextTapDeliveries.length;
+      if (workCount > 0) markActive();
     } catch (error) {
       logger.error('[phone:worker] tick failed:', error);
     } finally {
       running = false;
+      if (!stopped) scheduleNext();
     }
   };
 
+  const handle: PhoneRingTimeoutWorkerHandle = {
+    stop: () => {
+      stopped = true;
+      clearTimer();
+      if (currentWorker === handle) currentWorker = null;
+    },
+    wake: (_reason?: string) => {
+      if (stopped) return false;
+      markActive();
+      if (!running) schedule(0);
+      return true;
+    },
+    unref: () => {
+      timer?.unref?.();
+    },
+  };
+
+  currentWorker = handle;
+
   if (options.runImmediately !== false) {
     void tick();
+  } else {
+    scheduleNext();
   }
 
-  const timer = setInterval(() => {
-    void tick();
-  }, intervalMs);
-  timer.unref?.();
-  return timer;
+  return handle;
 }

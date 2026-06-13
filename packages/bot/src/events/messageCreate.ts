@@ -20,6 +20,7 @@ import {
   RecipientDmClosedError,
 } from '../utils/phoneRelay.js';
 import { flushQueuedPhoneTextsForPlayer, relayRecordedPhoneText } from '../utils/phoneTextRelay.js';
+import { wakePhoneRingTimeoutWorker } from '../services/phoneRingTimeout.js';
 import { PHONE_HINT_COOLDOWN_MS, PHONE_DM_CHUNK_BUDGET } from '@hansard/shared';
 
 const HINT_MAP_MAX = 500;
@@ -226,6 +227,7 @@ async function routePhoneTextReply(
       content: message.content,
       senderDiscordMessageId: message.id,
     });
+    wakePhoneRingTimeoutWorker('text-reply');
     await relayRecordedPhoneText(client, recorded);
     if (message.content.length > PHONE_DM_CHUNK_BUDGET) {
       try {
@@ -355,6 +357,7 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
         content: message.content,
         senderDiscordMessageId: message.id,
       });
+      wakePhoneRingTimeoutWorker('voicemail-message');
     } catch (err) {
       if (err instanceof PhoneServiceError) {
         try {
@@ -418,6 +421,7 @@ async function handleDmMessage(client: Client, message: Message): Promise<void> 
       content: message.content,
       senderDiscordMessageId: message.id,
     });
+    wakePhoneRingTimeoutWorker(openCall.status === 'voicemail' ? 'voicemail-message' : 'call-message');
   } catch (err) {
     if (err instanceof PhoneServiceError) {
       // Mid-call death of the sender: refuse the message AND end the call so the

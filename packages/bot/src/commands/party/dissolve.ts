@@ -5,6 +5,7 @@ import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { db } from '../../db.js';
 import { isStaff } from '../../utils/permissions.js';
 import { postStaffActionLog } from '../../utils/modLog.js';
+import { refreshPartyJoinMessage } from '../../utils/partyJoinMessage.js';
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   await interaction.deferReply();
@@ -71,6 +72,24 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
       .set({ isActive: false, dissolvedAt: sql`now()`, leaderId: null })
       .where(eq(parties.id, target.id));
 
+    let boardRefreshNotice = '';
+    try {
+      const refreshed = await refreshPartyJoinMessage(interaction.client);
+      if (!refreshed) {
+        boardRefreshNotice = [
+          '',
+          'Party join board cleanup failed: no current join board was found.',
+          'Run `pnpm --filter @hansard/bot post:party-join` to post a new one.',
+        ].join('\n');
+      }
+    } catch (error) {
+      console.warn(`[party dissolve] failed to refresh party join board after dissolving ${target.id}:`, error);
+      boardRefreshNotice = [
+        '',
+        'Party join board cleanup failed; run `pnpm --filter @hansard/bot refresh:party-join` to refresh it manually.',
+      ].join('\n');
+    }
+
     await postStaffActionLog(interaction, {
       title: 'Party Dissolved',
       system: 'players',
@@ -82,7 +101,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await interaction.editReply({
       embeds: [successEmbed(
         'Party Dissolved',
-        `**${target.name}** has been dissolved. ${memberRows.length} member${memberRows.length === 1 ? '' : 's'} unassigned.\nUse \`/party edit party:${target.name} active:true\` to revive.`,
+        `**${target.name}** has been dissolved. ${memberRows.length} member${memberRows.length === 1 ? '' : 's'} unassigned.\nUse \`/party edit party:${target.name} active:true\` to revive.${boardRefreshNotice}`,
       )],
     });
   } catch (error) {

@@ -23,6 +23,13 @@ function makeSelectChain(rows: unknown[]) {
   return { from, where, limit };
 }
 
+function makeJoinedSelectChain(rows: unknown[]) {
+  const where = vi.fn().mockResolvedValue(rows);
+  const innerJoin = vi.fn().mockReturnValue({ where });
+  const from = vi.fn().mockReturnValue({ innerJoin });
+  return { from, innerJoin, where };
+}
+
 function makeUpdateChain(returnedRows: unknown[], updateValues: unknown[]) {
   const returning = vi.fn().mockResolvedValue(returnedRows);
   const where = vi.fn().mockReturnValue({ returning });
@@ -122,6 +129,48 @@ describe('withdrawSubmittedBill', () => {
     });
   });
 
+  it('allows a legislative leader to withdraw someone else\'s submitted bill', async () => {
+    const bill = submittedBill();
+    const actor = { id: 'chancellor-1' };
+    const billSelect = makeSelectChain([bill]);
+    const actorSelect = makeSelectChain([actor]);
+    const permissionSelect = makeJoinedSelectChain([
+      { permissions: ['legislative_leader'] },
+    ]);
+    const updateValues: unknown[] = [];
+    const insertValues: unknown[] = [];
+    const txBillUpdate = makeUpdateChain([
+      { id: bill.id, title: bill.title, billNumber: bill.billNumber, status: 'withdrawn' },
+    ], updateValues);
+    const txInsert = makeInsertChain(insertValues);
+
+    const db: any = {
+      select: vi.fn()
+        .mockReturnValueOnce({ from: billSelect.from })
+        .mockReturnValueOnce({ from: actorSelect.from })
+        .mockReturnValueOnce({ from: permissionSelect.from }),
+      transaction: vi.fn(async (callback) => callback({
+        update: txBillUpdate.update,
+        insert: txInsert.insert,
+      })),
+    };
+
+    await expect(withdrawSubmittedBill(db, {
+      billId: bill.id,
+      actorDiscordId: 'chancellor-discord',
+      reason: 'Removing it from the order paper',
+      now: baseDate,
+    })).resolves.toMatchObject({
+      bill: { status: 'withdrawn' },
+    });
+
+    expect(insertValues[0]).toMatchObject({
+      billId: bill.id,
+      changedById: actor.id,
+      toStatus: 'withdrawn',
+    });
+  });
+
   it('refuses to withdraw a bill that is no longer submitted', async () => {
     const billSelect = makeSelectChain([
       submittedBill({ status: BillStatus.VOTING }),
@@ -142,10 +191,12 @@ describe('withdrawSubmittedBill', () => {
   it('refuses to withdraw someone else\'s bill', async () => {
     const billSelect = makeSelectChain([submittedBill()]);
     const actorSelect = makeSelectChain([{ id: 'other-player' }]);
+    const permissionSelect = makeJoinedSelectChain([]);
     const db: any = {
       select: vi.fn()
         .mockReturnValueOnce({ from: billSelect.from })
-        .mockReturnValueOnce({ from: actorSelect.from }),
+        .mockReturnValueOnce({ from: actorSelect.from })
+        .mockReturnValueOnce({ from: permissionSelect.from }),
       transaction: vi.fn(),
     };
 
@@ -153,7 +204,7 @@ describe('withdrawSubmittedBill', () => {
       billId: 'bill-1',
       actorDiscordId: 'discord-1',
       now: baseDate,
-    })).rejects.toThrow('Only the bill author or original submitter can withdraw it');
+    })).rejects.toThrow('Only the bill author, original submitter, or Chancellor can withdraw it');
     expect(db.transaction).not.toHaveBeenCalled();
   });
 });

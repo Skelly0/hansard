@@ -545,7 +545,7 @@ const command: Command = {
     .addSubcommand((sub) =>
       sub
         .setName('withdraw')
-        .setDescription('Withdraw one of your submitted bills')
+        .setDescription('Withdraw a submitted bill you can manage')
         .addStringOption((opt) =>
           opt
             .setName('bill')

@@ -1,6 +1,6 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
-import { bills, billStatusLog, players } from '@hansard/db';
+import { bills, billStatusLog, officeHolders, offices, players } from '@hansard/db';
 import { BillStatus } from '@hansard/shared';
 
 interface WithdrawBillOptions {
@@ -34,6 +34,23 @@ function buildWithdrawalNote(actorDiscordId: string, reason?: string | null): st
   ]
     .filter((part): part is string => part !== null)
     .join(' - ');
+}
+
+async function hasLegislativeLeaderPermission(db: Database, playerId: string): Promise<boolean> {
+  const rows = await db
+    .select({ permissions: offices.permissions })
+    .from(officeHolders)
+    .innerJoin(offices, eq(officeHolders.officeId, offices.id))
+    .where(and(
+      eq(officeHolders.playerId, playerId),
+      isNull(officeHolders.endDate),
+      eq(offices.isActive, true),
+    ));
+
+  return rows.some((row) =>
+    Array.isArray(row.permissions) &&
+    row.permissions.includes('legislative_leader'),
+  );
 }
 
 export async function withdrawSubmittedBill(
@@ -73,8 +90,13 @@ export async function withdrawSubmittedBill(
     throw new Error('You need a registered character to withdraw a bill.');
   }
 
-  if (actor.id !== bill.authorId && actor.id !== bill.submittedById) {
-    throw new Error('Only the bill author or original submitter can withdraw it.');
+  const isAuthorOrSubmitter = actor.id === bill.authorId || actor.id === bill.submittedById;
+  const canManageLegislature = isAuthorOrSubmitter
+    ? false
+    : await hasLegislativeLeaderPermission(db, actor.id);
+
+  if (!isAuthorOrSubmitter && !canManageLegislature) {
+    throw new Error('Only the bill author, original submitter, or Chancellor can withdraw it.');
   }
 
   const now = options.now ?? new Date();

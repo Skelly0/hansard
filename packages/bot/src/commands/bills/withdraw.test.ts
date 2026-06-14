@@ -9,6 +9,7 @@ describe('/bill withdraw subcommand definition', () => {
     const withdraw = commandJson.options?.find((option) => option.name === 'withdraw');
 
     expect(withdraw).toBeDefined();
+    expect(withdraw?.description).toBe('Withdraw a submitted bill you can manage');
     expect(withdraw && 'options' in withdraw ? withdraw.options?.map((option) => option.name) : []).toEqual(['bill', 'reason']);
     expect(withdraw && 'options' in withdraw ? withdraw.options?.find((option) => option.name === 'bill')?.required : undefined).toBe(true);
     expect(withdraw && 'options' in withdraw ? withdraw.options?.find((option) => option.name === 'reason')?.required : undefined).toBe(false);

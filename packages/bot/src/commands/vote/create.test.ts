@@ -19,8 +19,25 @@ vi.mock('drizzle-orm', () => ({
 }));
 
 vi.mock('@hansard/db', () => ({
+  bills: {
+    id: 'bills.id',
+    status: 'bills.status',
+    playerVoteId: 'bills.playerVoteId',
+    updatedAt: 'bills.updatedAt',
+  },
+  candidates: {
+    id: 'candidates.id',
+    electionId: 'candidates.electionId',
+    isWithdrawn: 'candidates.isWithdrawn',
+    registeredAt: 'candidates.registeredAt',
+  },
   elections: {
     id: 'elections.id',
+  },
+  offices: {
+    id: 'offices.id',
+    name: 'offices.name',
+    isActive: 'offices.isActive',
   },
   players: {
     id: 'players.id',
@@ -41,10 +58,49 @@ vi.mock('../../services/voteAutoClose.js', () => ({
 }));
 
 import {
+  default as voteCommand,
   buildLegislativeVotePublicEmbeds,
   buildReactionVoteInstructions,
   handleVoteCreateModal,
 } from './create';
+
+describe('/vote command schema', () => {
+  it('offers autocomplete for the office on /vote elect', () => {
+    const schema = voteCommand.data.toJSON();
+    const elect = schema.options?.find((option: any) => option.name === 'elect') as any;
+    const office = elect?.options?.find((option: any) => option.name === 'office');
+    const nominationsHours = elect?.options?.find((option: any) => option.name === 'nominations-hours');
+    const durationHours = elect?.options?.find((option: any) => option.name === 'duration-hours');
+    const iface = elect?.options?.find((option: any) => option.name === 'interface');
+    const skipNominations = elect?.options?.find((option: any) => option.name === 'skip-nominations');
+    const candidate1 = elect?.options?.find((option: any) => option.name === 'candidate-1');
+
+    expect(office?.autocomplete).toBe(true);
+    expect(nominationsHours).toBeTruthy();
+    expect(durationHours).toBeTruthy();
+    expect(iface?.choices?.map((choice: any) => choice.value)).toEqual(['reactions', 'buttons']);
+    expect(skipNominations).toBeTruthy();
+    expect(candidate1).toBeTruthy();
+  });
+
+  it('does not advertise position elections through /vote create', () => {
+    const schema = voteCommand.data.toJSON();
+    const create = schema.options?.find((option: any) => option.name === 'create') as any;
+    const type = create?.options?.find((option: any) => option.name === 'type');
+    const values = type?.choices?.map((choice: any) => choice.value) ?? [];
+
+    expect(values).not.toContain('position_election');
+  });
+
+  it('does not advertise position elections through /vote schedule', () => {
+    const schema = voteCommand.data.toJSON();
+    const schedule = schema.options?.find((option: any) => option.name === 'schedule') as any;
+    const type = schedule?.options?.find((option: any) => option.name === 'type');
+    const values = type?.choices?.map((choice: any) => choice.value) ?? [];
+
+    expect(values).not.toContain('position_election');
+  });
+});
 
 function selectLimit(rows: unknown[]) {
   return {
@@ -148,6 +204,20 @@ describe('handleVoteCreateModal', () => {
     await handleVoteCreateModal(interaction as any);
 
     expect(mocks.wakeVoteAutoCloseWorker).toHaveBeenCalledWith('vote-created');
+  });
+
+  it('redirects stale position election create modals to /vote elect', async () => {
+    const interaction = makeModalInteraction({
+      customId: 'vote-create:position_election:fptp:simple:buttons',
+    });
+
+    await handleVoteCreateModal(interaction as any);
+
+    expect(mocks.db.select).not.toHaveBeenCalled();
+    expect(mocks.db.insert).not.toHaveBeenCalled();
+    const reply = interaction.editReply.mock.calls[0]?.[0];
+    const error = reply?.embeds?.[0];
+    expect(error?.data.description).toContain('/vote elect');
   });
 });
 

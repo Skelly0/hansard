@@ -93,8 +93,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     // reaction-adds on the bot's own emoji), so this re-runs cleanly even
     // if Trigger A in /vote candidate-submit already seeded most slots.
     //
-    // Order matters: events/messageReactionAdd.ts maps emoji → candidate by
-    // registeredAt asc, so the helper's same ordering is load-bearing.
+    // Order matters: events/messageReactionAdd.ts maps emoji -> candidate by
+    // registeredAt/id asc, so the helper's same ordering is load-bearing.
     if (updated.useReactions && updated.method === 'fptp' && updated.discordMessageId) {
       try {
         const result = await seedAllReactionsForOpenVote({

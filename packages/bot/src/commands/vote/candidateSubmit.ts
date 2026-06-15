@@ -125,14 +125,20 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
     await interaction.editReply({ embeds: [embed] });
 
-    // Trigger A — responsive UX: if this is a reaction-mode FPTP vote whose
-    // public message already exists, seed the next 1️⃣..9️⃣ reaction so
-    // voters see slots fill in as candidates register.
+    // Trigger A — responsive UX: if this is an already-open reaction-mode
+    // FPTP vote whose public message exists, seed the next 1️⃣..9️⃣ reaction.
+    // During nominations we deliberately avoid seeding vote emoji so players
+    // don't cast visible reactions before the vote is open.
     //
     // Best-effort: any failure here is logged inside the helper and never
     // surfaces back to the candidate (the registration itself succeeded).
     // Trigger B in /vote open is the safety net that re-seeds at open time.
-    if (election.useReactions && election.method === 'fptp' && election.discordMessageId) {
+    if (
+      election.status === 'voting_open'
+      && election.useReactions
+      && election.method === 'fptp'
+      && election.discordMessageId
+    ) {
       try {
         const result = await seedReactionForNewCandidate({
           client: interaction.client,

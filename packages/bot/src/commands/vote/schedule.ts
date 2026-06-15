@@ -45,7 +45,6 @@ import { hasPermission, isStaff } from '../../utils/permissions.js';
 
 const CHANCELLOR_ONLY_TYPES = new Set([
   'legislative_vote',
-  'position_election',
   'appointment_confirmation',
 ]);
 
@@ -81,6 +80,17 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         embeds: [
           errorEmbed(
             'Legislative bill votes cannot be scheduled with `/vote schedule`. Use `/vote create type:legislative_vote` so the vote links to a bill and updates bill status correctly.',
+          ),
+        ],
+      });
+      return;
+    }
+
+    if (electionType === 'position_election') {
+      await interaction.editReply({
+        embeds: [
+          errorEmbed(
+            'Position elections cannot be scheduled with `/vote schedule`. Use `/vote elect office:<office>` and set `nominations-hours` / `duration-hours` there.',
           ),
         ],
       });

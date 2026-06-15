@@ -267,7 +267,7 @@ export async function renderReactionResult(election: typeof elections.$inferSele
         eq(candidates.electionId, election.id),
         eq(candidates.isWithdrawn, false),
       ))
-      .orderBy(candidates.registeredAt);
+      .orderBy(candidates.registeredAt, candidates.id);
 
     const tally = new Map<string, number>();
     for (const c of cRows) tally.set(c.playerId, 0);

@@ -50,6 +50,10 @@ function containsText(value: unknown, pattern: RegExp, seen = new Set<object>())
 describe('/vote candidate-submit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.select.mockReset();
+    mocks.insert.mockReset();
+    mocks.findElectionByReference.mockReset();
+    mocks.seedReactionForNewCandidate.mockReset();
     mocks.findElectionByReference.mockResolvedValue({
       election: {
         id: 'election-1',
@@ -75,8 +79,7 @@ describe('/vote candidate-submit', () => {
         characterName: 'Ada Mortalis',
         partyId: null,
         isAlive: false,
-      }]))
-      .mockReturnValueOnce(selectLimit([]));
+      }]));
 
     const interaction = {
       deferReply: vi.fn(),
@@ -95,5 +98,45 @@ describe('/vote candidate-submit', () => {
     expect(mocks.insert).not.toHaveBeenCalled();
     const replyPayload = interaction.editReply.mock.calls.at(-1)?.[0];
     expect(containsText(replyPayload, /Dead characters cannot stand as candidates/i)).toBe(true);
+  });
+
+  it('does not seed reaction emoji while nominations are still open', async () => {
+    mocks.findElectionByReference.mockResolvedValue({
+      election: {
+        id: 'election-1',
+        title: 'Chancellor Election',
+        status: 'nominations_open',
+        useReactions: true,
+        method: 'fptp',
+        discordMessageId: 'message-1',
+        discordChannelId: 'channel-1',
+      },
+      errorMessage: null,
+    });
+    mocks.select
+      .mockReturnValueOnce(selectLimit([{
+        id: 'player-1',
+        discordUsername: 'ada',
+        characterName: 'Ada Vance',
+        partyId: null,
+        isAlive: true,
+      }]))
+      .mockReturnValueOnce(selectLimit([]));
+
+    const interaction = {
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+      followUp: vi.fn(),
+      client: {},
+      user: { id: 'discord-user-1' },
+      options: {
+        getString: vi.fn((name: string) => (name === 'election' ? 'election-1' : null)),
+      },
+    };
+
+    await execute(interaction as any);
+
+    expect(mocks.insert).toHaveBeenCalled();
+    expect(mocks.seedReactionForNewCandidate).not.toHaveBeenCalled();
   });
 });

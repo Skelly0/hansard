@@ -133,7 +133,7 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
   } else if (election.method === 'fptp') {
     const idx = fptpEmojiToIndex(emoji);
     if (idx >= 0 && idx < REACTION_FPTP_MAX_CANDIDATES) {
-      // Resolve candidate by registration order. Withdrawn candidates are skipped.
+      // Resolve candidate by deterministic registration order. Withdrawn candidates are skipped.
       const rows = await db
         .select({ playerId: candidates.playerId })
         .from(candidates)
@@ -143,7 +143,7 @@ async function handleReaction(reaction: ReactionInput, user: UserInput): Promise
             eq(candidates.isWithdrawn, false),
           ),
         )
-        .orderBy(candidates.registeredAt);
+        .orderBy(candidates.registeredAt, candidates.id);
 
       const candidate = rows[idx];
       if (candidate) {

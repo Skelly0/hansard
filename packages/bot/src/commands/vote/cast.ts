@@ -115,7 +115,8 @@ async function showCandidateBallot(
     .where(and(
       eq(candidates.electionId, electionId),
       eq(candidates.isWithdrawn, false),
-    ));
+    ))
+    .orderBy(candidates.registeredAt, candidates.id);
 
   if (candidateRows.length === 0) {
     await interaction.reply({

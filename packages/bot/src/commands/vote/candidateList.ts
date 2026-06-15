@@ -35,7 +35,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
           eq(candidates.electionId, election.id),
           eq(candidates.isWithdrawn, false),
         ),
-      );
+      )
+      .orderBy(candidates.registeredAt, candidates.id);
 
     if (rows.length === 0) {
       const empty = createEmbed({

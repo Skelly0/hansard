@@ -97,6 +97,17 @@ describe('/vote schedule legislative vote guard', () => {
     expect(choiceValues).not.toContain('legislative_vote');
   });
 
+  it('does not advertise position elections in the slash command choices', () => {
+    const json = voteCommand.data.toJSON();
+    const scheduleSub = json.options?.find((option) => option.name === 'schedule') as {
+      options?: { name: string; choices?: { value: string }[] }[];
+    } | undefined;
+    const typeOption = scheduleSub?.options?.find((option) => option.name === 'type');
+    const choiceValues = typeOption?.choices?.map((choice) => choice.value) ?? [];
+
+    expect(choiceValues).not.toContain('position_election');
+  });
+
   it('rejects stale legislative vote payloads and points staff to /vote create', async () => {
     const interaction = makeInteraction('legislative_vote');
 
@@ -109,5 +120,19 @@ describe('/vote schedule legislative vote guard', () => {
     const error = reply?.embeds?.[0];
     expect(error?.data.description).toContain('cannot be scheduled with `/vote schedule`');
     expect(error?.data.description).toContain('/vote create type:legislative_vote');
+  });
+
+  it('rejects stale position election payloads and points staff to /vote elect', async () => {
+    const interaction = makeInteraction('position_election');
+
+    await execute(interaction as any);
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(mocks.db.select).not.toHaveBeenCalled();
+    expect(mocks.db.insert).not.toHaveBeenCalled();
+    const reply = interaction.editReply.mock.calls[0]?.[0];
+    const error = reply?.embeds?.[0];
+    expect(error?.data.description).toContain('Position elections cannot be scheduled with `/vote schedule`');
+    expect(error?.data.description).toContain('/vote elect');
   });
 });

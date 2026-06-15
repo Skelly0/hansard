@@ -7,6 +7,7 @@ import {
   StringSelectMenuBuilder,
   ComponentType,
   type ChatInputCommandInteraction,
+  type AutocompleteInteraction,
   type ModalSubmitInteraction,
   type StringSelectMenuInteraction,
   type TextChannel,
@@ -40,7 +41,7 @@ import {
   buildLinkedBillSourceDisplay,
   type BillSourceDisplay,
 } from './billSourceDisplay.js';
-import { dispatchSubcommand } from '../../utils/parentCommand.js';
+import { dispatchAutocomplete, dispatchSubcommand } from '../../utils/parentCommand.js';
 import * as cast from './cast.js';
 import * as close from './close.js';
 import * as open from './open.js';
@@ -63,7 +64,6 @@ import * as npcConfirm from './npcConfirm.js';
 
 const CHANCELLOR_ONLY_TYPES = new Set([
   'legislative_vote',
-  'position_election',
   'appointment_confirmation',
 ]);
 
@@ -94,6 +94,32 @@ const TYPE_LABELS: Record<string, string> = {
   appointment_confirmation: 'Appointment Confirmation',
   general_election: 'General Election',
   constitutional_amendment: 'Constitutional Amendment',
+};
+
+const POSITION_ELECTION_REDIRECT =
+  'Position elections are created with `/vote elect office:<office>`, which links the election to an office and handles nominations/candidates.';
+
+const handlers = {
+  create: { execute: handleCreateSubcommand },
+  cast,
+  close,
+  open,
+  list,
+  info,
+  results,
+  tally,
+  certify,
+  cancel,
+  history,
+  schedule,
+  eligibility,
+  rounds,
+  runoff,
+  turnout,
+  elect,
+  'candidate-submit': candidateSubmit,
+  'candidate-list': candidateList,
+  'npc-confirm': npcConfirm,
 };
 
 function formatBillDisplay(bill: Pick<SubmittedBillSelectRow, 'title' | 'billNumber'>): string {
@@ -205,7 +231,7 @@ export function buildLegislativeVotePublicEmbeds(options: {
  *
  * Permission:
  * - Any player can create: referendum, party_primary, confidence_vote, custom
- * - Chancellor only: legislative_vote, position_election, appointment_confirmation
+ * - Chancellor only: legislative_vote, appointment_confirmation
  * - Staff: any type
  */
 const command: Command = {
@@ -227,7 +253,6 @@ const command: Command = {
               { name: 'Party Primary', value: 'party_primary' },
               { name: 'Custom Vote', value: 'custom' },
               { name: 'Legislative Vote (Chancellor)', value: 'legislative_vote' },
-              { name: 'Position Election (Chancellor)', value: 'position_election' },
               { name: 'Appointment Confirmation (Chancellor)', value: 'appointment_confirmation' },
               { name: 'General Election', value: 'general_election' },
               { name: 'Constitutional Amendment', value: 'constitutional_amendment' },
@@ -486,7 +511,6 @@ const command: Command = {
               { name: 'Confidence Vote', value: 'confidence_vote' },
               { name: 'Party Primary', value: 'party_primary' },
               { name: 'Custom Vote', value: 'custom' },
-              { name: 'Position Election (Chancellor)', value: 'position_election' },
               { name: 'Appointment Confirmation (Chancellor)', value: 'appointment_confirmation' },
               { name: 'General Election', value: 'general_election' },
               { name: 'Constitutional Amendment', value: 'constitutional_amendment' },
@@ -596,7 +620,8 @@ const command: Command = {
           opt
             .setName('office')
             .setDescription('The office to elect for (e.g. "Governor of Northshire")')
-            .setRequired(true),
+            .setRequired(true)
+            .setAutocomplete(true),
         )
         .addStringOption((opt) =>
           opt
@@ -611,6 +636,98 @@ const command: Command = {
               { name: 'Approval Voting', value: 'approval' },
               { name: 'STV (Multi-Seat)', value: 'stv' },
             ),
+        )
+        .addNumberOption((opt) =>
+          opt
+            .setName('nominations-hours')
+            .setDescription('How long nominations stay open (default 48)')
+            .setRequired(false)
+            .setMinValue(0.25)
+            .setMaxValue(24 * 365),
+        )
+        .addNumberOption((opt) =>
+          opt
+            .setName('duration-hours')
+            .setDescription(`How long voting stays open after nominations (default ${DEFAULT_VOTE_DURATION_HOURS})`)
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(24 * 365),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('interface')
+            .setDescription('How players cast votes (defaults to reactions for FPTP)')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Reactions (public, on the embed)', value: 'reactions' },
+              { name: 'Buttons (private/ephemeral)', value: 'buttons' },
+            ),
+        )
+        .addBooleanOption((opt) =>
+          opt
+            .setName('skip-nominations')
+            .setDescription('Open voting immediately using the selected candidate slots')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-1')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-2')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-3')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-4')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-5')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-6')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-7')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-8')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-9')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
+        )
+        .addUserOption((opt) =>
+          opt
+            .setName('candidate-10')
+            .setDescription('Candidate to place directly on the ballot')
+            .setRequired(false),
         ),
     )
     .addSubcommand((sub) =>
@@ -681,28 +798,11 @@ const command: Command = {
     ) as unknown as SlashCommandBuilder,
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-    await dispatchSubcommand(interaction, {
-      create: { execute: handleCreateSubcommand },
-      cast,
-      close,
-      open,
-      list,
-      info,
-      results,
-      tally,
-      certify,
-      cancel,
-      history,
-      schedule,
-      eligibility,
-      rounds,
-      runoff,
-      turnout,
-      elect,
-      'candidate-submit': candidateSubmit,
-      'candidate-list': candidateList,
-      'npc-confirm': npcConfirm,
-    });
+    await dispatchSubcommand(interaction, handlers);
+  },
+
+  async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    await dispatchAutocomplete(interaction, handlers);
   },
 };
 
@@ -711,6 +811,14 @@ async function handleCreateSubcommand(interaction: ChatInputCommandInteraction):
   const method = interaction.options.getString('method', true);
   const majority = interaction.options.getString('majority') ?? 'simple';
   const iface = getRequestedVoteInterface(interaction.options.getString('interface'), method);
+
+  if (electionType === 'position_election') {
+    await interaction.reply({
+      embeds: [errorEmbed(POSITION_ELECTION_REDIRECT)],
+      ephemeral: true,
+    });
+    return;
+  }
 
   // Reject reaction mode early for incompatible methods.
   // (Only `yea_nay_abstain` and `fptp` map cleanly to a small set of emoji.)
@@ -1030,6 +1138,13 @@ export async function handleVoteCreateModal(
   const iface = getRequestedVoteInterface(ifaceRaw ?? null, method);
 
   await interaction.deferReply({ ephemeral: true });
+
+  if (electionType === 'position_election') {
+    await interaction.editReply({
+      embeds: [errorEmbed(POSITION_ELECTION_REDIRECT)],
+    });
+    return;
+  }
 
   // Re-check permission for restricted types — modal submits don't re-run
   // the slash command's permission logic.

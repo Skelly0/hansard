@@ -13,13 +13,13 @@ import { db } from '../../db.js';
  *      while the vote message already exists. Responsive UX so the embed
  *      grows reactions as nominations come in.
  *   B. /vote open             — at the status flip to `voting_open`, walk every
- *      non-withdrawn candidate (in registeredAt order, matching the cast
+ *      non-withdrawn candidate (in registeredAt/id order, matching the cast
  *      handler in events/messageReactionAdd.ts) and seed reactions 1..N.
  *      Idempotent because Discord drops duplicate-add reactions on the
  *      bot's own emoji.
  *
  * The reaction-vote handler maps emoji → candidate by position, so seeding
- * ORDER MUST match `candidates ORDER BY registeredAt ASC` exactly.
+ * ORDER MUST match `candidates ORDER BY registeredAt ASC, id ASC` exactly.
  *
  * If the message can't be fetched (deleted, unknown channel, etc.) we log
  * and return without throwing — callers must NOT crash on a stale message.
@@ -103,7 +103,7 @@ export async function seedReactionForNewCandidate(params: {
         eq(candidates.isWithdrawn, false),
       ),
     )
-    .orderBy(candidates.registeredAt);
+    .orderBy(candidates.registeredAt, candidates.id);
 
   const count = rows.length;
 
@@ -156,7 +156,7 @@ export async function seedAllReactionsForOpenVote(params: {
         eq(candidates.isWithdrawn, false),
       ),
     )
-    .orderBy(candidates.registeredAt);
+    .orderBy(candidates.registeredAt, candidates.id);
 
   const totalCandidates = rows.length;
   if (totalCandidates === 0) {

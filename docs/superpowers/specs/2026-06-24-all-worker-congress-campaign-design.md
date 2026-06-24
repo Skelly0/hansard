@@ -120,7 +120,7 @@ Unapproved, incomplete, or invalid rows must contribute zero to election calcula
 
 ## Similarity Calculation
 
-Favour sources use the six effective political axes in `Politics!K:P`. Target Federations use the six enrollment-weighted stance axes in `Trade Federations!B:H`, with names in column A.
+Favour sources use the six effective political axes in `Politics!K:P`. Target Federations use the six enrollment-weighted stance axes in `Trade Federations!B:G`, with names in column A.
 
 For each action:
 

@@ -70,6 +70,8 @@ const COLLECTOR_MANAGED_PREFIXES = [
  * can't tell in-flight from stale, so silence is the only safe choice.
  */
 const STALE_RECOVERY_PREFIXES = [
+  'char_create_', 'char_edit_', 'char_confirm_', 'char_cancel_',
+  'portrait_skip_', 'faction_sel_', 'party_sel_',
   'ticket_category_select:', 'ticket_create_modal:',
 ];
 

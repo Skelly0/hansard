@@ -40,6 +40,10 @@ import {
   type StartingFactionFavourGrant,
 } from '@hansard/api/services/favourService';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import {
+  registerAwaitingInteraction,
+  unregisterAwaitingInteraction,
+} from '../../utils/awaitingInteractions.js';
 import { isStaff } from '../../utils/permissions.js';
 import type { Command } from '../../client.js';
 import { PermissionFlagsBits } from 'discord.js';
@@ -53,6 +57,11 @@ import { executeAdd as executeAilmentAdd, executeRemove as executeAilmentRemove 
 const MIN_STARTING_AGE = 18;
 const MAX_STARTING_AGE = 70;
 const DEFAULT_STARTING_AGE = 30;
+// 14 minutes — matches Discord's 15-minute interaction-token lifetime (same
+// convention as the ticket flow). Shorter windows let Discord-valid modal
+// submissions arrive after the awaiter died, and the global handler's
+// silent-bail then leaves the player staring at "Something went wrong".
+const AWAITER_WINDOW_MS = 840_000;
 const CHARACTER_ALREADY_EXISTS_ERROR = 'CHARACTER_ALREADY_EXISTS';
 const DISCORD_ATTACHMENT_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 
@@ -222,8 +231,9 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   }
 
   // Step 1: Name / Bio / Age modal
+  const modalCustomId = `char_create_${interaction.user.id}`;
   const modal = new ModalBuilder()
-    .setCustomId(`char_create_${interaction.user.id}`)
+    .setCustomId(modalCustomId)
     .setTitle('Create Your Character');
 
   const nameInput = new TextInputBuilder()
@@ -258,15 +268,19 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
 
   await interaction.showModal(modal);
 
-  // Await modal submit
+  // Await modal submit. The registry call lets the global handler tell this
+  // in-flight submission apart from a stale one it should ack itself.
   let modalSubmit: ModalSubmitInteraction;
+  registerAwaitingInteraction(modalCustomId);
   try {
     modalSubmit = await interaction.awaitModalSubmit({
-      filter: (i) => i.customId === `char_create_${interaction.user.id}`,
-      time: 300_000,
+      filter: (i) => i.customId === modalCustomId,
+      time: AWAITER_WINDOW_MS,
     });
   } catch {
     return; // timed out
+  } finally {
+    unregisterAwaitingInteraction(modalCustomId);
   }
 
   await modalSubmit.deferReply({ ephemeral: true });
@@ -317,8 +331,9 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   }
 
   // Step 2: Portrait prompt
+  const skipCustomId = `portrait_skip_${interaction.user.id}`;
   const skipButton = new ButtonBuilder()
-    .setCustomId(`portrait_skip_${interaction.user.id}`)
+    .setCustomId(skipCustomId)
     .setLabel('Skip Portrait')
     .setStyle(ButtonStyle.Secondary);
 
@@ -335,13 +350,18 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   });
 
   // Wait for portrait or skip
+  registerAwaitingInteraction(skipCustomId);
   const portrait = await new Promise<PortraitSelection>((resolve) => {
     let resolved = false;
+    const finish = (selection: PortraitSelection) => {
+      unregisterAwaitingInteraction(skipCustomId);
+      resolve(selection);
+    };
 
     const buttonCollector = portraitMsg.createMessageComponentCollector({
       componentType: ComponentType.Button,
       filter: (i) => i.user.id === interaction.user.id,
-      time: 120_000,
+      time: AWAITER_WINDOW_MS,
       max: 1,
     });
 
@@ -352,7 +372,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     const messageCollector = canCollectMessages
       ? channel.createMessageCollector({
           filter: (m: Message) => m.author.id === interaction.user.id,
-          time: 120_000,
+          time: AWAITER_WINDOW_MS,
           max: 1,
         })
       : null;
@@ -362,7 +382,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
         resolved = true;
         messageCollector?.stop();
         await btn.deferUpdate();
-        resolve({ url: null, attachment: null });
+        finish({ url: null, attachment: null });
       }
     });
 
@@ -375,7 +395,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
         const attachment = msg.attachments.first();
         if (attachment?.contentType?.startsWith('image/')) {
           shouldDeleteMessage = false;
-          resolve({
+          finish({
             url: normalizePortraitUrl(attachment.url),
             attachment: {
               channelId: msg.channelId,
@@ -385,9 +405,9 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
             },
           });
         } else if (msg.content.match(/^https?:\/\/.+\.(png|jpg|jpeg|gif|webp)/i)) {
-          resolve({ url: normalizePortraitUrl(msg.content), attachment: null });
+          finish({ url: normalizePortraitUrl(msg.content), attachment: null });
         } else {
-          resolve({ url: null, attachment: null });
+          finish({ url: null, attachment: null });
         }
 
         if (shouldDeleteMessage) {
@@ -400,7 +420,7 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       if (!resolved) {
         resolved = true;
         messageCollector?.stop();
-        resolve({ url: null, attachment: null });
+        finish({ url: null, attachment: null });
       }
     });
   });
@@ -423,8 +443,9 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
 
+  const factionCustomId = `faction_sel_${interaction.user.id}`;
   const factionSelect = new StringSelectMenuBuilder()
-    .setCustomId(`faction_sel_${interaction.user.id}`)
+    .setCustomId(factionCustomId)
     .setPlaceholder('Choose your faction')
     .addOptions(
       allFactions.map((f) => ({
@@ -448,11 +469,12 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   let selectedFactionId: string;
   let selectedFactionName: string;
 
+  registerAwaitingInteraction(factionCustomId);
   try {
     const factionInt = (await portraitMsg.awaitMessageComponent({
       componentType: ComponentType.StringSelect,
       filter: (i) => i.user.id === interaction.user.id,
-      time: 120_000,
+      time: AWAITER_WINDOW_MS,
     })) as StringSelectMenuInteraction;
 
     selectedFactionId = factionInt.values[0];
@@ -464,6 +486,8 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       components: [],
     });
     return;
+  } finally {
+    unregisterAwaitingInteraction(factionCustomId);
   }
 
   // Step 4: Party select (optional)
@@ -489,8 +513,9 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   let selectedPartyName: string | null = null;
 
   if (partyOptions.length > 0) {
+    const partyCustomId = `party_sel_${interaction.user.id}`;
     const partySelect = new StringSelectMenuBuilder()
-      .setCustomId(`party_sel_${interaction.user.id}`)
+      .setCustomId(partyCustomId)
       .setPlaceholder('Choose a party (optional)')
       .addOptions([
         { label: 'Independent (No Party)', value: 'none', description: 'Remain unaffiliated' },
@@ -512,11 +537,12 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(partySelect)],
     });
 
+    registerAwaitingInteraction(partyCustomId);
     try {
       const partyInt = (await portraitMsg.awaitMessageComponent({
         componentType: ComponentType.StringSelect,
         filter: (i) => i.user.id === interaction.user.id,
-        time: 120_000,
+        time: AWAITER_WINDOW_MS,
       })) as StringSelectMenuInteraction;
 
       if (partyInt.values[0] !== 'none') {
@@ -526,6 +552,8 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       await partyInt.deferUpdate();
     } catch {
       // timed out — continue without party
+    } finally {
+      unregisterAwaitingInteraction(partyCustomId);
     }
   }
 
@@ -562,13 +590,15 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
     ],
   });
 
+  const confirmCustomId = `char_confirm_${interaction.user.id}`;
+  const cancelCustomId = `char_cancel_${interaction.user.id}`;
   const confirmBtn = new ButtonBuilder()
-    .setCustomId(`char_confirm_${interaction.user.id}`)
+    .setCustomId(confirmCustomId)
     .setLabel('Confirm & Create')
     .setStyle(ButtonStyle.Success);
 
   const cancelBtn = new ButtonBuilder()
-    .setCustomId(`char_cancel_${interaction.user.id}`)
+    .setCustomId(cancelCustomId)
     .setLabel('Cancel')
     .setStyle(ButtonStyle.Danger);
 
@@ -578,11 +608,13 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
   });
 
   let confirmInt: MessageComponentInteraction;
+  registerAwaitingInteraction(confirmCustomId);
+  registerAwaitingInteraction(cancelCustomId);
   try {
     confirmInt = await portraitMsg.awaitMessageComponent({
       componentType: ComponentType.Button,
       filter: (i) => i.user.id === interaction.user.id,
-      time: 120_000,
+      time: AWAITER_WINDOW_MS,
     });
   } catch {
     await modalSubmit.editReply({
@@ -590,9 +622,12 @@ async function handleCreate(interaction: ChatInputCommandInteraction): Promise<v
       components: [],
     });
     return;
+  } finally {
+    unregisterAwaitingInteraction(confirmCustomId);
+    unregisterAwaitingInteraction(cancelCustomId);
   }
 
-  if (confirmInt.customId === `char_cancel_${interaction.user.id}`) {
+  if (confirmInt.customId === cancelCustomId) {
     await confirmInt.update({
       embeds: [errorEmbed('Character creation cancelled.')],
       components: [],
@@ -996,8 +1031,9 @@ async function handleEdit(interaction: ChatInputCommandInteraction): Promise<voi
 
   const player = playerRows[0];
 
+  const modalCustomId = `char_edit_${interaction.user.id}`;
   const modal = new ModalBuilder()
-    .setCustomId(`char_edit_${interaction.user.id}`)
+    .setCustomId(modalCustomId)
     .setTitle('Edit Character');
 
   const bioInput = new TextInputBuilder()
@@ -1026,13 +1062,16 @@ async function handleEdit(interaction: ChatInputCommandInteraction): Promise<voi
   await interaction.showModal(modal);
 
   let modalSubmit: ModalSubmitInteraction;
+  registerAwaitingInteraction(modalCustomId);
   try {
     modalSubmit = await interaction.awaitModalSubmit({
-      filter: (i) => i.customId === `char_edit_${interaction.user.id}`,
-      time: 300_000,
+      filter: (i) => i.customId === modalCustomId,
+      time: AWAITER_WINDOW_MS,
     });
   } catch {
     return;
+  } finally {
+    unregisterAwaitingInteraction(modalCustomId);
   }
 
   const newBio = modalSubmit.fields.getTextInputValue('character_bio').trim() || null;

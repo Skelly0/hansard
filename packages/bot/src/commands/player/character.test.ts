@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   transaction: vi.fn(),
   update: vi.fn(),
   insert: vi.fn(),
+  registerAwaitingInteraction: vi.fn(),
+  unregisterAwaitingInteraction: vi.fn(),
 }));
 
 vi.mock('../../db.js', () => ({
@@ -15,6 +17,11 @@ vi.mock('../../db.js', () => ({
     update: mocks.update,
     insert: mocks.insert,
   },
+}));
+
+vi.mock('../../utils/awaitingInteractions.js', () => ({
+  registerAwaitingInteraction: mocks.registerAwaitingInteraction,
+  unregisterAwaitingInteraction: mocks.unregisterAwaitingInteraction,
 }));
 
 function selectLimitResult(rows: unknown[], onLimit?: () => void) {
@@ -847,6 +854,103 @@ describe('/character create', () => {
     expect(editPayloads.some((payload) => containsText(payload, /Beatrice Vance/))).toBe(true);
     expect(editPayloads.some((payload) => containsText(payload, /Ada Mortalis/))).toBe(true);
   });
+
+  it('registers every awaited customId for stale-token recovery and uses 14-minute awaiter windows', async () => {
+    let selectCall = 0;
+
+    mocks.select.mockImplementation(() => {
+      selectCall += 1;
+      if (selectCall === 1) return selectLimitResult([]);
+      if (selectCall === 2) return selectLimitResult([]);
+      if (selectCall === 3) return selectWhereResult([{ id: 'faction-1', name: 'Commons', shortName: 'COM' }]);
+      if (selectCall === 4) return selectWhereResult([]);
+      if (selectCall === 5) return selectWhereResult([]);
+      if (selectCall === 6) return selectLimitResult([]);
+      if (selectCall === 7) return selectLimitResult([]);
+      if (selectCall === 8) return selectLimitOnlyResult([]);
+      throw new Error(`Unexpected select call ${selectCall}`);
+    });
+
+    const playerValues = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 'player-1' }]),
+    });
+    const eventValues = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      insert: vi.fn()
+        .mockReturnValueOnce({ values: playerValues })
+        .mockReturnValueOnce({ values: eventValues }),
+    };
+    mocks.transaction.mockImplementation(async (fn: (transaction: typeof tx) => Promise<unknown>) => fn(tx));
+
+    let endHandler: (() => void) | undefined;
+    const portraitCollector = {
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === 'end') {
+          endHandler = handler;
+          queueMicrotask(() => endHandler?.());
+        }
+        return portraitCollector;
+      }),
+      stop: vi.fn(),
+    };
+    const portraitMsg = {
+      createMessageComponentCollector: vi.fn(() => portraitCollector),
+      awaitMessageComponent: vi
+        .fn()
+        .mockResolvedValueOnce({ values: ['faction-1'], deferUpdate: vi.fn() })
+        .mockResolvedValueOnce({ customId: 'char_confirm_discord-user-1', deferUpdate: vi.fn() }),
+    };
+
+    const modalSubmit = {
+      fields: {
+        getTextInputValue: vi.fn((field: string) => ({
+          character_name: 'Ada Vance',
+          character_bio: 'A parliamentary comet.',
+          character_age: '30',
+        })[field] ?? ''),
+      },
+      deferReply: vi.fn(),
+      editReply: vi.fn().mockResolvedValue(portraitMsg),
+      reply: vi.fn(),
+    };
+
+    const interaction = {
+      user: { id: 'discord-user-1', username: 'ada' },
+      guild: null,
+      options: { getSubcommand: vi.fn().mockReturnValue('create'), getSubcommandGroup: vi.fn().mockReturnValue(null) },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockResolvedValue(modalSubmit),
+    };
+
+    await command.execute(interaction as any);
+
+    // The 5-minute modal window silently dropped submissions from players
+    // still writing their bio; the awaiter must use the 14-minute window
+    // that matches Discord's interaction-token lifetime.
+    expect(interaction.awaitModalSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ time: 840_000 }),
+    );
+    for (const call of portraitMsg.awaitMessageComponent.mock.calls) {
+      expect(call[0]).toMatchObject({ time: 840_000 });
+    }
+
+    const registered = mocks.registerAwaitingInteraction.mock.calls.map((c) => c[0] as string);
+    const unregistered = mocks.unregisterAwaitingInteraction.mock.calls.map((c) => c[0] as string);
+
+    for (const expectedId of [
+      'char_create_discord-user-1',
+      'portrait_skip_discord-user-1',
+      'faction_sel_discord-user-1',
+      'char_confirm_discord-user-1',
+      'char_cancel_discord-user-1',
+    ]) {
+      expect(registered).toContain(expectedId);
+    }
+    for (const id of registered) {
+      expect(unregistered).toContain(id);
+    }
+  });
 });
 
 describe('/character view', () => {
@@ -1131,5 +1235,34 @@ describe('/character edit', () => {
       characterPortraitUrl: newPortraitUrl,
       profileData: { pronouns: 'she/her' },
     }));
+  });
+
+  it('registers the edit modal awaiter for stale-token recovery with a 14-minute window', async () => {
+    mocks.select.mockImplementation(() => selectLimitResult([{
+      id: 'player-1',
+      characterName: 'Kaylie Lykos',
+      characterBio: 'Wolf at the chamber door.',
+      characterPortraitUrl: null,
+      profileData: null,
+    }]));
+
+    const interaction = {
+      user: { id: 'discord-user-1' },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue('edit'),
+        getSubcommandGroup: vi.fn().mockReturnValue(null),
+      },
+      reply: vi.fn(),
+      showModal: vi.fn(),
+      awaitModalSubmit: vi.fn().mockRejectedValue(new Error('timed out')),
+    };
+
+    await command.execute(interaction as any);
+
+    expect(interaction.awaitModalSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ time: 840_000 }),
+    );
+    expect(mocks.registerAwaitingInteraction).toHaveBeenCalledWith('char_edit_discord-user-1');
+    expect(mocks.unregisterAwaitingInteraction).toHaveBeenCalledWith('char_edit_discord-user-1');
   });
 });

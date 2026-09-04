@@ -79,14 +79,14 @@ describe('/time advance', () => {
     });
     mocks.postObituaryToGraveyard.mockResolvedValue({
       status: 'sent',
-      channelId: '1499836838192480488',
+      channelId: '123456789012345678',
       obituary: {
         characterName: 'Isabella Grech',
       },
     });
     mocks.postGameEventsEmbed.mockResolvedValue({
       status: 'sent',
-      channelId: '1503483556914266254',
+      channelId: '123456789012345678',
     });
   });
 

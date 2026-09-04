@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Target only spreadsheet `[redacted-sheet-id]` (`SCORP 2.5 Colony Backend`).
+- Target only spreadsheet `<CAMPAIGN_SHEET_ID>` (`SCORP 2.5 Colony Backend`).
 - Do not add bot commands or automatic ticket/favour integration.
 - Preserve `Parties!J:AP`, `Politics`, `Trade Federations`, named ranges, and unrelated workbook formulas.
 - `Independent` remains a party elsewhere but is ineligible for Congress and Council seats.

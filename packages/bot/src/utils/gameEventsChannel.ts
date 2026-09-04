@@ -1,7 +1,5 @@
 import type { EmbedBuilder } from 'discord.js';
 
-export const DEFAULT_GAME_EVENTS_CHANNEL_ID = '1503483556914266254';
-
 const GAME_EVENTS_CHANNEL_ENV = 'GAME_EVENTS_CHANNEL_ID';
 const LEGACY_ANNOUNCEMENT_CHANNEL_ENV = 'ANNOUNCEMENT_CHANNEL_ID';
 
@@ -25,10 +23,16 @@ function isSendableChannel(channel: unknown): channel is SendableChannel {
   return !!channel && typeof (channel as { send?: unknown }).send === 'function';
 }
 
-export function getGameEventsChannelId(env: NodeJS.ProcessEnv = process.env): string {
+/**
+ * Resolve the public game-events channel from `GAME_EVENTS_CHANNEL_ID`
+ * (or the legacy `ANNOUNCEMENT_CHANNEL_ID`). Returns `null` when neither is
+ * configured so callers report `not_configured` instead of posting somewhere
+ * deployment-specific.
+ */
+export function getGameEventsChannelId(env: NodeJS.ProcessEnv = process.env): string | null {
   return env[GAME_EVENTS_CHANNEL_ENV]?.trim()
     || env[LEGACY_ANNOUNCEMENT_CHANNEL_ENV]?.trim()
-    || DEFAULT_GAME_EVENTS_CHANNEL_ID;
+    || null;
 }
 
 export async function postGameEventsEmbed({

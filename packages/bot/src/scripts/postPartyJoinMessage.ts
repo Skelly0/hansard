@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { pathToFileURL } from 'node:url';
 import { Events, type Client } from 'discord.js';
 import { client } from '../client.js';
-import { DEFAULT_PARTY_JOIN_CHANNEL_ID, postPartyJoinMessage } from '../utils/partyJoinMessage.js';
+import { postPartyJoinMessage, resolvePartyJoinChannelId } from '../utils/partyJoinMessage.js';
 
 export async function runPostPartyJoinMessageScript(
   botClient: Client = client,
@@ -14,7 +14,10 @@ export async function runPostPartyJoinMessageScript(
     throw new Error('DISCORD_BOT_TOKEN is not set.');
   }
 
-  const channelId = process.env.PARTY_JOIN_CHANNEL_ID || DEFAULT_PARTY_JOIN_CHANNEL_ID;
+  const channelId = resolvePartyJoinChannelId();
+  if (!channelId) {
+    throw new Error('PARTY_JOIN_CHANNEL_ID is not set.');
+  }
 
   await new Promise<void>((resolve, reject) => {
     botClient.once(Events.ClientReady, async () => {

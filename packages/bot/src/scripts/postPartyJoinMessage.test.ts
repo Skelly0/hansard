@@ -15,7 +15,7 @@ vi.mock('../client.js', () => ({
 }));
 
 vi.mock('../utils/partyJoinMessage.js', () => ({
-  DEFAULT_PARTY_JOIN_CHANNEL_ID: '1501608247411609646',
+  resolvePartyJoinChannelId: () => process.env.PARTY_JOIN_CHANNEL_ID?.trim() || null,
   postPartyJoinMessage: mocks.postPartyJoinMessage,
 }));
 
@@ -24,8 +24,17 @@ describe('postPartyJoinMessage script runner', () => {
     vi.resetModules();
     vi.clearAllMocks();
     process.env.DISCORD_BOT_TOKEN = 'test-token';
-    delete process.env.PARTY_JOIN_CHANNEL_ID;
+    process.env.PARTY_JOIN_CHANNEL_ID = '123456789012345678';
     mocks.client.login.mockResolvedValue(undefined);
+  });
+
+  it('refuses to run when PARTY_JOIN_CHANNEL_ID is unset', async () => {
+    delete process.env.PARTY_JOIN_CHANNEL_ID;
+
+    const { runPostPartyJoinMessageScript } = await import('./postPartyJoinMessage');
+
+    await expect(runPostPartyJoinMessageScript(mocks.client as any)).rejects.toThrow('PARTY_JOIN_CHANNEL_ID is not set.');
+    expect(mocks.client.login).not.toHaveBeenCalled();
   });
 
   it('rejects and destroys the client when posting fails after login', async () => {

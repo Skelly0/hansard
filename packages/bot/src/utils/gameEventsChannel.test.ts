@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EmbedBuilder } from 'discord.js';
 import {
-  DEFAULT_GAME_EVENTS_CHANNEL_ID,
   getGameEventsChannelId,
   postGameEventsEmbed,
 } from './gameEventsChannel.js';
@@ -13,8 +12,20 @@ describe('game events channel posting', () => {
     delete process.env.ANNOUNCEMENT_CHANNEL_ID;
   });
 
-  it('uses the SCORP3 game events channel when no env override is configured', () => {
-    expect(getGameEventsChannelId()).toBe(DEFAULT_GAME_EVENTS_CHANNEL_ID);
+  it('returns null when no game events channel is configured', () => {
+    expect(getGameEventsChannelId()).toBeNull();
+  });
+
+  it('reports not_configured instead of posting when no channel is set', async () => {
+    const fetch = vi.fn();
+
+    const result = await postGameEventsEmbed({
+      client: { channels: { fetch } },
+      embed: new EmbedBuilder().setTitle('Time Advanced'),
+    });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: 'not_configured', channelId: null });
   });
 
   it('prefers a trimmed GAME_EVENTS_CHANNEL_ID env override', () => {
@@ -30,6 +41,7 @@ describe('game events channel posting', () => {
   });
 
   it('posts embeds to the configured game events channel', async () => {
+    process.env.GAME_EVENTS_CHANNEL_ID = '123456789012345678';
     const send = vi.fn().mockResolvedValue(undefined);
     const fetch = vi.fn().mockResolvedValue({ send });
     const embed = new EmbedBuilder().setTitle('Time Advanced');
@@ -39,11 +51,11 @@ describe('game events channel posting', () => {
       embed,
     });
 
-    expect(fetch).toHaveBeenCalledWith(DEFAULT_GAME_EVENTS_CHANNEL_ID);
+    expect(fetch).toHaveBeenCalledWith('123456789012345678');
     expect(send).toHaveBeenCalledWith({ embeds: [embed] });
     expect(result).toMatchObject({
       status: 'sent',
-      channelId: DEFAULT_GAME_EVENTS_CHANNEL_ID,
+      channelId: '123456789012345678',
     });
   });
 });

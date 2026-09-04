@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EmbedBuilder } from 'discord.js';
 import {
-  DEFAULT_LEGISLATION_CHANNEL_ID,
   editLegislationEmbed,
   getLegislationChannelId,
   postLegislationEmbed,
@@ -13,8 +12,20 @@ describe('legislation channel posting', () => {
     delete process.env.LEGISLATION_CHANNEL_ID;
   });
 
-  it('uses the SCORP3 legislation channel when no env override is configured', () => {
-    expect(getLegislationChannelId()).toBe(DEFAULT_LEGISLATION_CHANNEL_ID);
+  it('returns null when no legislation channel is configured', () => {
+    expect(getLegislationChannelId()).toBeNull();
+  });
+
+  it('reports not_configured instead of posting when no channel is set', async () => {
+    const fetch = vi.fn();
+
+    const result = await postLegislationEmbed({
+      client: { channels: { fetch } },
+      embed: new EmbedBuilder().setTitle('Bill Enacted'),
+    });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: 'not_configured', channelId: null });
   });
 
   it('prefers a trimmed LEGISLATION_CHANNEL_ID env override', () => {
@@ -24,6 +35,7 @@ describe('legislation channel posting', () => {
   });
 
   it('posts embeds to the configured legislation channel', async () => {
+    process.env.LEGISLATION_CHANNEL_ID = '123456789012345678';
     const send = vi.fn().mockResolvedValue({ id: '987654321' });
     const fetch = vi.fn().mockResolvedValue({ send });
     const embed = new EmbedBuilder().setTitle('Bill Enacted');
@@ -33,16 +45,17 @@ describe('legislation channel posting', () => {
       embed,
     });
 
-    expect(fetch).toHaveBeenCalledWith(DEFAULT_LEGISLATION_CHANNEL_ID);
+    expect(fetch).toHaveBeenCalledWith('123456789012345678');
     expect(send).toHaveBeenCalledWith({ embeds: [embed] });
     expect(result).toMatchObject({
       status: 'sent',
-      channelId: DEFAULT_LEGISLATION_CHANNEL_ID,
+      channelId: '123456789012345678',
       messageId: '987654321',
     });
   });
 
   it('returns a null messageId when the send response has no id', async () => {
+    process.env.LEGISLATION_CHANNEL_ID = '123456789012345678';
     const send = vi.fn().mockResolvedValue(undefined);
     const fetch = vi.fn().mockResolvedValue({ send });
     const embed = new EmbedBuilder().setTitle('Bill Enacted');
@@ -54,7 +67,7 @@ describe('legislation channel posting', () => {
 
     expect(result).toMatchObject({
       status: 'sent',
-      channelId: DEFAULT_LEGISLATION_CHANNEL_ID,
+      channelId: '123456789012345678',
       messageId: null,
     });
   });

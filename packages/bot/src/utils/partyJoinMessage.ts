@@ -15,7 +15,7 @@ import { parties, playerEventLog, players } from '@hansard/db';
 import { db } from '../db.js';
 import { createEmbed } from './embeds.js';
 
-export const DEFAULT_PARTY_JOIN_CHANNEL_ID = '1501608247411609646';
+export const PARTY_JOIN_CHANNEL_ENV = 'PARTY_JOIN_CHANNEL_ID';
 export const PARTY_JOIN_EMBED_TITLE = '🏛️ Join a Party';
 
 type ReactionInput = MessageReaction | PartialMessageReaction;
@@ -74,8 +74,20 @@ const NEUTRAL_PARTY_REACTION_EMOJIS = new Set<string>([...BLACK_EMOJIS, ...WHITE
 const FALLBACK_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'] as const;
 const partyJoinLocks = new Map<string, Promise<void>>();
 
-function resolvePartyJoinChannelId(): string {
-  return process.env.PARTY_JOIN_CHANNEL_ID || DEFAULT_PARTY_JOIN_CHANNEL_ID;
+/**
+ * Resolve the party join board channel from `PARTY_JOIN_CHANNEL_ID`.
+ * Returns `null` when unset — the reaction handler then ignores every message
+ * and the post/refresh helpers report the missing configuration.
+ */
+export function resolvePartyJoinChannelId(env: NodeJS.ProcessEnv = process.env): string | null {
+  return env[PARTY_JOIN_CHANNEL_ENV]?.trim() || null;
+}
+
+export class PartyJoinChannelNotConfiguredError extends Error {
+  constructor() {
+    super(`${PARTY_JOIN_CHANNEL_ENV} is not set; cannot locate the party join board.`);
+    this.name = 'PartyJoinChannelNotConfiguredError';
+  }
 }
 
 function resolvePartyJoinMessageId(): string | null {
@@ -345,7 +357,8 @@ async function findRefreshablePartyJoinMessage(channel: PartyJoinMessageChannel)
 }
 
 async function isCurrentPartyJoinMessage(message: Message | PartialMessageReaction['message']): Promise<boolean> {
-  if (message.channelId !== resolvePartyJoinChannelId()) return false;
+  const configuredChannelId = resolvePartyJoinChannelId();
+  if (!configuredChannelId || message.channelId !== configuredChannelId) return false;
   if (!isPartyJoinMessage(message)) return false;
 
   const configuredMessageId = resolvePartyJoinMessageId();
@@ -487,8 +500,9 @@ async function resetPartyJoinReactions(message: Message, reactionEmojis: readonl
 
 export async function postPartyJoinMessage(
   client: Client,
-  channelId = resolvePartyJoinChannelId(),
+  channelId: string | null = resolvePartyJoinChannelId(),
 ): Promise<Message> {
+  if (!channelId) throw new PartyJoinChannelNotConfiguredError();
   const channel = await client.channels.fetch(channelId);
   if (!channel || !('send' in channel)) {
     throw new Error(`Channel ${channelId} is not a sendable text channel.`);
@@ -506,8 +520,9 @@ export async function postPartyJoinMessage(
 
 export async function refreshPartyJoinMessage(
   client: Client,
-  channelId = resolvePartyJoinChannelId(),
+  channelId: string | null = resolvePartyJoinChannelId(),
 ): Promise<Message | null> {
+  if (!channelId) return null;
   const channel = await client.channels.fetch(channelId);
   if (!channel || !('messages' in channel)) {
     return null;

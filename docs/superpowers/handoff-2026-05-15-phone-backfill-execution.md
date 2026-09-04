@@ -31,7 +31,7 @@ That's it. The script handles per-pair thread creation, ordered embed posting, s
 ### Railway
 - Bot service: ONLINE. Latest deploy commit: `19a940e` (PR #23 merge).
 - `PHONE_LOG_CHANNEL_ID=1504812456042561587` set on the bot service.
-- All three services (api/bot/web) point at the same Neon DB: `[redacted-db-endpoint]`. No staging env.
+- All three services (api/bot/web) point at the same production Neon DB (endpoint redacted). No staging env.
 
 ### Production DB state
 ```

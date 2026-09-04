@@ -594,7 +594,7 @@ cd /tmp/hansard-export && git push origin main
 
 ## Execution Notes
 
-- **Working directory:** The clean Hansard repo is at `/tmp/hansard-export`. The source-of-truth files are in `[local working copy]/packages/`. Copy modified files to `/tmp/hansard-export/` before committing.
+- **Working directory:** The clean Hansard repo is at `/tmp/hansard-export`. The source-of-truth files are in the maintainer's local working copy of the bot repo. Copy modified files to `/tmp/hansard-export/` before committing.
 - **The `diff` package** ships its own types in v7+. No `@types/diff` needed.
 - **Parent resolution** in the Discord command: try integer (bill number) first, then document slug. Error if neither matches.
 - **Auto-apply** uses `updateDocument()` which already accepts `amendmentBillId`. The existing function signature is perfect.

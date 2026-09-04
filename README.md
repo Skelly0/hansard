@@ -30,7 +30,7 @@ TypeScript monorepo using pnpm workspaces:
 | `packages/web` | React 18 + Vite + TanStack Router dashboard |
 | `packages/mcp` | Read-only MCP server (see `packages/mcp/README.md`) |
 
-`dps-scaffold.md` is the original architecture document. `CLAUDE.md` holds the detailed design notes and invariants that have accumulated during development; it is worth reading before making changes. `docs/` contains feature specs and player-facing guides.
+`dps-scaffold.md` is the original architecture document. `CLAUDE.md` holds the detailed design notes and invariants that have accumulated during development; it is worth reading before making changes. `docs/` contains the aging and death guides for staff and players.
 
 ## Requirements
 
@@ -123,3 +123,7 @@ Or per package, for example `pnpm --filter @hansard/bot test:run`. Integration t
 - Slash command count is capped at 100 per guild by Discord; new actions should be added as subcommands of existing commands.
 - The services run under `tsx watch` rather than compiled output. See the "Production runs `tsx watch`" note in `CLAUDE.md` before attempting a compiled build.
 - The bot display name is configurable through `BOT_DISPLAY_NAME`.
+
+## License
+
+[MIT](./LICENSE).

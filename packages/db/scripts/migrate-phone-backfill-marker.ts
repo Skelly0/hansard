@@ -5,8 +5,6 @@
  *
  *   --dry-run   Print the SQL without executing.
  *   --validate  After applying (or as a standalone check), assert the column exists.
- *
- * Spec: docs/superpowers/specs/2026-05-15-phone-log-backfill-design.md
  */
 import postgres from 'postgres';
 

@@ -20,7 +20,6 @@
     "migrate:sessions-table": "tsx scripts/migrate-sessions-table.ts",
     "migrate:ticket-message-discord-unique": "tsx scripts/migrate-ticket-message-discord-unique.ts",
     "repair:ticket-staff-thread-message-visibility": "tsx scripts/repair-ticket-staff-thread-message-visibility.ts",
-    "fix:bill-5-status": "tsx scripts/fix-bill-5-status.ts",
     "fix:character-birth-dates": "tsx scripts/fix-character-birth-dates.ts",
     "cleanup:backfill-phone-test-players": "tsx scripts/cleanup-backfill-phone-test-players.ts",
     "push": "drizzle-kit push",

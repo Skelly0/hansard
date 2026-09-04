@@ -10,7 +10,7 @@ coverage/
 db-backups/
 .claude/ralph-loop.local.md
 
-# Local-only — refactor backups and Claude plugin state
+# Local-only scratch and AI-tooling state
 TRASH/
 TRASH-FILES.md
 .superpowers/

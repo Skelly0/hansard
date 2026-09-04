@@ -1,8 +1,9 @@
 #!/usr/bin/env tsx
 /**
  * One-shot replay of historic phone calls into per-pair staff threads under
- * PHONE_LOG_CHANNEL_ID. See
- * docs/superpowers/specs/2026-05-15-phone-log-backfill-design.md.
+ * PHONE_LOG_CHANNEL_ID. Intended for deployments that ran the phone system
+ * before PHONE_LOG_CHANNEL_ID was configured; see the "Phone log backfill"
+ * note in CLAUDE.md.
  *
  *   --dry-run    Print counts without writing Discord or DB.
  *   --limit N    Stop after backfilling N calls (smoke-test mode).

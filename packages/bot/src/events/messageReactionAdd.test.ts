@@ -410,7 +410,7 @@ describe('MessageReactionAdd reaction voting', () => {
       partial: false,
       message: {
         id: 'party-message',
-        channelId: '1501608247411609646',
+        channelId: '123456789012345678',
         embeds: [{ title: '🏛️ Join a Party' }],
       },
       emoji: { name: '🔵' },

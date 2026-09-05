@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const TEST_PARTY_JOIN_CHANNEL_ID = '123456789012345678';
+
 const mocks = vi.hoisted(() => ({
   db: {
     select: vi.fn(),
@@ -101,7 +103,7 @@ class InsertQuery {
 function partyJoinMessage(description = 'React with the emoji for the open party you want to join.\n\n🔵 **Blue Party** (BLU) — Ideology: *Liberal conservatism*') {
   const message: any = {
     id: 'message-1',
-    channelId: '1501608247411609646',
+    channelId: TEST_PARTY_JOIN_CHANNEL_ID,
     createdTimestamp: 2000,
     author: { id: 'bot-user' },
     client: { user: { id: 'bot-user' } },
@@ -135,6 +137,7 @@ import {
 describe('party join reaction message', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.PARTY_JOIN_CHANNEL_ID = TEST_PARTY_JOIN_CHANNEL_ID;
     delete process.env.PARTY_JOIN_MESSAGE_ID;
     mocks.updateSet = null;
     mocks.updateSets = [];

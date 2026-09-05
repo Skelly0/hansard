@@ -1,7 +1,5 @@
 import type { EmbedBuilder } from 'discord.js';
 
-export const DEFAULT_LEGISLATION_CHANNEL_ID = '1499837130254581854';
-
 const LEGISLATION_CHANNEL_ENV = 'LEGISLATION_CHANNEL_ID';
 
 type SentMessage = { id: string };
@@ -37,8 +35,9 @@ function extractMessageId(sent: unknown): string | null {
   return null;
 }
 
-export function getLegislationChannelId(env: NodeJS.ProcessEnv = process.env): string {
-  return env[LEGISLATION_CHANNEL_ENV]?.trim() || DEFAULT_LEGISLATION_CHANNEL_ID;
+/** Resolve `LEGISLATION_CHANNEL_ID`; `null` when unset so law posts report `not_configured`. */
+export function getLegislationChannelId(env: NodeJS.ProcessEnv = process.env): string | null {
+  return env[LEGISLATION_CHANNEL_ENV]?.trim() || null;
 }
 
 export async function postLegislationEmbed({

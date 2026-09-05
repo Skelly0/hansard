@@ -2,8 +2,6 @@ import { EmbedBuilder } from 'discord.js';
 import { generateObituary } from '@hansard/api/services/simulationService';
 import type { Database } from '@hansard/db';
 
-export const DEFAULT_GRAVEYARD_CHANNEL_ID = '1499836838192480488';
-
 const GRAVEYARD_COLOUR = 0x9C9890;
 
 type Obituary = Awaited<ReturnType<typeof generateObituary>>;
@@ -29,8 +27,9 @@ function isSendableChannel(channel: unknown): channel is SendableChannel {
   return !!channel && typeof (channel as { send?: unknown }).send === 'function';
 }
 
-export function getGraveyardChannelId(env: NodeJS.ProcessEnv = process.env): string {
-  return env.GRAVEYARD_CHANNEL_ID?.trim() || DEFAULT_GRAVEYARD_CHANNEL_ID;
+/** Resolve `GRAVEYARD_CHANNEL_ID`; `null` when unset so obituaries report `not_configured`. */
+export function getGraveyardChannelId(env: NodeJS.ProcessEnv = process.env): string | null {
+  return env.GRAVEYARD_CHANNEL_ID?.trim() || null;
 }
 
 function formatDeathAilments(ailments: { condition: string; severity: string }[]): string {

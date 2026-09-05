@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   previewAdvance: vi.fn(),
   postObituaryToGraveyard: vi.fn(),
   postGameEventsEmbed: vi.fn(),
+  isStaff: vi.fn(),
 }));
 
 vi.mock('../../db.js', () => ({
@@ -29,6 +30,14 @@ vi.mock('../../utils/graveyard.js', () => ({
 vi.mock('../../utils/gameEventsChannel.js', () => ({
   postGameEventsEmbed: mocks.postGameEventsEmbed,
 }));
+
+vi.mock('../../utils/permissions.js', () => ({
+  isStaff: mocks.isStaff,
+}));
+
+const staffGuild = {
+  members: { fetch: vi.fn().mockResolvedValue({ id: 'staff-member' }) },
+};
 
 function selectWhereResult(rows: unknown[]) {
   return {
@@ -60,6 +69,7 @@ function updateWhereResult(updateValues: unknown[]) {
 describe('/time advance', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.isStaff.mockResolvedValue(true);
     mocks.select.mockReturnValue(selectWhereResult([{ id: 'staff-player' }]));
     mocks.advanceTime.mockResolvedValue({
       fromDate: '2026-01-01',
@@ -93,6 +103,8 @@ describe('/time advance', () => {
   it('posts automatic death obituaries to the graveyard channel', async () => {
     const interaction = {
       user: { id: 'discord-staff' },
+      guild: staffGuild,
+      member: { id: 'staff-member' },
       client: { channels: { fetch: vi.fn() } },
       options: {
         getSubcommand: vi.fn().mockReturnValue('advance'),
@@ -113,6 +125,8 @@ describe('/time advance', () => {
   it('posts a public time advance summary to the game events channel', async () => {
     const interaction = {
       user: { id: 'discord-staff' },
+      guild: staffGuild,
+      member: { id: 'staff-member' },
       client: { channels: { fetch: vi.fn() } },
       options: {
         getSubcommand: vi.fn().mockReturnValue('advance'),
@@ -155,6 +169,8 @@ describe('/time advance', () => {
 
     const interaction = {
       user: { id: 'discord-staff' },
+      guild: staffGuild,
+      member: { id: 'staff-member' },
       client: { channels: { fetch: vi.fn() } },
       options: {
         getSubcommand: vi.fn().mockReturnValue('advance'),
@@ -209,6 +225,8 @@ describe('/time advance', () => {
     const send = vi.fn().mockResolvedValue({ id: 'dm-1' });
     const interaction = {
       user: { id: 'discord-staff' },
+      guild: staffGuild,
+      member: { id: 'staff-member' },
       client: {
         users: { fetch: vi.fn().mockResolvedValue({ send }) },
         channels: { fetch: vi.fn() },
@@ -260,6 +278,8 @@ describe('/time advance', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const interaction = {
       user: { id: 'discord-staff' },
+      guild: staffGuild,
+      member: { id: 'staff-member' },
       client: {
         users: {
           fetch: vi.fn().mockResolvedValue({
@@ -311,6 +331,8 @@ describe('/time advance', () => {
 
     const interaction = {
       user: { id: 'discord-staff' },
+      guild: staffGuild,
+      member: { id: 'staff-member' },
       client: { channels: { fetch: vi.fn() } },
       options: {
         getSubcommand: vi.fn().mockReturnValue('advance'),
@@ -335,6 +357,7 @@ describe('/time advance', () => {
 describe('/time npc-house', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.isStaff.mockResolvedValue(true);
   });
 
   it('lets staff persist whether the NPC house is active', async () => {
@@ -343,6 +366,9 @@ describe('/time npc-house', () => {
     mocks.update.mockReturnValue(updateWhereResult(updateValues));
 
     const interaction = {
+      user: { id: 'discord-staff' },
+      guild: staffGuild,
+      member: { id: 'staff-member' },
       options: {
         getSubcommand: vi.fn().mockReturnValue('npc-house'),
         getBoolean: vi.fn().mockReturnValue(true),
@@ -357,6 +383,97 @@ describe('/time npc-house', () => {
       npcHouseActive: true,
     });
     expect(updateValues[0]).toHaveProperty('updatedAt');
+    expect(interaction.editReply).toHaveBeenCalled();
+  });
+});
+
+describe('/time staff gate', () => {
+  function selectAnyResult(rows: unknown[]) {
+    return {
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(rows),
+        limit: vi.fn().mockResolvedValue(rows),
+      }),
+    };
+  }
+
+  function playerInteraction(sub: string) {
+    return {
+      user: { id: 'discord-player' },
+      guild: { members: { fetch: vi.fn().mockResolvedValue({ id: 'player-member' }) } },
+      member: { id: 'player-member' },
+      client: { channels: { fetch: vi.fn() } },
+      options: {
+        getSubcommand: vi.fn().mockReturnValue(sub),
+        getInteger: vi.fn().mockReturnValue(1),
+        getBoolean: vi.fn().mockReturnValue(true),
+        getString: vi.fn().mockReturnValue('2075-01-01'),
+      },
+      reply: vi.fn(),
+      deferReply: vi.fn(),
+      editReply: vi.fn(),
+    };
+  }
+
+  function repliedText(interaction: ReturnType<typeof playerInteraction>): string {
+    return JSON.stringify([...interaction.reply.mock.calls, ...interaction.editReply.mock.calls]);
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.isStaff.mockResolvedValue(false);
+    mocks.select.mockReturnValue(selectAnyResult([{ id: 'player-row', npcHouseActive: false, isPaused: false }]));
+    mocks.update.mockReturnValue(updateWhereResult([]));
+    mocks.advanceTime.mockResolvedValue({
+      fromDate: '2026-01-01', toDate: '2026-02-01', fromTick: 1, toTick: 2,
+      aged: 0, ailmentDetails: [], pendingDeathDetails: [], deathDetails: [],
+    });
+    mocks.previewAdvance.mockResolvedValue({
+      fromDate: '2026-01-01', toDate: '2026-02-01', fromTick: 1, toTick: 2,
+      wouldAge: 0, ailmentDetails: [], pendingDeathDetails: [], deathDetails: [],
+    });
+  });
+
+  it('refuses /time advance for members who are not staff', async () => {
+    const interaction = playerInteraction('advance');
+
+    await command.execute(interaction as any);
+
+    expect(mocks.advanceTime).not.toHaveBeenCalled();
+    expect(repliedText(interaction)).toMatch(/permission/i);
+  });
+
+  it.each(['set', 'pause', 'unpause', 'npc-house'])(
+    'refuses /time %s for members who are not staff',
+    async (sub) => {
+      const interaction = playerInteraction(sub);
+
+      await command.execute(interaction as any);
+
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(repliedText(interaction)).toMatch(/permission/i);
+    },
+  );
+
+  it('refuses /time preview for members who are not staff', async () => {
+    const interaction = playerInteraction('preview');
+
+    await command.execute(interaction as any);
+
+    expect(mocks.previewAdvance).not.toHaveBeenCalled();
+    expect(repliedText(interaction)).toMatch(/permission/i);
+  });
+
+  it('still lets non-staff members read /time status', async () => {
+    mocks.select.mockReturnValue(selectAnyResult([{
+      currentDate: '2075-01-01', currentTick: 1, tickUnit: 'month',
+      seasonName: 'Season 1', isPaused: false, startDate: '2075-01-01',
+    }]));
+    const interaction = playerInteraction('status');
+
+    await command.execute(interaction as any);
+
+    expect(repliedText(interaction)).not.toMatch(/permission/i);
     expect(interaction.editReply).toHaveBeenCalled();
   });
 });

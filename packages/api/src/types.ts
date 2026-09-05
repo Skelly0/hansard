@@ -19,6 +19,9 @@ declare module '@fastify/session' {
     // the post-login redirect target is bound to the session instead of
     // round-tripping through an attacker-controllable OAuth `state` value.
     pendingDeviceUserCode?: string;
+    // OAuth2 `state` nonce minted by /api/auth/discord and checked by the
+    // callback (RFC 6749 §10.12 login-CSRF defence). Single use.
+    oauthState?: string;
   }
 }
 

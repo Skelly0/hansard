@@ -2,8 +2,8 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelType,
   type ButtonInteraction,
+  type Client,
   type Message,
   type ThreadChannel,
 } from 'discord.js';
@@ -211,6 +211,29 @@ export function buildTicketActionRow(ticketNumber: number) {
     priorityButton,
     noteButton,
   );
+}
+
+/**
+ * Resolve the Discord thread that belongs to a ticket from the ticket row's
+ * own `discordThreadId` — never from `interaction.channel`. Button clicks and
+ * modal submits can arrive from any channel (an ephemeral `/ticket view`
+ * reply in an unrelated thread, for instance), so acting on the click's
+ * channel would let a ticket creator lock or post into a thread that has
+ * nothing to do with their ticket.
+ */
+export async function resolveTicketThread(
+  interaction: { client: Client },
+  ticket: { discordThreadId: string | null },
+): Promise<ThreadChannel | null> {
+  if (!ticket.discordThreadId) return null;
+  try {
+    const channel = await interaction.client.channels.fetch(ticket.discordThreadId);
+    if (!channel || !channel.isThread()) return null;
+    return channel as ThreadChannel;
+  } catch (err) {
+    console.error('Failed to resolve ticket thread:', err);
+    return null;
+  }
 }
 
 // ============================================================
@@ -471,9 +494,9 @@ async function handleCloseButton(interaction: ButtonInteraction): Promise<void> 
     overrides: { status: TicketStatus.CLOSED },
   });
 
-  // Lock the thread (and post a closure embed). Best-effort.
-  const channel = interaction.channel;
-  if (channel && channel.isThread()) {
+  // Lock the ticket's own thread (and post a closure embed). Best-effort.
+  const channel = await resolveTicketThread(interaction, ticket);
+  if (channel) {
     try {
       await channel.send({
         embeds: [
@@ -852,10 +875,8 @@ async function refreshPinnedSummary(
       tags: (ticket.tags as string[] | null) ?? [],
     };
 
-    const channel = interaction.channel;
-    if (!channel || channel.type !== ChannelType.PrivateThread && channel.type !== ChannelType.PublicThread) {
-      return;
-    }
+    const channel = await resolveTicketThread(interaction, ticket);
+    if (!channel) return;
 
     // Find the pinned summary message — produced by create.ts as the first
     // pin in the thread. Fall back to scanning recent messages from the bot.

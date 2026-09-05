@@ -206,6 +206,50 @@ describe('handleVoteCreateModal', () => {
     expect(mocks.wakeVoteAutoCloseWorker).toHaveBeenCalledWith('vote-created');
   });
 
+  it.each(['constitutional_amendment', 'general_election'])(
+    'refuses a live %s vote from a player without the required office permission',
+    async (electionType) => {
+      mocks.hasPermission.mockResolvedValue(false);
+      mocks.db.select.mockImplementationOnce(() => selectLimit([{ id: 'player-1' }]));
+      mocks.db.insert.mockReturnValue({
+        values: vi.fn(() => ({
+          returning: vi.fn().mockResolvedValue([{ id: 'election-1' }]),
+        })),
+      });
+
+      const interaction = makeModalInteraction({
+        customId: `vote-create:${electionType}:yea_nay_abstain:simple:buttons`,
+        member: { user: { id: 'discord-user-1' }, roles: [] },
+      });
+
+      await handleVoteCreateModal(interaction as any);
+
+      expect(mocks.db.insert).not.toHaveBeenCalled();
+      expect(mocks.wakeVoteAutoCloseWorker).not.toHaveBeenCalled();
+      const reply = interaction.editReply.mock.calls[0]?.[0];
+      expect(reply?.embeds?.[0]?.data.description).toMatch(/permission/i);
+    },
+  );
+
+  it('still lets any player open a referendum', async () => {
+    mocks.hasPermission.mockResolvedValue(false);
+    mocks.db.select.mockImplementationOnce(() => selectLimit([{ id: 'player-1' }]));
+    mocks.db.insert.mockReturnValue({
+      values: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: 'election-1' }]),
+      })),
+    });
+
+    const interaction = makeModalInteraction({
+      customId: 'vote-create:referendum:yea_nay_abstain:simple:buttons',
+      member: { user: { id: 'discord-user-1' }, roles: [] },
+    });
+
+    await handleVoteCreateModal(interaction as any);
+
+    expect(mocks.db.insert).toHaveBeenCalledTimes(1);
+  });
+
   it('redirects stale position election create modals to /vote elect', async () => {
     const interaction = makeModalInteraction({
       customId: 'vote-create:position_election:fptp:simple:buttons',

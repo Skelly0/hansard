@@ -1,6 +1,8 @@
 node_modules/
 dist/
-.env
+# Local secrets — every .env variant except the committed example.
+.env*
+!.env.example
 *.log
 .turbo/
 .vite/

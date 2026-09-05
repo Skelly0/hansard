@@ -130,7 +130,15 @@ export async function hasPermission(
     .select({ permissions: offices.permissions })
     .from(officeHolders)
     .innerJoin(offices, eq(officeHolders.officeId, offices.id))
-    .where(and(eq(officeHolders.playerId, player.id), isNull(officeHolders.endDate)));
+    // Mirrors the API's aggregatePermissionsForPlayer: a holding only grants
+    // permissions while the office itself is still active. Deactivating an
+    // office does not end its holders' terms, so without this filter an
+    // abolished office kept minting bot permissions indefinitely.
+    .where(and(
+      eq(officeHolders.playerId, player.id),
+      isNull(officeHolders.endDate),
+      eq(offices.isActive, true),
+    ));
 
   return rows.some((row) =>
     Array.isArray(row.permissions) &&

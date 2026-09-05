@@ -21,6 +21,14 @@ type DeathAilment = {
   severity: string;
 };
 
+/**
+ * Subcommands that stay player-facing. Everything else mutates the world
+ * clock or discloses staff-only ailment/death detail, so it is re-gated at
+ * runtime with `isStaff` below — Discord's `ManageGuild` default only decides
+ * who *sees* the command and can be overridden per guild via Integrations.
+ */
+const PUBLIC_TIME_SUBCOMMANDS = new Set(['status', 'events']);
+
 async function fetchClock() {
   const rows = await db.select().from(simulationClock).limit(1);
   return rows[0] ?? null;
@@ -241,6 +249,22 @@ const command: Command = {
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const sub = interaction.options.getSubcommand();
+
+    if (!PUBLIC_TIME_SUBCOMMANDS.has(sub)) {
+      if (!interaction.guild || !interaction.member) {
+        await interaction.reply({ embeds: [errorEmbed('This command must be used in a server.')], ephemeral: true });
+        return;
+      }
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      if (!(await isStaff(member))) {
+        await interaction.reply({
+          embeds: [errorEmbed('You do not have permission to manage the simulation clock.')],
+          ephemeral: true,
+        });
+        return;
+      }
+    }
+
     switch (sub) {
       case 'status': await handleStatus(interaction); break;
       case 'advance': await handleAdvance(interaction); break;

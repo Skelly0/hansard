@@ -1,6 +1,6 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
 import { deviceCodes, mcpTokens, players, type Database } from '@hansard/db';
 import '../types.js';
@@ -38,6 +38,12 @@ function generateOpaqueToken(bytes = 32): string {
 
 function sha256Hex(input: string): string {
   return createHash('sha256').update(input).digest('hex');
+}
+
+function constantTimeEquals(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function escapeHtml(s: string): string {
@@ -92,15 +98,21 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
   const redirectUri = process.env.DISCORD_REDIRECT_URI ?? 'http://localhost:3001/api/auth/discord/callback';
 
   // GET /api/auth/discord — redirect to Discord OAuth2.
-  // We deliberately do NOT forward an attacker-controllable `state` parameter
-  // for device-flow handoff (see /api/auth/device). Device-flow context is
-  // carried server-side via `session.pendingDeviceUserCode` instead.
-  fastify.get('/api/auth/discord', async (_request: FastifyRequest, reply: FastifyReply) => {
+  // `state` is a per-session random nonce stored server-side and compared in
+  // the callback, so an attacker cannot force a victim's browser through the
+  // callback with a code the attacker obtained (login CSRF). It carries no
+  // application data: device-flow context still travels only via
+  // `session.pendingDeviceUserCode` (see /api/auth/device).
+  fastify.get('/api/auth/discord', async (request: FastifyRequest, reply: FastifyReply) => {
+    const state = generateOpaqueToken(16);
+    request.session.oauthState = state;
+
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: 'identify guilds',
+      state,
     });
 
     return reply.redirect(`${DISCORD_AUTH_URL}?${params.toString()}`);
@@ -108,12 +120,20 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
 
   // GET /api/auth/discord/callback — handle OAuth2 callback
   fastify.get('/api/auth/discord/callback', async (request: FastifyRequest, reply: FastifyReply) => {
-    const { code, error } = request.query as { code?: string; error?: string };
+    const { code, error, state } = request.query as { code?: string; error?: string; state?: string };
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
     // Generic error redirect (covers access_denied, server_error, invalid_request, etc.)
     if (error) {
       return reply.redirect(`${frontendUrl}/login?error=${encodeURIComponent(error)}`);
+    }
+
+    // The callback only honours a code for a login *this* session started.
+    // Single use: clear the nonce whether or not it matches.
+    const expectedState = request.session.oauthState;
+    request.session.oauthState = undefined;
+    if (!expectedState || !state || !constantTimeEquals(expectedState, state)) {
+      return reply.redirect(`${frontendUrl}/login?error=invalid_state`);
     }
 
     if (!code) {
@@ -163,6 +183,12 @@ export default fp(async function authPlugin(fastify: FastifyInstance) {
         discordUsername: discordUser.username,
       });
       const permissions = await aggregatePermissionsForPlayer(fastify.db, player.id);
+
+      // Rotate the session id across the privilege boundary so a session id
+      // that existed before login (planted or merely observed) is never the
+      // authenticated one. The pending device-flow code is the only field
+      // that must survive, so the post-login hop below still works.
+      await request.session.regenerate(['pendingDeviceUserCode']);
 
       request.session.user = {
         id: player.id,                        // players.id (UUID) — not Discord snowflake

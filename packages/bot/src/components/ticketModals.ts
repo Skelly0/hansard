@@ -5,6 +5,7 @@ import { TicketStatus } from '@hansard/shared';
 import { successEmbed, errorEmbed, createEmbed } from '../utils/embeds.js';
 import { isStaff } from '../utils/permissions.js';
 import { db } from '../db.js';
+import { resolveTicketThread } from './ticketButtons.js';
 
 /**
  * Route a ticket-related modal submission to the correct handler.
@@ -129,9 +130,9 @@ async function handleCloseModal(interaction: ModalSubmitInteraction): Promise<vo
     embeds: [successEmbed('Ticket Closed', description.join('\n'))],
   });
 
-  // Post the closure notification to the thread
-  const closeChannel = interaction.channel;
-  if (closeChannel && 'send' in closeChannel && 'setArchived' in closeChannel) {
+  // Post the closure notification to the ticket's own thread
+  const closeChannel = await resolveTicketThread(interaction, ticket);
+  if (closeChannel) {
     try {
       const closeEmbed = createEmbed({
         title: `Ticket #${ticketNumber} Closed`,
@@ -235,9 +236,9 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
     ],
   });
 
-  // Post internal note indicator to the thread (visible to staff)
-  const noteChannel = interaction.channel;
-  if (noteChannel && 'send' in noteChannel) {
+  // Post internal note indicator to the ticket's own staff thread
+  const noteChannel = await resolveTicketThread(interaction, ticket);
+  if (noteChannel) {
     try {
       const noteEmbed = createEmbed({
         title: 'Internal Staff Note Added',
@@ -250,11 +251,7 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
         colour: 0x9C9890, // muted grey for internal notes
       });
 
-      await noteChannel.send({
-        embeds: [noteEmbed],
-        // In production, this would check if the channel is the ticket
-        // thread and only visible to staff. For now, it's sent to the thread.
-      });
+      await noteChannel.send({ embeds: [noteEmbed] });
     } catch {
       // Not critical
     }

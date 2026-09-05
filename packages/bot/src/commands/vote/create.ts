@@ -62,15 +62,25 @@ import * as candidateSubmit from './candidateSubmit.js';
 import * as candidateList from './candidateList.js';
 import * as npcConfirm from './npcConfirm.js';
 
-const CHANCELLOR_ONLY_TYPES = new Set([
-  'legislative_vote',
-  'appointment_confirmation',
+/**
+ * Election types any registered player may open directly. Every other type
+ * needs the office permission in REQUIRED_PERMISSION_BY_TYPE (staff bypass
+ * that via hasPermission). This is an allowlist rather than a "chancellor
+ * only" denylist so that a newly added type fails closed instead of open.
+ */
+const PLAYER_CREATABLE_TYPES = new Set([
+  'referendum',
+  'party_primary',
+  'confidence_vote',
+  'custom',
 ]);
 
 const REQUIRED_PERMISSION_BY_TYPE: Record<string, Permission> = {
   legislative_vote: 'legislative_leader',
   position_election: 'call_elections',
   appointment_confirmation: 'call_elections',
+  general_election: 'call_elections',
+  constitutional_amendment: 'legislative_leader',
 };
 
 const METHOD_LABELS: Record<string, string> = {
@@ -231,7 +241,8 @@ export function buildLegislativeVotePublicEmbeds(options: {
  *
  * Permission:
  * - Any player can create: referendum, party_primary, confidence_vote, custom
- * - Chancellor only: legislative_vote, appointment_confirmation
+ * - Office permission required: legislative_vote, appointment_confirmation,
+ *   general_election, constitutional_amendment (see REQUIRED_PERMISSION_BY_TYPE)
  * - Staff: any type
  */
 const command: Command = {
@@ -1148,7 +1159,7 @@ export async function handleVoteCreateModal(
 
   // Re-check permission for restricted types — modal submits don't re-run
   // the slash command's permission logic.
-  if (CHANCELLOR_ONLY_TYPES.has(electionType)) {
+  if (!PLAYER_CREATABLE_TYPES.has(electionType)) {
     const member = interaction.member;
     const requiredPermission = REQUIRED_PERMISSION_BY_TYPE[electionType] ?? 'legislative_leader';
     const allowed = member && 'roles' in member

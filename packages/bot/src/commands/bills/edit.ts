@@ -1,7 +1,8 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
-import { eq, ilike } from 'drizzle-orm';
+import { and, eq, ilike } from 'drizzle-orm';
 import { db } from '../../db.js';
 import { bills, players } from '@hansard/db';
+import { BillStatus } from '@hansard/shared';
 import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { isStaff } from '../../utils/permissions.js';
 import { SHORT_BILL_TEXT_MAX_LENGTH } from './display.js';
@@ -54,6 +55,14 @@ async function resolveBill(input: string): Promise<
 
 type EditableField = 'title' | 'summary' | 'text' | 'policy_areas' | 'tags';
 
+/**
+ * Statuses in which a bill's *author* may still edit it. Once a bill is put
+ * to a vote its title/summary/text become part of the legislative record —
+ * for short bills `cached_content` *is* the enacted law — so only staff may
+ * change them afterwards. Amend via `/bill amend`, not by rewriting history.
+ */
+const AUTHOR_EDITABLE_STATUSES = new Set<string>([BillStatus.SUBMITTED]);
+
 /** Split a comma-separated value into a clean string array. */
 function splitCsv(value: string): string[] {
   return value
@@ -99,6 +108,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   if (!staff && !isAuthor) {
     await interaction.editReply({
       embeds: [errorEmbed("Only the bill's author or staff can edit bill metadata.")],
+    });
+    return;
+  }
+
+  if (!staff && !AUTHOR_EDITABLE_STATUSES.has(bill.status)) {
+    await interaction.editReply({
+      embeds: [errorEmbed(
+        `This bill is "${bill.status}"; authors can only edit a bill while it is still submitted. Ask staff, or use /bill amend to propose changes to enacted law.`,
+      )],
     });
     return;
   }
@@ -172,7 +190,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     await db
       .update(bills)
       .set(setValues)
-      .where(eq(bills.id, bill.id));
+      // Non-staff edits are pinned to the status that was just checked so a
+      // concurrent vote/enactment cannot slip in between the check and write.
+      .where(staff
+        ? eq(bills.id, bill.id)
+        : and(eq(bills.id, bill.id), eq(bills.status, bill.status)));
 
     const padded = String(bill.billNumber).padStart(3, '0');
 

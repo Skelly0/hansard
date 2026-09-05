@@ -125,11 +125,14 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const user = request.session.user!;
       const body = request.body as any;
 
-      // Permission check — Chancellor-only types require legislative_leader
+      // Permission check — institutional types require legislative_leader.
+      // Keep in sync with PLAYER_CREATABLE_TYPES in the bot's /vote create.
       const chancellorTypes = [
         'legislative_vote',
         'position_election',
         'appointment_confirmation',
+        'general_election',
+        'constitutional_amendment',
       ];
       if (chancellorTypes.includes(body.type)) {
         const isStaff = request.player?.isStaff ?? false;

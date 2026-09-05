@@ -1,0 +1,25 @@
+# Keep build contexts small and make sure no local secrets or scratch state
+# can be COPYed into an image (Dockerfile.web copies packages/web/ wholesale,
+# and a Vite .env.local there would be inlined into the public bundle).
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+**/coverage
+**/.turbo
+**/.vite
+**/*.tsbuildinfo
+*.log
+.env*
+!.env.example
+db-backups
+TRASH
+TRASH-FILES.md
+.superpowers
+.agent-reports
+.claude
+.codex
+docs
+*.md
+!packages/mcp/README.md

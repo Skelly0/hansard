@@ -43,6 +43,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         and(
           eq(officeHolders.playerId, invokerPlayer.id),
           isNull(officeHolders.endDate),
+          eq(offices.isActive, true),
         ),
       );
 

@@ -66,6 +66,8 @@ vi.mock('../services/documentService.js', () => ({
   searchDocuments: vi.fn(),
   getCollections: vi.fn(),
   rollbackDocument: vi.fn(),
+  attachDocumentDisplay: vi.fn(async (_db, docs) => docs.map((doc: any) => ({ ...doc, collection: null, author: null }))),
+  attachVersionDisplay: vi.fn(async (_db, versions) => versions),
 }));
 
 vi.mock('../services/playerService.js', () => ({
@@ -82,6 +84,8 @@ vi.mock('../services/playerService.js', () => ({
   getPlayerOfficeHistory: mocks.getPlayerOfficeHistory,
   getPlayerVotingRecord: mocks.getPlayerVotingRecord,
   sanitizePlayerProfile: vi.fn((player) => player),
+  attachPlayerAffiliations: vi.fn(async (_db, profiles) => profiles.map((p: any) => ({ ...p, party: null, faction: null }))),
+  attachEventActors: vi.fn(async (_db, events) => events.map((e: any) => ({ ...e, triggeredBy: null }))),
   calculateStartingAgeFavourBonus: vi.fn().mockReturnValue(0),
   aggregatePermissionsForPlayer: vi.fn(),
 }));
@@ -117,6 +121,7 @@ vi.mock('../services/modService.js', () => ({
   listActions: mocks.listActions,
   countActions: mocks.countActions,
   getStats: vi.fn(),
+  attachModActionPeople: vi.fn(async (_db, actions) => actions.map((a: any) => ({ ...a, targetPlayer: null, moderator: null }))),
 }));
 
 async function appWith(register: (app: any) => Promise<void> | void) {
@@ -176,7 +181,7 @@ describe('list route response contracts', () => {
     const res = await app.inject('/api/documents?collectionId=c1&authorId=p1&search=charter&limit=10&offset=30');
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ data: [{ id: 'd1' }], total: 1 });
+    expect(res.json()).toEqual({ data: [{ id: 'd1', collection: null, author: null }], total: 1 });
     expect(mocks.listDocuments).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -203,7 +208,7 @@ describe('list route response contracts', () => {
     const res = await app.inject('/api/players?partyId=party-1&isAlive=false&limit=24&offset=24');
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ data: [{ id: 'p1' }], total: 1 });
+    expect(res.json()).toEqual({ data: [{ id: 'p1', party: null, faction: null }], total: 1 });
   });
 
   it('returns 409 when character creation hits a duplicate character name constraint', async () => {
@@ -277,7 +282,7 @@ describe('list route response contracts', () => {
     const res = await app.inject('/api/moderation/actions?targetPlayerId=p1&limit=20&offset=40');
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ data: [{ id: 'm1' }], total: 1 });
+    expect(res.json()).toEqual({ data: [{ id: 'm1', targetPlayer: null, moderator: null }], total: 1 });
     expect(mocks.listActions).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       targetPlayerId: 'p1',
       limit: 20,

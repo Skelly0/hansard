@@ -11,6 +11,8 @@ import {
   searchDocuments,
   getCollections,
   rollbackDocument,
+  attachDocumentDisplay,
+  attachVersionDisplay,
 } from '../services/documentService.js';
 import { computeDiff } from '../services/diffService.js';
 import { isValidGoogleDocUrl } from '../services/googleDocService.js';
@@ -145,7 +147,7 @@ export default async function documentRoutes(fastify: FastifyInstance) {
         limit: parsedLimit,
         offset: parsedOffset,
       }, getViewer(request));
-      return { data: result.documents, total: result.total };
+      return { data: await attachDocumentDisplay(db, result.documents), total: result.total };
     },
   );
 
@@ -161,7 +163,8 @@ export default async function documentRoutes(fastify: FastifyInstance) {
       if (!doc) {
         return reply.status(404).send({ error: 'Document not found' });
       }
-      return doc;
+      const [enriched] = await attachDocumentDisplay(db, [doc]);
+      return enriched;
     },
   );
 
@@ -173,7 +176,8 @@ export default async function documentRoutes(fastify: FastifyInstance) {
     '/api/documents/:slug/versions',
     { preHandler: [requireAuth] },
     async (request) => {
-      return getVersionHistory(db, request.params.slug, getViewer(request));
+      const versions = await getVersionHistory(db, request.params.slug, getViewer(request));
+      return attachVersionDisplay(db, versions);
     },
   );
 

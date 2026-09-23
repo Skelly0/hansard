@@ -679,7 +679,7 @@ describe('getHistory ordering', () => {
           if (table !== timeAdvanceLog) {
             throw new Error('Unexpected table in getHistory test');
           }
-          return {
+          const ordered = {
             orderBy: (orderArg: unknown) => {
               orderBySpy(orderArg);
               return {
@@ -688,11 +688,17 @@ describe('getHistory ordering', () => {
                   const sortedDesc = [...storedRows].sort(
                     (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
                   );
-                  return Promise.resolve(sortedDesc.slice(0, n));
+                  // getHistory joins the advancing player for display.
+                  return Promise.resolve(sortedDesc.slice(0, n).map((log) => ({
+                    log: { ...log, advancedById: 'staff-1' },
+                    advancedByCharacterName: 'Eleanor Ashcombe',
+                    advancedByDiscordUsername: 'eleanor',
+                  })));
                 },
               };
             },
           };
+          return { ...ordered, leftJoin: () => ordered };
         }),
       })),
     };
@@ -709,5 +715,8 @@ describe('getHistory ordering', () => {
       'advance-mid',
       'advance-old',
     ]);
+    expect(result[0]).toMatchObject({
+      advancedBy: { id: 'staff-1', characterName: 'Eleanor Ashcombe', discordUsername: 'eleanor' },
+    });
   });
 });

@@ -149,7 +149,7 @@ export default async function moderationRoutes(fastify: FastifyInstance) {
         modService.countActions(fastify.db, filters),
       ]);
 
-      return { data: actions, total };
+      return { data: await modService.attachModActionPeople(fastify.db, actions), total };
     },
   );
 

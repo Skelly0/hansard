@@ -11,7 +11,7 @@ import {
   ticketMessages,
   tickets,
 } from '@hansard/db';
-import dashboardRoutes from './dashboard';
+import dashboardRoutes, { describeBillStatusChange } from './dashboard';
 
 const auth = vi.hoisted(() => ({
   isStaff: false,
@@ -190,9 +190,11 @@ describe('dashboard routes', () => {
       {
         type: 'bill_status',
         system: 'bills',
-        description: 'Bill status changed: draft -> submitted',
+        description: 'A bill was submitted',
         timestamp: now.toISOString(),
         actorName: 'Clerk',
+        actorId: 'clerk-player',
+        href: null,
       },
       {
         type: 'player_event',
@@ -200,6 +202,8 @@ describe('dashboard routes', () => {
         description: 'Ada was appointed Chancellor',
         timestamp: now.toISOString(),
         actorName: 'Ada',
+        actorId: 'ada-player',
+        href: '/players/ada-player',
       },
     ]);
   });
@@ -286,5 +290,16 @@ describe('dashboard routes', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as Array<{ type: string; description: string }>;
     expect(body.map((item) => item.description)).toContain('Acquired major ailment: cancer');
+  });
+});
+
+describe('describeBillStatusChange', () => {
+  it('names the bill and phrases known transitions', () => {
+    expect(describeBillStatusChange('Free Ports Act', 'player_passed', 'enacted')).toBe('“Free Ports Act” was enacted');
+    expect(describeBillStatusChange('Coal Act', 'submitted', 'voting')).toBe('“Coal Act” went to a vote');
+  });
+
+  it('falls back to a from/to sentence for unknown statuses', () => {
+    expect(describeBillStatusChange(null, 'voting', 'on_hold')).toBe('A bill moved from voting to on hold');
   });
 });

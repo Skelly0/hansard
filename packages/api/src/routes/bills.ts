@@ -4,7 +4,7 @@ import { requireStaff } from '../middleware/requireStaff.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { eq } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
-import { bills, documents } from '@hansard/db';
+import { bills, documents, players } from '@hansard/db';
 import type { BillType, EstimatedEffects } from '@hansard/shared';
 import {
   submitBill,
@@ -270,6 +270,28 @@ export default async function billRoutes(fastify: FastifyInstance) {
         ...rest,
       };
 
+      // Mirror `/bill submit`: only a living, registered character can author
+      // a bill. OAuth login alone creates a characterless player row.
+      const authorCanLegislate = async (playerId: string): Promise<string | null> => {
+        const [author] = await db
+          .select({ characterName: players.characterName, isAlive: players.isAlive })
+          .from(players)
+          .where(eq(players.id, playerId))
+          .limit(1);
+        if (!author) return 'Author not found';
+        if (!author.characterName) {
+          return playerId === user.id
+            ? 'You need a character before you can submit bills. Use /character create in Discord.'
+            : 'The chosen author has no character';
+        }
+        if (!author.isAlive) {
+          return playerId === user.id
+            ? 'Deceased characters cannot submit bills'
+            : 'The chosen author is deceased';
+        }
+        return null;
+      };
+
       let bill;
       if (authorId && authorId !== user.id) {
         // Submitting on behalf — requires legislative_leader or staff
@@ -282,9 +304,13 @@ export default async function billRoutes(fastify: FastifyInstance) {
             error: 'Only the Chancellor or staff can submit bills on behalf of other players',
           });
         }
+        const authorProblem = await authorCanLegislate(authorId);
+        if (authorProblem) return reply.status(400).send({ error: authorProblem });
         if (isStaff) request.staffActionLog = true;
         bill = await submitBillFor(db, authorId, user.id, billData);
       } else {
+        const authorProblem = await authorCanLegislate(user.id);
+        if (authorProblem) return reply.status(400).send({ error: authorProblem });
         bill = await submitBill(db, user.id, billData);
       }
 

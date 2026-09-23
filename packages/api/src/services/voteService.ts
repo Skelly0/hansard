@@ -5,7 +5,7 @@
  * runoff generation, NPC confirmation, and certification (with auto
  * office-appointment on certified position elections).
  */
-import { eq, and, inArray, isNull, sql, gte, lte, or, ne } from 'drizzle-orm';
+import { eq, and, exists, inArray, isNotNull, isNull, sql, gte, lte, or, ne } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import {
   elections,
@@ -14,6 +14,8 @@ import {
   bills,
   billStatusLog,
   players,
+  parties,
+  offices,
   officeHolders,
   simulationClock,
 } from '@hansard/db';
@@ -374,22 +376,88 @@ export class VoteService {
     if (!election) return null;
     if (!this.canViewElection(election, viewer)) return null;
 
-    const [electionCandidates, relatedBillSlug] = await Promise.all([
-      this.db.select().from(candidates).where(eq(candidates.electionId, id)),
-      this.lookupRelatedBillSlug(election.relatedBillId),
-    ]);
-
-    return { ...election, candidates: electionCandidates, relatedBillSlug };
+    const [enriched] = await this.enrichElectionsForDisplay([election]);
+    return enriched;
   }
 
-  private async lookupRelatedBillSlug(billId: string | null): Promise<string | null> {
-    if (!billId) return null;
-    const [row] = await this.db
-      .select({ slug: bills.slug })
-      .from(bills)
-      .where(eq(bills.id, billId))
-      .limit(1);
-    return row?.slug ?? null;
+  /**
+   * Attach the display summaries the web/MCP render next to raw ids:
+   * `relatedBillSlug`, `forOffice`, `createdBy`, and `candidates` (ordered by
+   * registration, each with nested `player`/`party` summaries). Candidate
+   * rows and names are public ballot information, so no viewer gating here —
+   * visibility of the election itself is enforced by the callers.
+   */
+  private async enrichElectionsForDisplay<T extends {
+    id: string;
+    relatedBillId: string | null;
+    forOfficeId: string | null;
+    createdById: string;
+  }>(rows: T[]) {
+    if (rows.length === 0) return [];
+    const electionIds = rows.map((r) => r.id);
+    const officeIds = [...new Set(rows.map((r) => r.forOfficeId).filter((x): x is string => !!x))];
+    const creatorIds = [...new Set(rows.map((r) => r.createdById))];
+
+    const [withSlugs, officeRows, creatorRows, candidateRows] = await Promise.all([
+      this.enrichElectionsWithSlugs(rows),
+      officeIds.length
+        ? this.db.select({ id: offices.id, name: offices.name }).from(offices).where(inArray(offices.id, officeIds))
+        : Promise.resolve([] as { id: string; name: string }[]),
+      this.db
+        .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
+        .from(players)
+        .where(inArray(players.id, creatorIds)),
+      this.db
+        .select({
+          candidate: candidates,
+          playerCharacterName: players.characterName,
+          playerDiscordUsername: players.discordUsername,
+          partyName: parties.name,
+          partyShortName: parties.shortName,
+          partyColour: parties.colour,
+        })
+        .from(candidates)
+        .leftJoin(players, eq(candidates.playerId, players.id))
+        .leftJoin(parties, eq(candidates.partyId, parties.id))
+        .where(inArray(candidates.electionId, electionIds))
+        .orderBy(candidates.registeredAt, candidates.id),
+    ]);
+
+    const officeMap = new Map(officeRows.map((o) => [o.id, o]));
+    const creatorMap = new Map(creatorRows.map((p) => [p.id, p]));
+    const candidatesByElection = new Map<string, unknown[]>();
+    for (const row of candidateRows) {
+      const c = row.candidate;
+      const list = candidatesByElection.get(c.electionId) ?? [];
+      list.push({
+        ...c,
+        player: {
+          id: c.playerId,
+          characterName: row.playerCharacterName,
+          discordUsername: row.playerDiscordUsername ?? '',
+        },
+        party: c.partyId && row.partyName
+          ? { id: c.partyId, name: row.partyName, shortName: row.partyShortName, colour: row.partyColour }
+          : null,
+      });
+      candidatesByElection.set(c.electionId, list);
+    }
+
+    return withSlugs.map((row) => {
+      const office = row.forOfficeId ? officeMap.get(row.forOfficeId) : undefined;
+      const creator = creatorMap.get(row.createdById);
+      return {
+        ...row,
+        forOffice: office ? { id: office.id, name: office.name } : null,
+        createdBy: creator
+          ? { id: creator.id, characterName: creator.characterName, discordUsername: creator.discordUsername }
+          : null,
+        candidates: (candidatesByElection.get(row.id) ?? []) as Array<typeof candidates.$inferSelect & {
+          player: { id: string; characterName: string | null; discordUsername: string };
+          party: { id: string; name: string; shortName: string | null; colour: string | null } | null;
+        }>,
+      };
+    });
   }
 
   private async isNpcHouseActive(executor: Pick<Database, 'select'> = this.db): Promise<boolean> {
@@ -525,7 +593,7 @@ export class VoteService {
         : this.db.select({ count: sql<number>`count(*)::int` }).from(elections),
     ]);
 
-    const enriched = await this.enrichElectionsWithSlugs(rows);
+    const enriched = await this.enrichElectionsForDisplay(rows);
     return { data: enriched, total: totalRow[0]?.count ?? enriched.length };
   }
 
@@ -597,12 +665,13 @@ export class VoteService {
       .where(eq(ballots.electionId, id));
 
     const voted = ballotRows.length;
-    // We don't have a true eligible-voter cohort yet (eligibility filters are
-    // a TODO on the schema), so fall back to the recorded turnout numerator
-    // from the latest tally if present. Otherwise treat votes cast as the
-    // denominator so the page renders meaningful numbers.
-    const recordedTurnout = (election?.results as ElectionResults | null)?.turnout;
-    const eligible = recordedTurnout && recordedTurnout > 0 ? recordedTurnout : voted;
+    // Eligible cohort = the characters `getEligibilityForElection` would
+    // accept today (registered, alive, and inside any faction/party/office
+    // filter). `results.turnout` is a *vote count*, so it can't serve as the
+    // denominator. Never report fewer eligible than voted (voters can die
+    // after casting), which would push turnout past 100%.
+    const cohort = await this.countEligibleVoters(config);
+    const eligible = Math.max(cohort, voted);
     const turnoutPct = eligible > 0 ? (voted / eligible) * 100 : 0;
 
     return {
@@ -612,6 +681,34 @@ export class VoteService {
       turnoutPct,
       totalBallots: voted, // legacy field — kept for any older consumers
     };
+  }
+
+  /** Count characters currently eligible under an election's config filters. */
+  private async countEligibleVoters(config: ElectionConfig): Promise<number> {
+    const conditions = [isNotNull(players.characterName), eq(players.isAlive, true)];
+    if (config.eligibleFactions?.length) {
+      conditions.push(inArray(players.factionId, config.eligibleFactions));
+    }
+    if (config.eligibleParties?.length) {
+      conditions.push(inArray(players.partyId, config.eligibleParties));
+    }
+    if (config.eligibleOffices?.length) {
+      conditions.push(exists(
+        this.db
+          .select({ id: officeHolders.id })
+          .from(officeHolders)
+          .where(and(
+            eq(officeHolders.playerId, players.id),
+            isNull(officeHolders.endDate),
+            inArray(officeHolders.officeId, config.eligibleOffices),
+          )),
+      ));
+    }
+    const [row] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(players)
+      .where(and(...conditions));
+    return Number(row?.count ?? 0);
   }
 
   async getEligibility(electionId: string, playerId: string, viewer?: ElectionViewer) {

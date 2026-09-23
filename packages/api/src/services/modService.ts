@@ -1,4 +1,4 @@
-import { eq, and, desc, count, type SQL } from 'drizzle-orm';
+import { eq, and, desc, count, gte, inArray, or, type SQL } from 'drizzle-orm';
 import {
   modActions,
   modNotes,
@@ -227,9 +227,36 @@ export async function countActions(
 /**
  * Get moderation activity stats — counts by type, active actions total.
  */
+type PlayerSummary = { id: string; characterName: string | null; discordUsername: string };
+
+/**
+ * Attach `targetPlayer` / `moderator` display summaries so staff views show
+ * names instead of raw UUIDs. Moderation routes are staff-only.
+ */
+export async function attachModActionPeople<T extends { targetPlayerId: string; moderatorId: string }>(
+  db: Database,
+  actions: T[],
+): Promise<(T & { targetPlayer: PlayerSummary | null; moderator: PlayerSummary | null })[]> {
+  const ids = [...new Set(actions.flatMap((a) => [a.targetPlayerId, a.moderatorId]))];
+  const rows = ids.length
+    ? await db
+        .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
+        .from(players)
+        .where(inArray(players.id, ids))
+    : [];
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return actions.map((action) => ({
+    ...action,
+    targetPlayer: byId.get(action.targetPlayerId) ?? null,
+    moderator: byId.get(action.moderatorId) ?? null,
+  }));
+}
+
 export async function getStats(db: Database): Promise<{
   totalActions: number;
   activeActions: number;
+  pendingAppeals: number;
+  warningsThisWeek: number;
   byType: Record<string, number>;
   recentActions: ModAction[];
 }> {
@@ -256,6 +283,20 @@ export async function getStats(db: Database): Promise<{
     byType[a.type] = (byType[a.type] ?? 0) + 1;
   }
 
+  const [pendingResult] = await db
+    .select({ value: count() })
+    .from(modActions)
+    .where(eq(modActions.appealStatus, 'pending'));
+
+  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [warningsResult] = await db
+    .select({ value: count() })
+    .from(modActions)
+    .where(and(
+      or(eq(modActions.type, 'verbal_warning'), eq(modActions.type, 'formal_warning')),
+      gte(modActions.createdAt, oneWeekAgo),
+    ));
+
   // Recent 10 actions
   const recent = await db
     .select()
@@ -266,8 +307,10 @@ export async function getStats(db: Database): Promise<{
   return {
     totalActions,
     activeActions,
+    pendingAppeals: pendingResult?.value ?? 0,
+    warningsThisWeek: warningsResult?.value ?? 0,
     byType,
-    recentActions: recent.map(toModAction),
+    recentActions: await attachModActionPeople(db, recent.map(toModAction)),
   };
 }
 

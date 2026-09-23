@@ -1,5 +1,6 @@
 import { eq, and, desc, isNull, asc } from 'drizzle-orm';
 import {
+  factions,
   offices,
   officeHolders,
   players,
@@ -42,6 +43,8 @@ export interface UpdateOfficeInput {
 }
 
 export interface OfficeWithHolder extends Office {
+  /** Public faction summary; only populated by `listOffices`. */
+  faction?: { id: string; name: string; shortName: string | null } | null;
   currentHolders: (OfficeHolder & { playerName: string | null; discordUsername: string })[];
 }
 
@@ -66,8 +69,11 @@ export async function listOffices(db: Database): Promise<OfficeWithHolder[]> {
       holder: officeHolders,
       playerName: players.characterName,
       discordUsername: players.discordUsername,
+      factionName: factions.name,
+      factionShortName: factions.shortName,
     })
     .from(offices)
+    .leftJoin(factions, eq(offices.factionId, factions.id))
     .leftJoin(
       officeHolders,
       and(
@@ -84,7 +90,13 @@ export async function listOffices(db: Database): Promise<OfficeWithHolder[]> {
   for (const row of rows) {
     let entry = byOfficeId.get(row.office.id);
     if (!entry) {
-      entry = { ...toOffice(row.office), currentHolders: [] };
+      entry = {
+        ...toOffice(row.office),
+        faction: row.office.factionId && row.factionName
+          ? { id: row.office.factionId, name: row.factionName, shortName: row.factionShortName }
+          : null,
+        currentHolders: [],
+      };
       byOfficeId.set(row.office.id, entry);
     }
     if (row.holder && row.discordUsername !== null) {

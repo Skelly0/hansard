@@ -18,7 +18,7 @@ function makeNpcConfirmDb(election: any, updated = { id: 'election-1', status: '
   };
 }
 
-function makeTurnoutDb(election: any, ballotRows = [{ id: 'ballot-1' }, { id: 'ballot-2' }]) {
+function makeTurnoutDb(election: any, ballotRows = [{ id: 'ballot-1' }, { id: 'ballot-2' }], eligibleCount = 4) {
   const electionLimit = vi.fn().mockResolvedValue(election ? [election] : []);
   const electionWhere = vi.fn().mockReturnValue({ limit: electionLimit });
   const electionFrom = vi.fn().mockReturnValue({ where: electionWhere });
@@ -26,9 +26,13 @@ function makeTurnoutDb(election: any, ballotRows = [{ id: 'ballot-1' }, { id: 'b
   const ballotsWhere = vi.fn().mockResolvedValue(ballotRows);
   const ballotsFrom = vi.fn().mockReturnValue({ where: ballotsWhere });
 
+  const eligibleWhere = vi.fn().mockResolvedValue([{ count: eligibleCount }]);
+  const eligibleFrom = vi.fn().mockReturnValue({ where: eligibleWhere });
+
   const select = vi.fn()
     .mockReturnValueOnce({ from: electionFrom })
-    .mockReturnValueOnce({ from: ballotsFrom });
+    .mockReturnValueOnce({ from: ballotsFrom })
+    .mockReturnValueOnce({ from: eligibleFrom });
 
   return {
     db: { select },
@@ -269,6 +273,35 @@ describe('VoteService.getTurnout privacy', () => {
       eligible: 4,
       voted: 2,
       totalBallots: 2,
+    });
+  });
+
+  it('uses the living-character cohort as the turnout denominator, not the vote count', async () => {
+    const { db } = makeTurnoutDb({
+      results: { turnout: 2 },
+      status: 'certified',
+      config: {},
+      createdById: 'creator-player',
+    }, [{ id: 'ballot-1' }, { id: 'ballot-2' }], 8);
+
+    await expect(new VoteService(db as any).getTurnout('election-1', {
+      userId: 'player-1',
+      isStaff: false,
+    })).resolves.toMatchObject({ eligible: 8, voted: 2, turnoutPct: 25 });
+  });
+
+  it('never reports fewer eligible voters than ballots cast', async () => {
+    const { db } = makeTurnoutDb({
+      results: null,
+      status: 'voting_closed',
+      config: {},
+      createdById: 'creator-player',
+    }, [{ id: 'ballot-1' }, { id: 'ballot-2' }, { id: 'ballot-3' }], 2);
+
+    await expect(new VoteService(db as any).getTurnout('election-1')).resolves.toMatchObject({
+      eligible: 3,
+      voted: 3,
+      turnoutPct: 100,
     });
   });
 });

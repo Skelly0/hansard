@@ -16,6 +16,8 @@ import {
   getPlayerOfficeHistory,
   getPlayerVotingRecord,
   sanitizePlayerProfile,
+  attachPlayerAffiliations,
+  attachEventActors,
   calculateStartingAgeFavourBonus,
   type CreateCharacterInput,
   type UpdateCharacterInput,
@@ -115,7 +117,11 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         countPlayers(fastify.db, filters),
       ]);
       const viewer = viewerFor(request);
-      return { data: players.map((player) => sanitizePlayerProfile(player, viewer)), total };
+      const data = await attachPlayerAffiliations(
+        fastify.db,
+        players.map((player) => sanitizePlayerProfile(player, viewer)),
+      );
+      return { data, total };
     },
   );
 
@@ -134,16 +140,18 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       const voteViewer = { userId: request.session.user!.id, isStaff: !!request.player?.isStaff };
       const canViewPrivate = canViewPrivatePlayerData(request, id);
 
-      const [offices, billResult, votes, favourBalances, events] = await Promise.all([
+      const [offices, billResult, votes, favourBalances, rawEvents, [profile]] = await Promise.all([
         getPlayerOfficeHistory(fastify.db, id),
         listBills(fastify.db, { authorId: id, limit: 100 }),
         getPlayerVotingRecord(fastify.db, id, voteViewer),
         canViewPrivate ? getPlayerBalances(fastify.db, id) : Promise.resolve([]),
         getPlayerEvents(fastify.db, id, { limit: 50 }, voteViewer),
+        attachPlayerAffiliations(fastify.db, [sanitizePlayerProfile(player, voteViewer)]),
       ]);
+      const events = await attachEventActors(fastify.db, rawEvents);
 
       const response: Record<string, unknown> = {
-        ...sanitizePlayerProfile(player, voteViewer),
+        ...profile,
         offices,
         bills: billResult.bills,
         votes,

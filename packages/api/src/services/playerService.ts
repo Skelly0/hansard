@@ -738,6 +738,70 @@ export function sanitizePlayerProfile(
   };
 }
 
+export interface AffiliationSummary {
+  id: string;
+  name: string;
+  shortName: string | null;
+  colour: string | null;
+}
+
+/**
+ * Attach public `party` / `faction` display summaries to player profiles.
+ * The web roster, dossier, graveyard, and filters render these nested objects
+ * (and build their filter dropdowns from them); the raw profile only carries
+ * `partyId` / `factionId`.
+ */
+export async function attachPlayerAffiliations<T extends { partyId: string | null; factionId: string | null }>(
+  db: Database,
+  profiles: T[],
+): Promise<(T & { party: AffiliationSummary | null; faction: AffiliationSummary | null })[]> {
+  const partyIds = [...new Set(profiles.map((p) => p.partyId).filter((x): x is string => !!x))];
+  const factionIds = [...new Set(profiles.map((p) => p.factionId).filter((x): x is string => !!x))];
+  const [partyRows, factionRows] = await Promise.all([
+    partyIds.length
+      ? db
+          .select({ id: parties.id, name: parties.name, shortName: parties.shortName, colour: parties.colour })
+          .from(parties)
+          .where(inArray(parties.id, partyIds))
+      : Promise.resolve([] as AffiliationSummary[]),
+    factionIds.length
+      ? db
+          .select({ id: factions.id, name: factions.name, shortName: factions.shortName, colour: factions.colour })
+          .from(factions)
+          .where(inArray(factions.id, factionIds))
+      : Promise.resolve([] as AffiliationSummary[]),
+  ]);
+  const partyMap = new Map(partyRows.map((row) => [row.id, row]));
+  const factionMap = new Map(factionRows.map((row) => [row.id, row]));
+  return profiles.map((profile) => ({
+    ...profile,
+    party: profile.partyId ? partyMap.get(profile.partyId) ?? null : null,
+    faction: profile.factionId ? factionMap.get(profile.factionId) ?? null : null,
+  }));
+}
+
+/**
+ * Attach a `triggeredBy` name summary to events that already carry a
+ * `triggeredById` (the id itself is already part of the public event shape).
+ */
+export async function attachEventActors<T extends { triggeredById: string | null }>(
+  db: Database,
+  events: T[],
+): Promise<(T & { triggeredBy: { id: string; characterName: string | null; discordUsername: string } | null })[]> {
+  const actorIds = [...new Set(events.map((e) => e.triggeredById).filter((x): x is string => !!x))];
+  const actorRows = actorIds.length
+    ? await db
+        .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
+        .from(players)
+        .where(inArray(players.id, actorIds))
+    : [];
+  const actorMap = new Map(actorRows.map((row) => [row.id, row]));
+  return events.map((event) => ({
+    ...event,
+    triggeredBy: event.triggeredById ? actorMap.get(event.triggeredById) ?? null : null,
+  }));
+}
+
 export function sanitizePlayerEvents(
   events: PlayerEvent[],
   viewer?: PlayerPrivacyViewer,

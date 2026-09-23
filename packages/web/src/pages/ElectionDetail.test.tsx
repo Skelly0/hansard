@@ -29,6 +29,8 @@ vi.mock('../api/hooks/useVoting', () => ({
   useNpcConfirm: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useWithdrawCandidate: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useRegisterCandidate: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCastBallot: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useElectionEligibility: () => ({ data: { eligible: false, reason: 'Already voted' }, isLoading: false }),
   hasTalliedResults: (res: any): boolean =>
     !!res && 'finalTallies' in res && res.finalTallies !== undefined,
   isSealedOpenResults: (res: any): boolean => !!res && res.sealed === true,

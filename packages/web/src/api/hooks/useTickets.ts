@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -17,7 +17,7 @@ export interface Ticket {
   id: string;
   number: number;
   categoryId: string;
-  category?: TicketCategory;
+  category?: Pick<TicketCategory, 'id' | 'name'> & Partial<TicketCategory>;
   createdById: string;
   createdBy?: { id: string; characterName: string; discordUsername: string };
   assignedToId?: string;
@@ -66,10 +66,13 @@ export interface TicketDetail extends Ticket {
 
 export interface TicketMetrics {
   openCount: number;
-  avgResponseTimeMs: number;
-  resolvedThisWeek: number;
-  byCategory: { categoryId: string; categoryName: string; count: number }[];
-  byPriority: Record<string, number>;
+  inProgressCount: number;
+  resolvedToday: number;
+  avgResponseTimeMs: number | null;
+  /** Live (not resolved/closed) tickets per category. */
+  byCategory?: { categoryId: string; categoryName: string; count: number }[];
+  /** Live (not resolved/closed) tickets per priority. */
+  byPriority?: Record<string, number>;
 }
 
 interface TicketFilters {
@@ -98,6 +101,9 @@ export function useTickets(filters?: TicketFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['tickets', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: Ticket[]; total: number }>(`/tickets${qs ? `?${qs}` : ''}`),
   });
 }

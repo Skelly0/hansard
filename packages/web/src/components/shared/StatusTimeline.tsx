@@ -28,16 +28,16 @@ export function StatusTimeline({
 }: StatusTimelineProps) {
   if (horizontal) {
     return (
-      <div className={`flex items-start gap-0 overflow-x-auto ${className}`}>
+      <ol className={`flex items-start gap-0 overflow-x-auto pb-1 ${className}`} aria-label="Progress">
         {stages.map((stage, i) => {
           const isPast = i < currentIndex;
           const isCurrent = i === currentIndex;
           const isFuture = i > currentIndex;
 
           return (
-            <div key={stage.key} className="flex items-center">
+            <li key={stage.key} className="flex items-center" aria-current={isCurrent ? 'step' : undefined}>
               {/* Stage */}
-              <div className="flex flex-col items-center min-w-[80px]">
+              <div className="flex flex-col items-center min-w-[88px] px-1">
                 {/* Dot */}
                 <div className="relative flex items-center justify-center">
                   <div
@@ -46,7 +46,7 @@ export function StatusTimeline({
                         ? 'bg-accent-primary border-accent-primary animate-pulse-subtle'
                         : isPast
                         ? 'bg-text-tertiary border-text-tertiary'
-                        : 'bg-transparent border-border-subtle'
+                        : 'bg-card border-border-strong'
                     }`}
                   />
                 </div>
@@ -57,14 +57,14 @@ export function StatusTimeline({
                       ? 'text-text-primary'
                       : isPast
                       ? 'text-text-tertiary'
-                      : 'text-border-subtle'
+                      : 'text-text-tertiary opacity-70'
                   }`}
                 >
                   {stage.label}
                 </span>
                 {stage.detail && (
                   <span className={`font-mono text-xs mt-0.5 text-center ${
-                    isFuture ? 'text-border-subtle' : 'text-text-tertiary'
+                    isFuture ? 'text-text-tertiary opacity-70' : 'text-text-tertiary'
                   }`}>
                     {stage.detail}
                   </span>
@@ -78,10 +78,10 @@ export function StatusTimeline({
                   }`}
                 />
               )}
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ol>
     );
   }
 
@@ -103,7 +103,7 @@ export function StatusTimeline({
                     ? 'bg-accent-primary border-accent-primary animate-pulse-subtle'
                     : isPast
                     ? 'bg-text-tertiary border-text-tertiary'
-                    : 'bg-transparent border-border-subtle'
+                    : 'bg-card border-border-strong'
                 }`}
               />
               {i < stages.length - 1 && (
@@ -122,14 +122,14 @@ export function StatusTimeline({
                     ? 'text-text-primary'
                     : isPast
                     ? 'text-text-tertiary'
-                    : 'text-border-subtle'
+                    : 'text-text-tertiary opacity-70'
                 }`}
               >
                 {stage.label}
               </span>
               {stage.detail && (
                 <span className={`block font-mono text-xs ${
-                  isFuture ? 'text-border-subtle' : 'text-text-tertiary'
+                  isFuture ? 'text-text-tertiary opacity-70' : 'text-text-tertiary'
                 }`}>
                   {stage.detail}
                 </span>

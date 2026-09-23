@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -59,7 +59,7 @@ export interface BillStatusEntry {
   fromStatus?: string;
   toStatus: string;
   changedById: string;
-  changedBy?: { id: string; characterName: string };
+  changedBy?: { id: string; characterName: string | null; discordUsername?: string };
   notes?: string;
   simTick?: number;
   simDate?: string;
@@ -85,7 +85,8 @@ type LegacyBillVoterApiRow = Omit<BillVoter, 'playerId' | 'characterName'> & {
 };
 
 export interface BillDetail extends Bill {
-  statusLog: BillStatusEntry[];
+  /** Not embedded by `GET /bills/:slug`; use `useBillStatusLog`. */
+  statusLog?: BillStatusEntry[];
   voters?: BillVoter[];
 }
 
@@ -115,6 +116,9 @@ export function useBills(filters?: BillFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['bills', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: Bill[]; total: number }>(`/bills${qs ? `?${qs}` : ''}`),
   });
 }

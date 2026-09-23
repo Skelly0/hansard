@@ -22,7 +22,9 @@ export interface TimeAdvanceEntry {
   fromDate: string;
   toDate: string;
   advancedById: string;
-  advancedBy?: { id: string; characterName: string };
+  advancedBy?: { id: string; characterName: string | null; discordUsername?: string } | null;
+  /** Staff-only: character names for the player ids in `summary`. */
+  playerNames?: Record<string, string>;
   summary?: {
     deaths: string[];
     pendingDeaths?: string[];

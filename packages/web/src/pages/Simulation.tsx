@@ -19,16 +19,14 @@ import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal } from '../components/shared/Modal';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { PageHeader } from '../components/shared/PageHeader';
+import { ConfirmModal } from '../components/shared/Modal';
+import { formatSimDate } from '../lib/format';
 
 // ---- Helpers ----
 
-function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  });
-}
+/** Simulation dates may be ISO (`2075-01-01`) or freeform (`Year 4, Month 3`). */
+const formatDate = (simDate: string) => formatSimDate(simDate);
 
 function formatDateTime(dateString: string): string {
   return new Date(dateString).toLocaleDateString('en-GB', {
@@ -109,6 +107,8 @@ function ControlsCard() {
   const [ticks, setTicks] = useState(1);
   const [showPreview, setShowPreview] = useState(false);
   const [notes, setNotes] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const { data: clock } = useSimulationClock();
 
   const advanceTime = useAdvanceTime();
   const { data: preview, isLoading: previewLoading } = useAdvancePreview(
@@ -123,9 +123,11 @@ function ControlsCard() {
           setNotes('');
           setShowPreview(false);
         },
+        onSettled: () => setConfirming(false),
       },
     );
   };
+  const unit = clock?.tickUnit ?? 'tick';
 
   return (
     <div className="space-y-4 mb-6">
@@ -141,7 +143,7 @@ function ControlsCard() {
               max={100}
               value={ticks}
               onChange={(e) => setTicks(Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-24 bg-card border border-border-subtle rounded-card px-3 py-1.5 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary"
+              className="field w-24 font-mono"
             />
           </div>
           <div className="flex-1 min-w-[200px]">
@@ -151,7 +153,7 @@ function ControlsCard() {
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Optional notes..."
-              className="w-full bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-primary"
+              className="field w-full"
             />
           </div>
           <div className="flex items-center gap-3">
@@ -166,14 +168,44 @@ function ControlsCard() {
             </label>
             <button
               className="btn-primary"
-              onClick={handleAdvance}
-              disabled={advanceTime.isPending}
+              onClick={() => setConfirming(true)}
+              disabled={advanceTime.isPending || clock?.isPaused}
+              title={clock?.isPaused ? 'Unpause the clock before advancing' : undefined}
             >
-              {advanceTime.isPending ? 'Advancing...' : 'Advance Time'}
+              {advanceTime.isPending ? 'Advancing…' : 'Advance Time'}
             </button>
           </div>
         </div>
+        {clock?.isPaused && (
+          <p className="text-body-sm text-status-pending mt-3">The clock is paused. Unpause it with <code className="font-mono">/time unpause</code> before advancing.</p>
+        )}
+        {advanceTime.isError && (
+          <p role="alert" className="text-body-sm text-status-rejected mt-3">
+            {(advanceTime.error as Error)?.message ?? 'Could not advance time.'}
+          </p>
+        )}
       </div>
+
+      <ConfirmModal
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        onConfirm={handleAdvance}
+        pending={advanceTime.isPending}
+        variant="danger"
+        title={`Advance ${ticks} ${unit}${ticks === 1 ? '' : 's'}?`}
+        confirmLabel="Advance the clock"
+        message={
+          <>
+            <p className="mb-2">
+              Every living character ages, and ailment and death rolls are made for each of them.
+              This cannot be undone.
+            </p>
+            {!showPreview && (
+              <p className="text-body-sm text-text-tertiary">Tip: tick “Preview” first to see the likely outcome.</p>
+            )}
+          </>
+        }
+      />
 
       {/* Preview results */}
       {showPreview && (
@@ -377,12 +409,14 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
   const ailments = entry.summary?.ailments ?? [];
   const recoveries = entry.summary?.recoveries ?? [];
   const aged = entry.summary?.aged ?? 0;
+  // Staff history resolves summary player ids to names; fall back to the id.
+  const nameOf = (id: string) => entry.playerNames?.[id] ?? id;
 
   return (
     <div className="card border-l-accent-simulation">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
         {/* Date range */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-mono text-sm text-text-primary">
             {formatDate(entry.fromDate)}
           </span>
@@ -397,7 +431,7 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
 
         {/* Who advanced */}
         <span className="text-body-sm text-text-tertiary">
-          by {entry.advancedBy?.characterName || 'System'}
+          by {entry.advancedBy?.characterName || entry.advancedBy?.discordUsername || 'System'}
         </span>
       </div>
 
@@ -436,29 +470,29 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
       {/* Death / ailment / recovery names */}
       {deaths.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {deaths.map((name) => (
-            <Tag key={name} color="deceased">{name}</Tag>
+          {deaths.map((id) => (
+            <Tag key={id} color="deceased">{nameOf(id)}</Tag>
           ))}
         </div>
       )}
       {pendingDeaths.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {pendingDeaths.map((name) => (
-            <Tag key={name} color="rejected">{name}</Tag>
+          {pendingDeaths.map((id) => (
+            <Tag key={id} color="rejected">{nameOf(id)}</Tag>
           ))}
         </div>
       )}
       {ailments.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {ailments.map((name) => (
-            <Tag key={name} color="pending">{name}</Tag>
+          {ailments.map((id) => (
+            <Tag key={id} color="pending">{nameOf(id)}</Tag>
           ))}
         </div>
       )}
       {recoveries.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {recoveries.map((name) => (
-            <Tag key={name} color="passed">{name}</Tag>
+          {recoveries.map((id) => (
+            <Tag key={id} color="passed">{nameOf(id)}</Tag>
           ))}
         </div>
       )}
@@ -487,15 +521,11 @@ export function Simulation() {
   if (isLoading) return <PageSkeleton />;
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Simulation</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Time, mortality, and the march of seasons
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Simulation"
+        subtitle="Time, mortality, and the march of seasons"
+      />
 
       {/* Clock display */}
       <ClockHeader />
@@ -532,7 +562,7 @@ function PlayerHealthControls() {
 
   const heal = useHealCharacter();
 
-  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  const fc = 'field w-full';
 
   return (
     <div className="card border-l-accent-simulation mb-6">
@@ -700,7 +730,7 @@ function AilmentModal({
     }
   };
 
-  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  const fc = 'field w-full';
 
   return (
     <Modal
@@ -729,7 +759,7 @@ function AilmentModal({
               <button
                 key={s}
                 onClick={() => setSeverity(s)}
-                className={`px-3 py-1.5 rounded-card text-body-sm border transition-colors duration-150 ${severity === s ? 'border-accent-simulation bg-accent-simulation/10 text-accent-simulation font-medium' : 'border-border-subtle text-text-tertiary hover:border-border-default'}`}
+                className={`px-3 py-1.5 rounded-card text-body-sm border transition-colors duration-150 ${severity === s ? 'border-accent-simulation bg-accent-simulation/10 text-accent-simulation font-medium' : 'border-border-subtle text-text-tertiary hover:border-border'}`}
               >
                 {s}
               </button>
@@ -787,7 +817,7 @@ function KillModal({
     }
   };
 
-  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  const fc = 'field w-full';
 
   return (
     <Modal

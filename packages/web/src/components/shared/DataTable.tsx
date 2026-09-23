@@ -1,4 +1,5 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, type KeyboardEvent } from 'react';
+import { useIsWide } from '../../hooks/useMediaQuery';
 
 export interface Column<T> {
   key: string;
@@ -11,28 +12,40 @@ export interface Column<T> {
   align?: 'left' | 'center' | 'right';
   /** Minimum width */
   minWidth?: string;
+  /** On phones this column is the card's heading (defaults to the `title` column, else the first). */
+  primary?: boolean;
+  /** Leave this column out of the stacked phone layout. */
+  hideOnMobile?: boolean;
 }
 
 interface DataTableProps<T> {
   columns: Column<T>[];
   data: T[];
-  /** Callback when a row is clicked */
+  /** Callback when a row is clicked (or activated with Enter/Space) */
   onRowClick?: (row: T) => void;
   /** Row key accessor */
   rowKey: (row: T) => string;
   /** Empty state message */
-  emptyMessage?: string;
+  emptyMessage?: ReactNode;
   /** Additional class on the wrapper */
   className?: string;
+  /** Accessible table caption (visually hidden). */
+  caption?: string;
+}
+
+function cellValue<T>(col: Column<T>, row: T, index: number): ReactNode {
+  if (col.render) return col.render(row, index);
+  const raw = (row as Record<string, unknown>)[col.key];
+  return raw === null || raw === undefined || raw === '' ? '—' : String(raw);
 }
 
 /**
  * Clean data table following the Hansard design system:
- * - No alternating row backgrounds
- * - 1px bottom border per row
+ * - No alternating row backgrounds, 1px hairline per row
  * - Column headers in uppercase small Lora (text-label-ui)
  * - Monospace for number columns
- * - Generous 12px vertical padding
+ * - Below `md` the rows become stacked record cards so nothing is squeezed
+ *   into unreadable columns on a phone.
  */
 export function DataTable<T>({
   columns,
@@ -41,22 +54,80 @@ export function DataTable<T>({
   rowKey,
   emptyMessage = 'No records found.',
   className = '',
+  caption,
 }: DataTableProps<T>) {
+  const isWide = useIsWide();
+
   const alignClass = (align?: string) => {
     if (align === 'center') return 'text-center';
     if (align === 'right') return 'text-right';
     return 'text-left';
   };
 
+  const activate = (row: T) => (e: KeyboardEvent) => {
+    if (!onRowClick) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onRowClick(row);
+    }
+  };
+
+  if (data.length === 0) {
+    return (
+      <div className={`text-body text-text-tertiary py-10 text-center italic ${className}`}>
+        {emptyMessage}
+      </div>
+    );
+  }
+
+  if (!isWide) {
+    const primaryIndex = Math.max(
+      0,
+      columns.findIndex((c) => c.primary) >= 0
+        ? columns.findIndex((c) => c.primary)
+        : columns.findIndex((c) => c.key === 'title'),
+    );
+    const primary = columns[primaryIndex];
+    const rest = columns.filter((c, i) => i !== primaryIndex && !c.hideOnMobile);
+
+    return (
+      <ul className={`divide-y divide-border-subtle ${className}`} aria-label={caption}>
+        {data.map((row, rowIdx) => (
+          <li
+            key={rowKey(row)}
+            className={`py-3 first:pt-0 last:pb-0 ${onRowClick ? 'cursor-pointer active:bg-hover rounded-card' : ''}`}
+            onClick={onRowClick ? () => onRowClick(row) : undefined}
+            onKeyDown={onRowClick ? activate(row) : undefined}
+            tabIndex={onRowClick ? 0 : undefined}
+          >
+            <div className="text-body-sm text-text-primary mb-1.5">{cellValue(primary, row, rowIdx)}</div>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 items-baseline">
+              {rest.map((col) => (
+                <div key={col.key} className="contents">
+                  <dt className="text-label-ui text-text-tertiary">{col.header}</dt>
+                  <dd className={`min-w-0 ${col.mono ? 'font-mono text-[0.8125rem]' : 'text-body-sm'} text-text-primary`}>
+                    {cellValue(col, row, rowIdx)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
   return (
     <div className={`overflow-x-auto ${className}`}>
       <table className="w-full">
+        {caption && <caption className="sr-only">{caption}</caption>}
         <thead>
           <tr className="border-b border-border">
             {columns.map((col) => (
               <th
                 key={col.key}
-                className={`text-label-ui text-text-tertiary pb-3 pr-4 font-medium ${alignClass(col.align)}`}
+                scope="col"
+                className={`text-label-ui text-text-tertiary pb-3 pr-4 font-medium whitespace-nowrap ${alignClass(col.align)}`}
                 style={col.minWidth ? { minWidth: col.minWidth } : undefined}
               >
                 {col.header}
@@ -65,41 +136,30 @@ export function DataTable<T>({
           </tr>
         </thead>
         <tbody>
-          {data.length === 0 ? (
-            <tr>
-              <td
-                colSpan={columns.length}
-                className="text-body text-text-tertiary py-8 text-center italic"
-              >
-                {emptyMessage}
-              </td>
+          {data.map((row, rowIdx) => (
+            <tr
+              key={rowKey(row)}
+              className={`border-b border-border-subtle last:border-0 ${
+                onRowClick
+                  ? 'cursor-pointer hover:bg-hover focus-visible:bg-hover transition-colors'
+                  : ''
+              }`}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+              onKeyDown={onRowClick ? activate(row) : undefined}
+              tabIndex={onRowClick ? 0 : undefined}
+            >
+              {columns.map((col) => (
+                <td
+                  key={col.key}
+                  className={`py-3 pr-4 align-middle ${
+                    col.mono ? 'font-mono text-[0.8125rem] leading-[1.5]' : 'text-body-sm'
+                  } text-text-primary ${alignClass(col.align)}`}
+                >
+                  {cellValue(col, row, rowIdx)}
+                </td>
+              ))}
             </tr>
-          ) : (
-            data.map((row, rowIdx) => (
-              <tr
-                key={rowKey(row)}
-                className={`border-b border-border-subtle ${
-                  onRowClick
-                    ? 'cursor-pointer hover:bg-hover transition-colors'
-                    : ''
-                }`}
-                onClick={() => onRowClick?.(row)}
-              >
-                {columns.map((col) => (
-                  <td
-                    key={col.key}
-                    className={`py-3 pr-4 ${
-                      col.mono ? 'font-mono text-[0.8125rem] leading-[1.5]' : 'text-body-sm'
-                    } text-text-primary ${alignClass(col.align)}`}
-                  >
-                    {col.render
-                      ? col.render(row, rowIdx)
-                      : String((row as Record<string, unknown>)[col.key] ?? '')}
-                  </td>
-                ))}
-              </tr>
-            ))
-          )}
+          ))}
         </tbody>
       </table>
     </div>

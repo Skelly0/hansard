@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -6,9 +6,9 @@ import { api } from '../client';
 export interface ModAction {
   id: string;
   targetPlayerId: string;
-  targetPlayer?: { id: string; characterName: string; discordUsername: string };
+  targetPlayer?: { id: string; characterName: string | null; discordUsername: string } | null;
   moderatorId: string;
-  moderator?: { id: string; characterName: string; discordUsername: string };
+  moderator?: { id: string; characterName: string | null; discordUsername: string } | null;
   type: 'note' | 'verbal_warning' | 'formal_warning' | 'mute' | 'temporary_suspension' | 'permanent_ban';
   reason: string;
   internalNotes?: string;
@@ -35,6 +35,8 @@ export interface ModStats {
   totalActions: number;
   activeActions: number;
   pendingAppeals: number;
+  /** Warnings (verbal + formal) issued in the last 7 days. */
+  warningsThisWeek?: number;
   byType: Record<string, number>;
   recentActions: ModAction[];
 }
@@ -59,6 +61,9 @@ export function useModActions(filters?: ModActionFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['moderation', 'actions', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: ModAction[]; total: number }>(`/moderation/actions${qs ? `?${qs}` : ''}`),
   });
 }

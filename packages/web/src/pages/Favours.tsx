@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router';
 import { useState, useMemo, useEffect } from 'react';
 import {
   useFavourCategories,
@@ -17,6 +18,7 @@ import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal, ConfirmModal } from '../components/shared/Modal';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { PageHeader } from '../components/shared/PageHeader';
 
 // ---- Types for the matrix view ----
 
@@ -32,9 +34,9 @@ interface PlayerRow {
 function amberTint(value: number, maxValue: number): React.CSSProperties {
   if (value <= 0 || maxValue <= 0) return {};
   const intensity = Math.min(value / maxValue, 1);
-  // Amber tint from transparent to warm amber at 25% opacity
-  const alpha = Math.round(intensity * 25);
-  return { backgroundColor: `rgba(196, 135, 59, ${alpha / 100})` };
+  // Favours accent from transparent up to 28% — theme-aware via the token.
+  const pct = Math.round(intensity * 28);
+  return { backgroundColor: `color-mix(in srgb, var(--c-favours) ${pct}%, transparent)` };
 }
 
 function formatDate(dateString: string): string {
@@ -125,8 +127,15 @@ function StaffOverview() {
       key: 'characterName',
       header: 'Player',
       minWidth: '160px',
+      primary: true,
       render: (row) => (
-        <span className="font-display font-medium text-text-primary">{row.characterName}</span>
+        <Link
+          to="/players/$id"
+          params={{ id: row.playerId }}
+          className="font-display font-medium text-text-primary hover:text-accent-primary transition-colors"
+        >
+          {row.characterName}
+        </Link>
       ),
     },
     ...sortedCategories.map(
@@ -230,7 +239,7 @@ function MyFavours({ playerId }: { playerId: string }) {
                     className="h-full rounded transition-all duration-400 ease-out"
                     style={{
                       width: `${Math.max((Math.abs(bar.value) / maxBar) * 100, 2)}%`,
-                      backgroundColor: '#C4873B',
+                      backgroundColor: 'var(--c-favours)',
                     }}
                   />
                 </div>
@@ -582,7 +591,7 @@ function CategoryFormFields({
   setForm: (f: CategoryFormState) => void;
   showActiveToggle: boolean;
 }) {
-  const fieldClass = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  const fieldClass = 'field w-full';
   return (
     <>
       <div className="grid grid-cols-2 gap-3">
@@ -685,18 +694,14 @@ export function Favours() {
   const playerId = user?.id ?? '';
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Favours</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Favour balances and transaction ledger
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Favours"
+        subtitle="Who owes whom — balances and the transaction ledger."
+      />
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-border-subtle">
+      <div className="flex gap-1 mb-6 border-b border-border-subtle overflow-x-auto" role="tablist" aria-label="Favour views">
         {isStaff && (
           <TabButton active={tab === 'staff'} onClick={() => setTab('staff')}>
             Staff Overview
@@ -743,9 +748,11 @@ function TabButton({
 }) {
   return (
     <button
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={`
-        px-4 py-2.5 text-body-sm font-medium transition-colors relative
+        px-4 py-2.5 text-body-sm font-medium transition-colors relative whitespace-nowrap
         ${active
           ? 'text-text-primary'
           : 'text-text-tertiary hover:text-text-secondary'
@@ -754,7 +761,7 @@ function TabButton({
     >
       {children}
       {active && (
-        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-favours" />
+        <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-favours" aria-hidden="true" />
       )}
     </button>
   );

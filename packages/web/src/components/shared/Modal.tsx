@@ -1,63 +1,152 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { Icon } from './Icon';
 
-interface ModalProps {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  /** Tailwind bg class for the top accent rail (e.g. "bg-accent-primary") */
-  railClass?: string;
-  children: ReactNode;
-  footer?: ReactNode;
-  /** Optional sizing override */
-  maxWidth?: string;
-}
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
- * Generic warm-serif modal — top accent rail, soft shadow, escape closes.
- * Mirrors the look of ModActionModal so admin dialogs feel consistent.
+ * Dialog behaviour shared by every modal: Escape closes, Tab is trapped inside
+ * the panel, the page behind stops scrolling, the first field (or the panel)
+ * takes focus on open, and focus returns to the trigger on close.
  */
-export function Modal({
-  open,
-  onClose,
-  title,
-  railClass = 'bg-accent-primary',
-  children,
-  footer,
-  maxWidth = 'max-w-md',
-}: ModalProps) {
+export function useDialogBehaviour(
+  open: boolean,
+  onClose: () => void,
+  panelRef: React.RefObject<HTMLElement>,
+) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
 
-  if (!open) return null;
+    // Prefer an explicit autofocus target, then the first form field, then
+    // the panel itself — never the close button, which is easy to hit by
+    // accident with Enter.
+    const initial =
+      panel?.querySelector<HTMLElement>('[autofocus], [data-autofocus]') ??
+      panel?.querySelector<HTMLElement>('input:not([type="hidden"]):not([disabled]), textarea, select') ??
+      panel;
+    initial?.focus({ preventScroll: true });
+
+    const { overflow } = document.body.style;
+    document.body.style.overflow = 'hidden';
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !panel) return;
+      const focusables = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (el) => !el.hasAttribute('aria-hidden'),
+      );
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === panel)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = overflow;
+      previouslyFocused?.focus?.({ preventScroll: true });
+    };
+  }, [open, panelRef]);
+}
+
+interface DialogFrameProps {
+  onClose: () => void;
+  title: ReactNode;
+  /** Small mono label above the title (e.g. the action type). */
+  eyebrow?: ReactNode;
+  /** Tailwind bg class for the top accent rail (e.g. "bg-accent-primary") */
+  railClass?: string;
+  maxWidth?: string;
+  children: ReactNode;
+  footer?: ReactNode;
+}
+
+/** The visual shell of a dialog. Only mounted while open. */
+function DialogFrame({
+  onClose,
+  title,
+  eyebrow,
+  railClass = 'bg-accent-primary',
+  maxWidth = 'max-w-md',
+  children,
+  footer,
+}: DialogFrameProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  useDialogBehaviour(true, onClose, panelRef);
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4 animate-fade-in"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className={`bg-card rounded-card shadow-modal-warm w-full ${maxWidth} overflow-hidden`}>
-        <div className={`h-[3px] ${railClass}`} />
-        <div className="p-6">
-          <div className="flex items-baseline justify-between mb-5">
-            <h2 className="text-heading-1 text-text-primary">{title}</h2>
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className={`bg-card rounded-t-card sm:rounded-card shadow-modal-warm w-full ${maxWidth} max-h-[92vh] flex flex-col overflow-hidden focus:outline-none`}
+      >
+        <div className={`h-[3px] flex-shrink-0 ${railClass}`} />
+        <div className="p-5 sm:p-6 overflow-y-auto">
+          <div className="flex items-start justify-between gap-4 mb-5">
+            <div className="min-w-0">
+              {eyebrow && (
+                <div className="text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
+                  {eyebrow}
+                </div>
+              )}
+              <h2 id={titleId} className="text-heading-1 text-text-primary">{title}</h2>
+            </div>
             <button
+              type="button"
               onClick={onClose}
-              className="text-text-tertiary hover:text-text-primary text-xl leading-none transition-colors duration-150"
+              className="-mr-1 -mt-1 p-1.5 rounded-card text-text-tertiary hover:text-text-primary hover:bg-hover transition-colors duration-150"
               aria-label="Close"
             >
-              ×
+              <Icon name="close" size={18} />
             </button>
           </div>
           <div>{children}</div>
-          {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
+          {footer && <div className="mt-5 flex flex-wrap justify-end gap-2">{footer}</div>}
         </div>
       </div>
     </div>
   );
+}
+
+interface ModalProps extends Omit<DialogFrameProps, 'title'> {
+  open: boolean;
+  title: ReactNode;
+}
+
+/**
+ * Generic warm-serif modal — top accent rail, soft shadow, escape closes,
+ * focus trapped while open. On phones it docks to the bottom as a sheet.
+ */
+export function Modal({ open, ...props }: ModalProps) {
+  if (!open) return null;
+  return <DialogFrame {...props} />;
 }
 
 interface ConfirmModalProps {
@@ -83,9 +172,7 @@ export function ConfirmModal({
   pending = false,
 }: ConfirmModalProps) {
   const rail = variant === 'danger' ? 'bg-status-rejected' : 'bg-accent-primary';
-  const btn = variant === 'danger'
-    ? 'bg-status-rejected hover:bg-status-rejected/90 text-text-inverse'
-    : 'btn-primary';
+  const btn = variant === 'danger' ? 'btn-danger' : 'btn-primary';
 
   return (
     <Modal
@@ -95,11 +182,12 @@ export function ConfirmModal({
       railClass={rail}
       footer={
         <>
-          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
           <button
+            type="button"
             onClick={onConfirm}
             disabled={pending}
-            className={`px-4 py-1.5 rounded-card font-medium disabled:opacity-50 transition-colors duration-150 ${btn}`}
+            className={btn}
           >
             {pending ? 'Working…' : confirmLabel}
           </button>

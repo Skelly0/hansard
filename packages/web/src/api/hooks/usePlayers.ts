@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -87,6 +87,9 @@ export function usePlayers(filters?: PlayerFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['players', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: Player[]; total: number }>(`/players${qs ? `?${qs}` : ''}`),
     enabled: filters !== undefined,
   });
@@ -168,6 +171,19 @@ export function useChangeParty() {
  * Convenience for player typeahead. Disabled when search is empty/short
  * to avoid spamming the API on every keystroke.
  */
+/**
+ * Typeahead lookup. Idle (no request, no results) until at least two
+ * characters are typed — an empty search used to fetch the whole roster.
+ */
 export function useSearchPlayers(search: string, limit = 8) {
-  return usePlayers(search.length >= 2 ? { search, limit } : undefined);
+  const term = search.trim();
+  return useQuery({
+    queryKey: ['players', 'search', term, limit],
+    queryFn: () => api.get<{ data: Player[]; total: number }>(
+      `/players?search=${encodeURIComponent(term)}&limit=${limit}`,
+    ),
+    enabled: term.length >= 2,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  });
 }

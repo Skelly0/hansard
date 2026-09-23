@@ -1,4 +1,9 @@
+import { useState } from 'react';
+import { Link } from '@tanstack/react-router';
 import { usePlayers, type Player } from '../api/hooks/usePlayers';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { isSafeHttpUrl } from '../lib/url';
+import { formatSimDate } from '../lib/format';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
@@ -38,12 +43,17 @@ function initials(name?: string): string {
 // ---- Portrait ----
 
 function ObituaryPortrait({ player }: { player: Player }) {
-  if (player.characterPortraitUrl) {
+  // Discord attachment URLs expire, so fall back to initials on a load error.
+  const [failed, setFailed] = useState(false);
+  if (player.characterPortraitUrl && !failed && isSafeHttpUrl(player.characterPortraitUrl)) {
     return (
-      <div className="w-20 h-20 rounded-full overflow-hidden flex-shrink-0 border border-border-subtle">
+      <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden flex-shrink-0 border border-border-subtle">
         <img
           src={player.characterPortraitUrl}
           alt={player.characterName || 'Portrait'}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
           className="w-full h-full object-cover grayscale"
         />
       </div>
@@ -52,7 +62,7 @@ function ObituaryPortrait({ player }: { player: Player }) {
 
   // Serif initials circle
   return (
-    <div className="w-20 h-20 rounded-full flex-shrink-0 bg-inset border border-border-subtle flex items-center justify-center">
+    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full flex-shrink-0 bg-inset border border-border-subtle flex items-center justify-center" aria-hidden="true">
       <span className="font-display text-xl text-text-tertiary select-none">
         {initials(player.characterName)}
       </span>
@@ -78,7 +88,7 @@ function ObituaryCard({ player }: { player: Player }) {
 
   return (
     <article className="card border-l-accent-graveyard">
-      <div className="flex gap-5">
+      <div className="flex gap-4 sm:gap-5">
         {/* Portrait */}
         <ObituaryPortrait player={player} />
 
@@ -86,12 +96,17 @@ function ObituaryCard({ player }: { player: Player }) {
         <div className="flex-1 min-w-0">
           {/* Name */}
           <h2 className="text-heading-1 text-text-primary mb-1">
-            {player.characterName || player.discordUsername}
+            <Link to="/players/$id" params={{ id: player.id }} className="hover:text-accent-primary transition-colors">
+              {player.characterName || player.discordUsername}
+            </Link>
           </h2>
 
           {/* Dates */}
           <p className="text-mono text-text-tertiary mb-3">
             {birthYear} &mdash; {deathYear}
+            {player.deathDate && (
+              <span className="block sm:inline sm:ml-3 text-xs">died {formatSimDate(player.deathDate)}</span>
+            )}
           </p>
 
           {/* Cause of death & age */}
@@ -190,12 +205,13 @@ function buildObituary(
 // ---- Main Page ----
 
 export function Graveyard() {
+  useDocumentTitle('Graveyard');
   const { data, isLoading, isError, error } = usePlayers({ alive: false, limit: 100 });
 
   if (isLoading) return <PageSkeleton />;
   if (isError) {
     return (
-      <div className="p-8 max-w-3xl mx-auto">
+      <div className="page max-w-3xl mx-auto">
         <QueryErrorState title="Could not load graveyard" error={error} />
       </div>
     );
@@ -209,7 +225,7 @@ export function Graveyard() {
   });
 
   return (
-    <div className="p-8 max-w-3xl mx-auto">
+    <div className="page max-w-3xl mx-auto">
       {/* Header */}
       <header className="text-center mb-10">
         <h1 className="text-display text-text-primary mb-2">In Memoriam</h1>

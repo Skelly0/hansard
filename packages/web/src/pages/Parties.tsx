@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import {
   useParties,
   useCreateParty,
@@ -12,11 +12,9 @@ import { useAuth } from '../api/hooks/useAuth';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
-
-function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-}
+import { Modal } from '../components/shared/Modal';
+import { PageHeader, EmptyState } from '../components/shared/PageHeader';
+import { formatDate } from '../lib/format';
 
 function ColourSwatch({ hex }: { hex: string | null }) {
   if (!hex) return null;
@@ -73,32 +71,30 @@ function PartyFormModal({
   errorText: string | null;
 }) {
   const [form, setForm] = useState<PartyFormState>(initial);
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const update = <K extends keyof PartyFormState>(k: K, v: PartyFormState[K]) =>
     setForm((prev) => ({ ...prev, [k]: v }));
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <Modal
+      open
+      onClose={onClose}
+      title={isEdit ? 'Edit Party' : 'Found a Party'}
+      railClass="bg-accent-offices"
+      maxWidth="max-w-lg"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button
+            onClick={() => onSubmit(form)}
+            disabled={isPending || !form.name.trim()}
+            className="btn-primary"
+          >
+            {isPending ? 'Saving…' : isEdit ? 'Save changes' : 'Found party'}
+          </button>
+        </>
+      }
     >
-      <div ref={dialogRef} className="bg-card rounded-card shadow-modal-warm w-full max-w-lg overflow-hidden">
-        <div className="h-[3px] bg-accent-offices" />
-        <div className="p-6">
-          <div className="flex items-baseline justify-between mb-5">
-            <h2 className="text-heading-1 text-text-primary">
-              {isEdit ? 'Edit Party' : 'Found a Party'}
-            </h2>
-            <button onClick={onClose} className="text-text-tertiary hover:text-text-primary text-xl leading-none">×</button>
-          </div>
-
           <div className="space-y-4">
             <Field label="Name" required>
               <input
@@ -107,7 +103,7 @@ function PartyFormModal({
                 onChange={(e) => update('name', e.target.value)}
                 maxLength={128}
                 autoFocus
-                className="input-base"
+                className="field w-full"
               />
             </Field>
 
@@ -119,18 +115,27 @@ function PartyFormModal({
                   onChange={(e) => update('shortName', e.target.value)}
                   maxLength={16}
                   placeholder="e.g. LDP"
-                  className="input-base"
+                  className="field w-full"
                 />
               </Field>
               <Field label="Colour (hex)">
-                <input
-                  type="text"
-                  value={form.colour}
-                  onChange={(e) => update('colour', e.target.value)}
-                  maxLength={7}
-                  placeholder="#b94a48"
-                  className="input-base font-mono"
-                />
+                <span className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={form.colour}
+                    onChange={(e) => update('colour', e.target.value)}
+                    maxLength={7}
+                    placeholder="#b94a48"
+                    className="field w-full font-mono"
+                  />
+                  <input
+                    type="color"
+                    aria-label="Pick party colour"
+                    value={/^#[0-9a-f]{6}$/i.test(form.colour) ? form.colour : '#b94a48'}
+                    onChange={(e) => update('colour', e.target.value)}
+                    className="h-9 w-10 flex-shrink-0 rounded-card border border-border bg-card cursor-pointer p-0.5"
+                  />
+                </span>
               </Field>
             </div>
 
@@ -140,7 +145,7 @@ function PartyFormModal({
                 onChange={(e) => update('ideology', e.target.value)}
                 rows={2}
                 maxLength={256}
-                className="input-base resize-y"
+                className="field w-full resize-y"
               />
             </Field>
 
@@ -151,7 +156,7 @@ function PartyFormModal({
                   value={form.factionId}
                   onChange={(e) => update('factionId', e.target.value)}
                   placeholder="UUID"
-                  className="input-base font-mono text-xs"
+                  className="field w-full font-mono text-xs"
                 />
               </Field>
               <Field label="Discord Role ID">
@@ -160,63 +165,54 @@ function PartyFormModal({
                   value={form.discordRoleId}
                   onChange={(e) => update('discordRoleId', e.target.value)}
                   placeholder="snowflake"
-                  className="input-base font-mono text-xs"
+                  className="field w-full font-mono text-xs"
                 />
               </Field>
             </div>
 
             <Field label="Access">
-              <label className="flex items-center gap-2 text-body-sm">
+              <span className="flex items-center gap-2 text-body-sm cursor-pointer">
                 <input
                   type="checkbox"
                   checked={form.isInviteOnly}
                   onChange={(e) => update('isInviteOnly', e.target.checked)}
+                  className="accent-accent-offices"
                 />
                 <span>Invite-only</span>
-              </label>
+              </span>
             </Field>
 
             {isEdit && (
               <Field label="Status">
-                <label className="flex items-center gap-2 text-body-sm">
+                <span className="flex items-center gap-2 text-body-sm cursor-pointer">
                   <input
                     type="checkbox"
                     checked={form.active}
                     onChange={(e) => update('active', e.target.checked)}
+                    className="accent-accent-offices"
                   />
                   <span>Active</span>
-                </label>
+                </span>
               </Field>
             )}
           </div>
 
           {errorText && (
-            <p className="text-body-sm text-status-rejected mt-3">{errorText}</p>
+            <p role="alert" className="text-body-sm text-status-rejected mt-3">{errorText}</p>
           )}
-
-          <div className="flex justify-end gap-2 mt-6">
-            <button onClick={onClose} className="btn-secondary">Cancel</button>
-            <button
-              onClick={() => onSubmit(form)}
-              disabled={isPending || !form.name.trim()}
-              className="px-4 py-1.5 rounded-card text-text-inverse font-medium bg-accent-offices hover:bg-accent-offices/90 disabled:opacity-50"
-            >
-              {isPending ? 'Saving…' : isEdit ? 'Save Changes' : 'Found Party'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
-        {label} {required && <span className="text-status-rejected">*</span>}
+      <label className="block">
+        <span className="field-label">
+          {label} {required && <span className="text-status-rejected" aria-hidden="true">*</span>}
+        </span>
+        {children}
       </label>
-      {children}
     </div>
   );
 }
@@ -234,47 +230,33 @@ function DissolveModal({
   isPending: boolean;
   errorText: string | null;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <Modal
+      open
+      onClose={onClose}
+      title={`Dissolve ${party.name}?`}
+      railClass="bg-accent-moderation"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button onClick={onConfirm} disabled={isPending} className="btn-danger">
+            {isPending ? 'Dissolving…' : 'Dissolve'}
+          </button>
+        </>
+      }
     >
-      <div className="bg-card rounded-card shadow-modal-warm w-full max-w-md overflow-hidden">
-        <div className="h-[3px] bg-accent-moderation" />
-        <div className="p-6">
-          <h2 className="text-heading-1 text-text-primary mb-3">Dissolve {party.name}?</h2>
-          <p className="text-body-sm text-text-secondary mb-2">
-            This is a soft delete. The party row stays for history, but{' '}
-            <strong className="text-text-primary">{party.memberCount} active member{party.memberCount === 1 ? '' : 's'}</strong>{' '}
-            will be unassigned and an event log entry written for each.
-          </p>
-          <p className="text-body-sm text-text-tertiary italic mb-4">
-            You can revive the party later by editing it back to active.
-          </p>
-
-          {errorText && (
-            <p className="text-body-sm text-status-rejected mb-3">{errorText}</p>
-          )}
-
-          <div className="flex justify-end gap-2">
-            <button onClick={onClose} className="btn-secondary">Cancel</button>
-            <button
-              onClick={onConfirm}
-              disabled={isPending}
-              className="px-4 py-1.5 rounded-card text-text-inverse font-medium bg-accent-moderation hover:bg-accent-moderation/90 disabled:opacity-50"
-            >
-              {isPending ? 'Dissolving…' : 'Dissolve'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+      <p className="text-body-sm text-text-secondary mb-2">
+        This is a soft delete. The party row stays for history, but{' '}
+        <strong className="text-text-primary">{party.memberCount} active member{party.memberCount === 1 ? '' : 's'}</strong>{' '}
+        will be unassigned and an event log entry written for each.
+      </p>
+      <p className="text-body-sm text-text-tertiary italic">
+        You can revive the party later by editing it back to active.
+      </p>
+      {errorText && (
+        <p role="alert" className="text-body-sm text-status-rejected mt-3">{errorText}</p>
+      )}
+    </Modal>
   );
 }
 
@@ -295,7 +277,7 @@ export function Parties() {
   if (isLoading) return <PageSkeleton />;
   if (isError) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load parties" error={loadError} />
       </div>
     );
@@ -355,42 +337,39 @@ export function Parties() {
   const list = parties ?? [];
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Parties</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Political coalitions, banners, and benches.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-body-sm text-text-secondary">
-            <input
-              type="checkbox"
-              checked={showInactive}
-              onChange={(e) => setShowInactive(e.target.checked)}
-            />
-            <span>Show dissolved</span>
-          </label>
-          {isStaff && (
-            <button
-              onClick={() => { setError(null); setCreating(true); }}
-              className="px-4 py-1.5 rounded-card text-text-inverse font-medium bg-accent-offices hover:bg-accent-offices/90"
-            >
-              + Found Party
-            </button>
-          )}
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Parties"
+        subtitle="Political coalitions, banners, and benches."
+        actions={
+          <>
+            <label className="flex items-center gap-2 text-body-sm text-text-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showInactive}
+                onChange={(e) => setShowInactive(e.target.checked)}
+                className="accent-accent-primary"
+              />
+              <span>Show dissolved</span>
+            </label>
+            {isStaff && (
+              <button
+                onClick={() => { setError(null); setCreating(true); }}
+                className="btn-primary"
+              >
+                Found a party
+              </button>
+            )}
+          </>
+        }
+      />
 
       {list.length === 0 ? (
         <div className="card border-l-accent-offices">
-          <p className="text-body text-text-secondary italic">
-            No parties have been founded yet. The benches sit empty.
-          </p>
+          <EmptyState title="No parties have been founded yet. The benches sit empty." />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
           {list.map((p) => (
             <div
               key={p.id}

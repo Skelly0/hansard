@@ -6,6 +6,9 @@ import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { PageHeader } from '../components/shared/PageHeader';
+import { FilterBar, FilterField } from '../components/shared/FilterBar';
+import { formatDate, humanizeToken, plural, relativeTime } from '../lib/format';
 import type { Election } from '../api/hooks/useVoting';
 
 const ELECTION_STATUSES = [
@@ -69,7 +72,7 @@ function describeOutcome(row: Election): string {
       // 'yea'/'nay' show as themselves, otherwise look up candidate
       if (w === 'yea' || w === 'nay') return w;
       const named = row.candidates?.find((c) => c.playerId === w);
-      return named?.player?.characterName ?? 'winner picked';
+      return named?.player?.characterName ?? named?.player?.discordUsername ?? 'winner declared';
     }
     return `${r.winners.length} winners`;
   }
@@ -84,7 +87,7 @@ export function Voting() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
-  const { data, isLoading, isError, error } = useElections({
+  const { data, isLoading, isError, error, isPlaceholderData } = useElections({
     // Explicit status wins over scope on the server, so only send one.
     status: status !== 'all' ? status : undefined,
     scope: status === 'all' && scope !== 'all' ? scope : undefined,
@@ -93,10 +96,10 @@ export function Voting() {
     limit,
   });
 
-  if (isLoading) return <PageSkeleton />;
-  if (isError) {
+  if (isLoading && !data) return <PageSkeleton />;
+  if (isError && !data) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load votes" error={error} />
       </div>
     );
@@ -110,6 +113,7 @@ export function Voting() {
     {
       key: 'title',
       header: 'Title',
+      primary: true,
       render: (row) => (
         <Link
           to="/voting/$id"
@@ -146,7 +150,7 @@ export function Voting() {
       minWidth: '110px',
       render: (row) => (
         <Tag color={statusToTagColor(row.status)}>
-          {row.status.replace(/_/g, ' ')}
+          {humanizeToken(row.status)}
         </Tag>
       ),
     },
@@ -158,7 +162,7 @@ export function Voting() {
         const outcome = describeOutcome(row);
         if (!outcome) return <span className="text-text-tertiary">—</span>;
         const isFail = outcome === 'failed' || outcome === 'cancelled';
-        const isPass = outcome === 'passed';
+        const isPass = outcome === 'passed' || !['runoff', 'failed', 'cancelled'].includes(outcome);
         return (
           <span
             className={`text-body-sm ${
@@ -173,6 +177,7 @@ export function Voting() {
     {
       key: 'forOffice',
       header: 'Office',
+      hideOnMobile: true,
       render: (row) => (
         <span className="text-body-sm text-text-secondary">
           {row.forOffice?.name || '—'}
@@ -182,6 +187,7 @@ export function Voting() {
     {
       key: 'round',
       header: 'Rnd',
+      hideOnMobile: true,
       mono: true,
       align: 'center',
       minWidth: '50px',
@@ -191,19 +197,20 @@ export function Voting() {
       key: 'votingOpensAt',
       header: 'Opens',
       mono: true,
-      minWidth: '100px',
-      render: (row) => new Date(row.votingOpensAt).toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'short',
-      }),
+      minWidth: '90px',
+      hideOnMobile: true,
+      render: (row) => formatDate(row.votingOpensAt, { withYear: false }),
     },
     {
       key: 'votingClosesAt',
       header: 'Closes',
       mono: true,
       minWidth: '100px',
-      render: (row) => new Date(row.votingClosesAt).toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'short',
-      }),
+      render: (row) => (
+        <span title={new Date(row.votingClosesAt).toLocaleString('en-GB')}>
+          {row.status === 'voting_open' ? relativeTime(row.votingClosesAt) : formatDate(row.votingClosesAt, { withYear: false })}
+        </span>
+      ),
     },
   ];
 
@@ -219,23 +226,21 @@ export function Voting() {
   })();
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Voting</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Elections, referenda, and legislative votes — past and present
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Voting"
+        subtitle={<>Elections, referenda, and legislative votes &mdash; {plural(total, 'vote')}</>}
+      />
 
       {/* Scope tabs — quick presets that override the status dropdown */}
-      <div className="flex flex-wrap gap-2 mb-4 border-b border-border-subtle">
+      <div className="flex flex-wrap gap-1 mb-4 border-b border-border-subtle" role="tablist" aria-label="Vote scope">
         {SCOPE_TABS.map((tab) => {
           const isActive = scope === tab.key && status === 'all';
           return (
             <button
               key={tab.key}
+              role="tab"
+              aria-selected={isActive}
               onClick={() => {
                 setScope(tab.key);
                 setStatus('all');
@@ -254,50 +259,39 @@ export function Voting() {
         })}
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        {/* Status — when set explicitly, overrides scope on the server */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Status</label>
+      <FilterBar>
+        <FilterField label="Status">
           <select
             value={status}
             onChange={(e) => { setStatus(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            className="field"
           >
             {ELECTION_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s === 'all' ? 'All Statuses' : s.replace(/_/g, ' ')}
+                {s === 'all' ? 'All statuses' : humanizeToken(s)}
               </option>
             ))}
           </select>
-        </div>
-
-        {/* Type */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Type</label>
+        </FilterField>
+        <FilterField label="Type">
           <select
             value={type}
             onChange={(e) => { setType(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            className="field"
           >
             {ELECTION_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t === 'all' ? 'All Types' : typeLabel[t] || t}
+                {t === 'all' ? 'All types' : typeLabel[t] || t}
               </option>
             ))}
           </select>
-        </div>
-
-        {total > 0 && (
-          <div className="ml-auto self-center text-label-ui text-text-tertiary">
-            {total} {total === 1 ? 'vote' : 'votes'}
-          </div>
-        )}
-      </div>
+        </FilterField>
+      </FilterBar>
 
       {/* Table */}
-      <div className="card border-l-accent-voting">
+      <div className={`card border-l-accent-voting transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
+          caption="Votes"
           columns={columns}
           data={elections}
           rowKey={(row) => row.id}

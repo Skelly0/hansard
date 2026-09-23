@@ -4,6 +4,8 @@ import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { PageHeader, EmptyState } from '../components/shared/PageHeader';
+import { formatDate, relativeTime } from '../lib/format';
 
 const tierOrder = ['head_of_state', 'head_of_government', 'cabinet', 'legislature', 'regional'];
 const tierLabel: Record<string, string> = {
@@ -27,7 +29,7 @@ export function Offices() {
   if (isLoading) return <PageSkeleton />;
   if (isError) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load offices" error={error} />
       </div>
     );
@@ -53,19 +55,27 @@ export function Offices() {
   }
 
   return (
-    <div className="p-8">
-      <div className="mb-6">
-        <h1 className="text-display">Offices</h1>
-        <p className="text-body-sm text-text-tertiary mt-1">
-          Government positions and their current holders
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Offices"
+        subtitle={(() => {
+          const all = offices ?? [];
+          const vacant = all.filter((o) => (o.currentHolders ?? []).length === 0).length;
+          return <>Government positions and their current holders &mdash; {all.length} offices{vacant > 0 ? `, ${vacant} vacant` : ''}</>;
+        })()}
+      />
+
+      {grouped.length === 0 && (
+        <div className="card border-l-accent-offices">
+          <EmptyState title="No offices have been established yet." />
+        </div>
+      )}
 
       <div className="space-y-8">
         {grouped.map((group) => (
           <div key={group.tier}>
             <h2 className="text-heading-1 text-text-secondary mb-4">{group.label}</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
               {group.offices.map((office) => {
                 const holders = office.currentHolders || [];
                 const vacant = holders.length === 0;
@@ -78,8 +88,8 @@ export function Offices() {
                     }`}
                   >
                     {/* Office name */}
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-display font-semibold text-text-primary">
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <h3 className="font-display font-semibold text-text-primary leading-snug">
                         {office.name}
                       </h3>
                       <Tag color={vacant ? 'closed' : 'active'}>
@@ -112,10 +122,8 @@ export function Offices() {
                                 >
                                   {holderName}
                                 </Link>
-                                <span className="font-mono text-xs text-text-tertiary block">
-                                  Since {new Date(holder.startDate).toLocaleDateString('en-GB', {
-                                    day: 'numeric', month: 'short', year: 'numeric',
-                                  })}
+                                <span className="font-mono text-xs text-text-tertiary block" title={relativeTime(holder.startDate)}>
+                                  Since {formatDate(holder.startDate)}
                                 </span>
                               </div>
                             </div>

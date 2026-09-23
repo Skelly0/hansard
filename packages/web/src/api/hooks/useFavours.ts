@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -102,6 +102,9 @@ export function useAllFavourHistory(categoryId?: string) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['favours', 'history', 'all', categoryId],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<FavourTransaction[]>(`/favours/history${qs ? `?${qs}` : ''}`),
   });
 }

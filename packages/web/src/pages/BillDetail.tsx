@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
 import {
   useBill,
+  useBillStatusLog,
   useBillVoters,
   useBillAmendments,
   useUpdateBillEffects,
@@ -16,6 +17,9 @@ import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { isGoogleDocsHttpUrl } from '../lib/url';
 import { RedlineDiff, type DiffHunk } from '../components/shared/RedlineDiff';
 import { Modal } from '../components/shared/Modal';
+import { PageHeader, Breadcrumbs } from '../components/shared/PageHeader';
+import { Icon } from '../components/shared/Icon';
+import { formatDate, formatDateTime, humanizeToken, recordNumber } from '../lib/format';
 import type { BillVoter, BillDetail as BillDetailType } from '../api/hooks/useBills';
 
 /** The canonical bill lifecycle stages */
@@ -51,6 +55,9 @@ export function BillDetail() {
   const { isStaff } = useAuth();
   const { data: bill, isLoading, isError } = useBill(slug);
   const { data: voters } = useBillVoters(slug);
+  // `GET /bills/:slug` does not embed the history; the dedicated endpoint
+  // returns it newest-first with a `changedBy` summary per entry.
+  const { data: statusLogData } = useBillStatusLog(slug);
   const [voteExpanded, setVoteExpanded] = useState(false);
   const [redlineOpen, setRedlineOpen] = useState(false);
   const [effectsOpen, setEffectsOpen] = useState(false);
@@ -71,12 +78,8 @@ export function BillDetail() {
   if (isLoading) return <PageSkeleton />;
   if (isError || !bill) {
     return (
-      <div className="p-8">
-        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-          <Link to="/bills" className="hover:text-accent-primary transition-colors">Bills</Link>
-          <span>/</span>
-          <span className="font-mono">{slug}</span>
-        </div>
+      <div className="page">
+        <Breadcrumbs items={[{ label: 'Bills', to: '/bills' }, { label: 'Not found' }]} />
         <div className="card border-l-status-rejected">
           <h1 className="text-heading-1 text-text-primary mb-2">Bill not found</h1>
           <p className="text-body text-text-secondary">
@@ -92,10 +95,10 @@ export function BillDetail() {
   const stageIndex = getStageIndex(bill.status);
   const timelineStages = BILL_STAGES.map((stage) => {
     let detail: string | undefined;
-    if (stage.key === 'submitted') detail = new Date(bill.submittedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    if (stage.key === 'submitted') detail = formatDate(bill.submittedAt);
     if (stage.key === 'player_result' && bill.playerVoteAt) detail = bill.playerVoteResult || undefined;
     if (stage.key === 'npc_result' && bill.npcVote?.decidedAt) detail = bill.npcVote.status;
-    if (stage.key === 'enacted' && bill.enactedAt) detail = new Date(bill.enactedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    if (stage.key === 'enacted' && bill.enactedAt) detail = formatDate(bill.enactedAt);
     return { ...stage, detail };
   });
 
@@ -116,50 +119,48 @@ export function BillDetail() {
     abstain: voters?.filter((v) => v.choice === 'abstain') ?? [],
   };
   const isShortBill = bill.billType === 'short';
+  const statusLog = statusLogData ?? bill.statusLog ?? [];
 
   return (
-    <div className="p-8">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-        <Link to="/bills" className="hover:text-accent-primary transition-colors">
-          Bills
-        </Link>
-        <span>/</span>
-        <span className="font-mono">Bill #{String(bill.billNumber).padStart(3, '0')}</span>
-      </div>
-
-      {/* Header */}
-      <div className="flex items-start justify-between gap-6 mb-4">
-        <div className="flex-1">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="font-mono text-lg text-text-tertiary">
-              Bill #{String(bill.billNumber).padStart(3, '0')}
-            </span>
+    <div className="page">
+      <PageHeader
+        breadcrumbs={[{ label: 'Bills', to: '/bills' }, { label: `Bill ${recordNumber(bill.billNumber)}` }]}
+        documentTitle={bill.title}
+        eyebrow={
+          <>
+            <span className="font-mono text-text-tertiary">Bill {recordNumber(bill.billNumber)}</span>
             {bill.shortTitle && (
               <span className="font-mono text-sm text-text-tertiary">{bill.shortTitle}</span>
             )}
-            <Tag color={statusToTagColor(bill.status)}>
-              {bill.status.replace(/_/g, ' ')}
-            </Tag>
-          </div>
-          <h1 className="text-display">{bill.title}</h1>
-        </div>
-
-        {isGoogleDocsHttpUrl(bill.googleDocUrl) ? (
-          <a
-            href={bill.googleDocUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-secondary whitespace-nowrap flex-shrink-0"
-          >
-            Open in Google Docs
-          </a>
-        ) : bill.googleDocUrl ? (
-          <Tag color="bills">invalid document link</Tag>
-        ) : (
-          <Tag color="bills">short bill</Tag>
-        )}
-      </div>
+            <Tag color={statusToTagColor(bill.status)}>{humanizeToken(bill.status)}</Tag>
+            {bill.googleDocUrl && !isGoogleDocsHttpUrl(bill.googleDocUrl) && (
+              <Tag color="rejected">invalid document link</Tag>
+            )}
+          </>
+        }
+        title={bill.title}
+        actions={
+          <>
+            {bill.status === 'voting' && bill.playerVoteId && (
+              <Link to="/voting/$id" params={{ id: bill.playerVoteId }} className="btn-primary whitespace-nowrap">
+                Go to the vote
+              </Link>
+            )}
+            {isGoogleDocsHttpUrl(bill.googleDocUrl) && (
+              <a
+                href={bill.googleDocUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-secondary whitespace-nowrap inline-flex items-center gap-1.5"
+              >
+                Open in Google Docs
+                <Icon name="external" size={14} />
+              </a>
+            )}
+          </>
+        }
+        className="mb-4"
+      />
 
       {/* Metadata line */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-body-sm text-text-secondary mb-6">
@@ -192,11 +193,7 @@ export function BillDetail() {
         )}
         <div>
           <span className="text-label-ui text-text-tertiary mr-1">Submitted</span>
-          <span className="font-mono text-xs">
-            {new Date(bill.submittedAt).toLocaleDateString('en-GB', {
-              day: 'numeric', month: 'short', year: 'numeric',
-            })}
-          </span>
+          <span className="font-mono text-xs">{formatDate(bill.submittedAt)}</span>
         </div>
         {bill.policyAreas.length > 0 && (
           <div className="flex items-center gap-1.5">
@@ -245,7 +242,7 @@ export function BillDetail() {
                   params={{ slug: a.slug }}
                   className="hover:text-accent-primary transition-colors font-mono text-xs"
                 >
-                  Bill #{String(a.billNumber).padStart(3, '0')}
+                  Bill {recordNumber(a.billNumber)}
                 </Link>
                 {i < amendments.length - 1 && ', '}
               </span>
@@ -293,7 +290,7 @@ export function BillDetail() {
       {/* Two-column layout: content + sidebar */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: cached content */}
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 min-w-0">
           {bill.summary && (
             <div className="mb-6">
               <h2 className="text-heading-2 text-text-secondary mb-2">Summary</h2>
@@ -306,20 +303,18 @@ export function BillDetail() {
           {bill.cachedContent ? (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-heading-2 text-text-secondary">Bill Content</h2>
+                <h2 className="text-heading-2 text-text-secondary">{isShortBill ? 'Text of the Bill' : 'Bill Content'}</h2>
                 {bill.cachedAt && (
                   <span className="font-mono text-xs text-text-tertiary">
-                    Cached {new Date(bill.cachedAt).toLocaleDateString('en-GB', {
-                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                    })}
+                    {isShortBill ? 'Recorded' : 'Cached'} {formatDateTime(bill.cachedAt)}
                   </span>
                 )}
               </div>
-              <div className="card border-l-accent-bills">
-                <div className="text-body text-text-primary whitespace-pre-wrap leading-relaxed">
+              <article className="card border-l-accent-bills">
+                <div className="font-body text-[1rem] text-text-primary whitespace-pre-wrap leading-[1.8] max-w-[70ch] break-words">
                   {bill.cachedContent}
                 </div>
-              </div>
+              </article>
             </div>
           ) : (
             <div className="card border-l-accent-bills">
@@ -332,38 +327,36 @@ export function BillDetail() {
           )}
 
           {/* Status History */}
-          {bill.statusLog && bill.statusLog.length > 0 && (
+          {statusLog.length > 0 && (
             <div className="mt-6">
               <h2 className="text-heading-2 text-text-secondary mb-3">Status History</h2>
               <div className="space-y-1">
-                {bill.statusLog.map((entry) => (
+                {statusLog.map((entry) => (
                   <div
                     key={entry.id}
-                    className="flex items-center gap-3 py-2 border-b border-border-subtle last:border-0"
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 border-b border-border-subtle last:border-0"
                   >
-                    <span className="font-mono text-xs text-text-tertiary w-28 flex-shrink-0">
-                      {new Date(entry.createdAt).toLocaleDateString('en-GB', {
-                        day: 'numeric', month: 'short',
-                      })}
+                    <span className="font-mono text-xs text-text-tertiary w-24 flex-shrink-0" title={formatDateTime(entry.createdAt)}>
+                      {formatDate(entry.createdAt)}
                     </span>
                     {entry.fromStatus && (
                       <>
                         <Tag color={statusToTagColor(entry.fromStatus)}>
-                          {entry.fromStatus.replace(/_/g, ' ')}
+                          {humanizeToken(entry.fromStatus)}
                         </Tag>
                         <span className="text-text-tertiary">&rarr;</span>
                       </>
                     )}
                     <Tag color={statusToTagColor(entry.toStatus)}>
-                      {entry.toStatus.replace(/_/g, ' ')}
+                      {humanizeToken(entry.toStatus)}
                     </Tag>
                     {entry.changedBy && (
                       <span className="text-body-sm text-text-tertiary">
-                        by {entry.changedBy.characterName}
+                        by {entry.changedBy.characterName || entry.changedBy.discordUsername}
                       </span>
                     )}
                     {entry.notes && (
-                      <span className="text-body-sm text-text-tertiary italic ml-auto">
+                      <span className="text-body-sm text-text-tertiary italic basis-full sm:basis-auto sm:ml-auto">
                         {entry.notes}
                       </span>
                     )}
@@ -375,7 +368,7 @@ export function BillDetail() {
         </div>
 
         {/* Right sidebar */}
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
           {/* Player House Vote */}
           <div>
             <h3 className="text-heading-2 text-text-secondary mb-3">Player House Vote</h3>
@@ -424,13 +417,22 @@ export function BillDetail() {
               </div>
             ) : (
               <div className="card border-l-accent-voting">
-                <p className="text-body-sm text-text-tertiary italic">No player vote recorded yet.</p>
+                <p className="text-body-sm text-text-tertiary italic">
+                  {bill.status === 'voting' ? 'The vote is open; no ballots are public yet.' : 'No player vote recorded yet.'}
+                </p>
+                {bill.status === 'voting' && bill.playerVoteId && (
+                  <Link to="/voting/$id" params={{ id: bill.playerVoteId }} className="inline-block mt-2 text-body-sm text-accent-primary hover:underline">
+                    Go to the vote →
+                  </Link>
+                )}
               </div>
             )}
           </div>
 
-          {/* NPC House Result */}
-          {bill.npcVoteRequired && (
+          {/* NPC House Result — only once the bill has actually gone to (or
+              through) the NPC house; `npcVoteRequired` defaults true even in
+              seasons where the NPC house is switched off. */}
+          {(bill.npcVote || ['npc_pending', 'npc_passed', 'npc_rejected'].includes(bill.status)) && (
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-heading-2 text-text-secondary">NPC House</h3>
@@ -576,7 +578,7 @@ function EffectsModal({ open, onClose, bill }: { open: boolean; onClose: () => v
   const [notes, setNotes] = useState(e.notes ?? '');
   const [error, setError] = useState<string | null>(null);
 
-  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  const fc = 'field w-full';
 
   const submit = async () => {
     setError(null);
@@ -663,7 +665,7 @@ function NpcVoteModal({ open, onClose, slug }: { open: boolean; onClose: () => v
     }
   };
 
-  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 font-mono text-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  const fc = 'field w-full font-mono';
 
   return (
     <Modal

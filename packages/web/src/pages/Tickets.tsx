@@ -7,6 +7,9 @@ import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { MetricCard } from '../components/shared/MetricCard';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { PageHeader } from '../components/shared/PageHeader';
+import { FilterBar, FilterField } from '../components/shared/FilterBar';
+import { formatDate, humanizeToken, plural, recordNumber } from '../lib/format';
 import type { Ticket } from '../api/hooks/useTickets';
 
 const STATUSES = ['all', 'open', 'in_progress', 'waiting', 'resolved', 'closed'];
@@ -30,7 +33,7 @@ export function Tickets() {
   const limit = 20;
 
   const { data: categories } = useTicketCategories();
-  const { data, isLoading, isError, error } = useTickets({
+  const { data, isLoading, isError, error, isPlaceholderData } = useTickets({
     status: status !== 'all' ? status : undefined,
     category: category !== 'all' ? category : undefined,
     priority: priority !== 'all' ? priority : undefined,
@@ -38,10 +41,10 @@ export function Tickets() {
     limit,
   });
 
-  if (isLoading) return <PageSkeleton />;
-  if (isError) {
+  if (isLoading && !data) return <PageSkeleton />;
+  if (isError && !data) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load tickets" error={error} />
       </div>
     );
@@ -63,7 +66,7 @@ export function Tickets() {
           params={{ id: row.id }}
           className="text-accent-primary hover:underline"
         >
-          #{String(row.number).padStart(3, '0')}
+          {recordNumber(row.number)}
         </Link>
       ),
     },
@@ -71,6 +74,7 @@ export function Tickets() {
       key: 'title',
       header: 'Ticket',
       minWidth: '320px',
+      primary: true,
       render: (row) => (
         <div className="max-w-3xl">
           <Link
@@ -94,7 +98,7 @@ export function Tickets() {
       minWidth: '100px',
       render: (row) => (
         <Tag color={statusToTagColor(row.status)}>
-          {row.status.replace(/_/g, ' ')}
+          {humanizeToken(row.status)}
         </Tag>
       ),
     },
@@ -117,8 +121,8 @@ export function Tickets() {
       header: 'Category',
       minWidth: '100px',
       render: (row) => (
-        <span className="text-body-sm text-text-secondary">
-          {row.category?.emoji} {row.category?.name || '—'}
+        <span className="text-body-sm text-text-secondary whitespace-nowrap">
+          {row.category ? <>{row.category.emoji && <span aria-hidden="true">{row.category.emoji} </span>}{row.category.name}</> : '—'}
         </span>
       ),
     },
@@ -136,96 +140,85 @@ export function Tickets() {
       header: 'Created',
       mono: true,
       minWidth: '100px',
-      render: (row) => new Date(row.createdAt).toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'short', year: 'numeric',
-      }),
+      render: (row) => formatDate(row.createdAt),
     },
   ];
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Tickets</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            {total} ticket{total !== 1 ? 's' : ''} in the system
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Tickets"
+        subtitle={
+          <>
+            {plural(total, 'ticket')} on file &middot; open a new one in Discord with{' '}
+            <code className="font-mono text-xs text-text-secondary">/ticket create</code>
+          </>
+        }
+      />
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-border-subtle">
-        <button
-          onClick={() => setTab('list')}
-          className={`px-4 py-2.5 text-body-sm font-medium relative transition-colors duration-150 ${tab === 'list' ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}`}
-        >
-          All Tickets
-          {tab === 'list' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-tickets" />}
-        </button>
-        <button
-          onClick={() => setTab('metrics')}
-          className={`px-4 py-2.5 text-body-sm font-medium relative transition-colors duration-150 ${tab === 'metrics' ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}`}
-        >
-          Metrics
-          {tab === 'metrics' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-tickets" />}
-        </button>
+      <div className="flex gap-1 mb-5 border-b border-border-subtle" role="tablist" aria-label="Ticket views">
+        {([['list', 'All Tickets'], ['metrics', 'Metrics']] as const).map(([key, label]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={`px-4 py-2.5 text-body-sm font-medium relative transition-colors duration-150 ${tab === key ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}`}
+          >
+            {label}
+            {tab === key && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-tickets" aria-hidden="true" />}
+          </button>
+        ))}
       </div>
 
       {tab === 'metrics' && <TicketMetricsView />}
       {tab === 'list' && <>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        {/* Status filter */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Status</label>
+      <FilterBar>
+        <FilterField label="Status">
           <select
             value={status}
             onChange={(e) => { setStatus(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            className="field"
           >
             {STATUSES.map((s) => (
-              <option key={s} value={s}>{s === 'all' ? 'All' : s.replace(/_/g, ' ')}</option>
+              <option key={s} value={s}>{s === 'all' ? 'All' : humanizeToken(s)}</option>
             ))}
           </select>
-        </div>
-
-        {/* Category filter */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Category</label>
+        </FilterField>
+        <FilterField label="Category">
           <select
             value={category}
             onChange={(e) => { setCategory(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            className="field"
           >
             <option value="all">All</option>
             {categories?.map((c) => (
               <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
             ))}
           </select>
-        </div>
-
-        {/* Priority filter */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Priority</label>
+        </FilterField>
+        <FilterField label="Priority">
           <select
             value={priority}
             onChange={(e) => { setPriority(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            className="field"
           >
             {PRIORITIES.map((p) => (
               <option key={p} value={p}>{p === 'all' ? 'All' : priorityLabel[p]}</option>
             ))}
           </select>
-        </div>
-      </div>
+        </FilterField>
+      </FilterBar>
 
       {/* Table */}
-      <div className="card border-l-accent-tickets">
+      <div className={`card border-l-accent-tickets transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
           columns={columns}
           data={tickets}
           rowKey={(row) => row.id}
+          caption="Tickets"
           emptyMessage="Inbox is empty. The chamber rests."
         />
       </div>
@@ -265,7 +258,7 @@ function TicketMetricsView() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         <MetricCard
           label="Open"
           value={metrics.openCount}
@@ -274,13 +267,13 @@ function TicketMetricsView() {
         />
         <MetricCard
           label="In Progress"
-          value={(metrics as any).inProgressCount ?? 0}
+          value={metrics.inProgressCount ?? 0}
           color="text-status-pending"
           borderColor="border-l-status-pending"
         />
         <MetricCard
           label="Resolved (24h)"
-          value={(metrics as any).resolvedToday ?? metrics.resolvedThisWeek ?? 0}
+          value={metrics.resolvedToday ?? 0}
           color="text-status-passed"
           borderColor="border-l-status-passed"
         />

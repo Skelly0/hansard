@@ -24,6 +24,10 @@ export interface DashboardActivityItem {
   description: string;
   timestamp: string;
   actorName: string | null;
+  /** Player UUID of the actor (colours the avatar consistently with other pages). */
+  actorId?: string | null;
+  /** In-app path for the record the item is about. */
+  href?: string | null;
 }
 
 export function useDashboardOverview() {

@@ -42,9 +42,9 @@ export function ResultsBars({
   const abstainPct = (abstain / total) * 100;
 
   const segments = [
-    { label: 'Yea', count: yea, pct: yeaPct, bg: 'bg-status-passed', text: 'text-white' },
-    { label: 'Nay', count: nay, pct: nayPct, bg: 'bg-status-rejected', text: 'text-white' },
-    { label: 'Abstain', count: abstain, pct: abstainPct, bg: 'bg-accent-graveyard', text: 'text-white' },
+    { label: 'Yea', count: yea, pct: yeaPct, bg: 'bg-status-passed', text: 'text-text-inverse' },
+    { label: 'Nay', count: nay, pct: nayPct, bg: 'bg-status-rejected', text: 'text-text-inverse' },
+    { label: 'Abstain', count: abstain, pct: abstainPct, bg: 'bg-accent-graveyard', text: 'text-text-inverse' },
   ].filter((s) => s.count > 0);
 
   return (
@@ -147,7 +147,7 @@ export function MultiRoundBars({
                       title={`${candidateNames[candidateId] || candidateId}: ${count}`}
                     >
                       {pct > 15 && (
-                        <span className="font-mono text-xs text-white font-medium truncate px-1">
+                        <span className="font-mono text-xs text-text-inverse font-medium truncate px-1">
                           {count}
                         </span>
                       )}

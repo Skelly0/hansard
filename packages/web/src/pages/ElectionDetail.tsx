@@ -26,6 +26,9 @@ import { MetricCard } from '../components/shared/MetricCard';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal, ConfirmModal } from '../components/shared/Modal';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { PageHeader, Breadcrumbs } from '../components/shared/PageHeader';
+import { BallotPanel } from '../components/voting/BallotPanel';
+import { formatDate, formatDateTime, humanizeToken, relativeTime } from '../lib/format';
 
 const ELECTION_STAGES = [
   { key: 'draft', label: 'Draft' },
@@ -35,7 +38,15 @@ const ELECTION_STAGES = [
   { key: 'certified', label: 'Certified' },
 ];
 
-function getElectionStageIndex(status: string): number {
+/** Candidate-less votes (motions, referenda) skip the nominations stage. */
+function stagesFor(method: string) {
+  return method === 'yea_nay_abstain'
+    ? ELECTION_STAGES.filter((stage) => stage.key !== 'nominations')
+    : ELECTION_STAGES;
+}
+
+function getElectionStageIndex(status: string, method: string): number {
+  const skipNominations = method === 'yea_nay_abstain';
   const map: Record<string, number> = {
     draft: 0,
     nominations_open: 1,
@@ -48,7 +59,8 @@ function getElectionStageIndex(status: string): number {
     certified: 4,
     cancelled: -1,
   };
-  return map[status] ?? 0;
+  const index = map[status] ?? 0;
+  return skipNominations && index >= 1 ? index - 1 : index;
 }
 
 const typeLabel: Record<string, string> = {
@@ -85,12 +97,8 @@ export function ElectionDetail() {
   if (isLoading) return <PageSkeleton />;
   if (isError || !election) {
     return (
-      <div className="p-8">
-        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-          <Link to="/voting" className="hover:text-accent-primary transition-colors">Voting</Link>
-          <span>/</span>
-          <span className="font-mono">{id}</span>
-        </div>
+      <div className="page">
+        <Breadcrumbs items={[{ label: 'Voting', to: '/voting' }, { label: 'Not found' }]} />
         <div className="card border-l-status-rejected">
           <h1 className="text-heading-1 text-text-primary mb-2">Election not found</h1>
           <p className="text-body text-text-secondary">
@@ -101,7 +109,7 @@ export function ElectionDetail() {
     );
   }
 
-  const stageIndex = getElectionStageIndex(election.status);
+  const stageIndex = getElectionStageIndex(election.status, election.method);
   const isYeaNay = election.method === 'yea_nay_abstain';
   // Narrow the API response: only the "tallied" shape carries finalTallies /
   // winners / passed / rounds. Sealed-open and unsealed-pending shapes have
@@ -113,85 +121,70 @@ export function ElectionDetail() {
   // Build candidate name map
   const candidateNames: Record<string, string> = {};
   election.candidates?.forEach((c) => {
-    candidateNames[c.playerId] = c.player?.characterName || 'Unknown';
+    candidateNames[c.playerId] = c.player?.characterName || c.player?.discordUsername || 'Unknown';
   });
 
-  return (
-    <div className="p-8">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-        <Link to="/voting" className="hover:text-accent-primary transition-colors">
-          Voting
-        </Link>
-        <span>/</span>
-        <span>{election.title}</span>
-      </div>
+  const isOpen = election.status === 'voting_open';
 
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-4">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
+  return (
+    <div className="page">
+      <PageHeader
+        breadcrumbs={[{ label: 'Voting', to: '/voting' }, { label: election.title }]}
+        eyebrow={
+          <>
             <Tag color="voting">{typeLabel[election.type] || election.type}</Tag>
-            <Tag color={statusToTagColor(election.status)}>
-              {election.status.replace(/_/g, ' ')}
-            </Tag>
-            {election.roundNumber > 1 && (
-              <Tag color="pending">Round {election.roundNumber}</Tag>
-            )}
-          </div>
-          <h1 className="text-display">{election.title}</h1>
-          {election.description && (
-            <p className="text-body text-text-secondary mt-2">{election.description}</p>
-          )}
-        </div>
-      </div>
+            <Tag color={statusToTagColor(election.status)}>{humanizeToken(election.status)}</Tag>
+            {election.roundNumber > 1 && <Tag color="pending">Round {election.roundNumber}</Tag>}
+          </>
+        }
+        title={election.title}
+        subtitle={election.description ? <span className="text-body text-text-secondary">{election.description}</span> : undefined}
+        className="mb-4"
+      />
 
       {/* Metadata */}
-      <div className="flex flex-wrap gap-x-6 gap-y-2 text-body-sm text-text-secondary mb-6">
-        <div>
-          <span className="text-label-ui text-text-tertiary mr-1">Method</span>
-          <span className="font-mono text-xs">{methodLabel[election.method] || election.method}</span>
+      <dl className="flex flex-wrap gap-x-6 gap-y-2 text-body-sm text-text-secondary mb-6">
+        <div className="flex items-baseline gap-1.5">
+          <dt className="text-label-ui text-text-tertiary">Method</dt>
+          <dd className="font-mono text-xs">{methodLabel[election.method] || election.method}</dd>
         </div>
         {election.forOffice && (
-          <div>
-            <span className="text-label-ui text-text-tertiary mr-1">For Office</span>
-            <span>{election.forOffice.name}</span>
+          <div className="flex items-baseline gap-1.5">
+            <dt className="text-label-ui text-text-tertiary">For office</dt>
+            <dd>{election.forOffice.name}</dd>
           </div>
         )}
-        <div>
-          <span className="text-label-ui text-text-tertiary mr-1">Opens</span>
-          <span className="font-mono text-xs">
-            {new Date(election.votingOpensAt).toLocaleDateString('en-GB', {
-              day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-            })}
-          </span>
+        <div className="flex items-baseline gap-1.5">
+          <dt className="text-label-ui text-text-tertiary">Opens</dt>
+          <dd className="font-mono text-xs">{formatDateTime(election.votingOpensAt)}</dd>
         </div>
-        <div>
-          <span className="text-label-ui text-text-tertiary mr-1">Closes</span>
-          <span className="font-mono text-xs">
-            {new Date(election.votingClosesAt).toLocaleDateString('en-GB', {
-              day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-            })}
-          </span>
+        <div className="flex items-baseline gap-1.5">
+          <dt className="text-label-ui text-text-tertiary">Closes</dt>
+          <dd className="font-mono text-xs">
+            {formatDateTime(election.votingClosesAt)}
+            {isOpen && <span className="text-accent-voting"> · {relativeTime(election.votingClosesAt)}</span>}
+          </dd>
         </div>
-        <div>
-          <span className="text-label-ui text-text-tertiary mr-1">Created by</span>
-          {election.createdBy ? (
-            <Link
-              to="/players/$id"
-              params={{ id: election.createdById }}
-              className="hover:text-accent-primary transition-colors"
-            >
-              {election.createdBy.characterName}
-            </Link>
-          ) : <span>—</span>}
-        </div>
-      </div>
+        {election.createdBy && (
+          <div className="flex items-baseline gap-1.5">
+            <dt className="text-label-ui text-text-tertiary">Called by</dt>
+            <dd>
+              <Link
+                to="/players/$id"
+                params={{ id: election.createdById }}
+                className="hover:text-accent-primary transition-colors"
+              >
+                {election.createdBy.characterName || election.createdBy.discordUsername}
+              </Link>
+            </dd>
+          </div>
+        )}
+      </dl>
 
       {/* Timeline */}
       <div className="mb-8 pb-6 border-b border-border-subtle">
         <StatusTimeline
-          stages={ELECTION_STAGES}
+          stages={stagesFor(election.method)}
           currentIndex={stageIndex}
           horizontal
         />
@@ -202,7 +195,7 @@ export function ElectionDetail() {
 
       {/* Metrics row */}
       {turnout && (
-        <div className="grid grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-8">
           <MetricCard
             label="Eligible Voters"
             value={turnout.eligible}
@@ -226,7 +219,9 @@ export function ElectionDetail() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Results area */}
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 min-w-0">
+          <BallotPanel election={election} />
+
           {/* Cancelled note even if no results were ever tallied */}
           {!tally && election.status === 'cancelled' && (
             <div className="card border-l-status-rejected mb-4">
@@ -380,13 +375,11 @@ export function ElectionDetail() {
                         Round {round.roundNumber}
                       </span>
                       <Tag color={statusToTagColor(round.status)} className="ml-2">
-                        {round.status.replace(/_/g, ' ')}
+                        {humanizeToken(round.status)}
                       </Tag>
                     </div>
                     <span className="font-mono text-xs text-text-tertiary">
-                      {new Date(round.votingOpensAt).toLocaleDateString('en-GB', {
-                        day: 'numeric', month: 'short',
-                      })}
+                      {formatDate(round.votingOpensAt, { withYear: false })}
                     </span>
                   </Link>
                 ))}
@@ -422,7 +415,10 @@ export function ElectionDetail() {
                         params={{ id: candidate.playerId }}
                         className="text-body-sm font-medium text-text-primary hover:text-accent-primary transition-colors"
                       >
-                        {candidate.player?.characterName || 'Unknown'}
+                        <span className="inline-flex items-center gap-2">
+                          <PlayerAvatar player={{ id: candidate.playerId, characterName: candidate.player?.characterName, discordUsername: candidate.player?.discordUsername ?? '' }} size="sm" />
+                          {candidate.player?.characterName || candidate.player?.discordUsername || 'Unknown'}
+                        </span>
                       </Link>
                       {candidate.party && (
                         <Tag color="players">{candidate.party.shortName || candidate.party.name}</Tag>
@@ -672,7 +668,7 @@ function NpcConfirmModal({
     }
   };
 
-  const fc = 'w-full bg-card border border-border-default rounded-card px-3 py-2 font-mono text-sm focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  const fc = 'field w-full font-mono';
 
   return (
     <Modal
@@ -802,7 +798,7 @@ function AddCandidateButton({ electionId }: { electionId: string }) {
       >
         <div className="space-y-3">
           {selected ? (
-            <div className="flex items-center gap-2 bg-card border border-border-default rounded-card px-3 py-2">
+            <div className="flex items-center gap-2 bg-card border border-border rounded-card px-3 py-2">
               <PlayerAvatar player={selected} size="sm" />
               <span className="text-body-sm">{selected.characterName ?? selected.discordUsername}</span>
               <button onClick={() => setSelected(null)} className="ml-auto text-xs text-text-tertiary hover:text-status-rejected">change</button>
@@ -814,7 +810,7 @@ function AddCandidateButton({ electionId }: { electionId: string }) {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search players…"
                 autoFocus
-                className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary"
+                className="field w-full"
               />
               {searchResults?.data && searchResults.data.length > 0 && (
                 <div className="border border-border-subtle rounded-card overflow-hidden">
@@ -838,7 +834,7 @@ function AddCandidateButton({ electionId }: { electionId: string }) {
               value={statement}
               onChange={(e) => setStatement(e.target.value)}
               rows={3}
-              className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary resize-y"
+              className="field w-full resize-y"
             />
           </label>
           {error && <p className="text-body-sm text-status-rejected">{error}</p>}

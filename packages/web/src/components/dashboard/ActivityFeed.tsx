@@ -1,90 +1,112 @@
+import { Link } from '@tanstack/react-router';
 import type { DashboardActivityItem } from '../../api/hooks/useDashboard';
 import { PlayerAvatar } from '../shared/PlayerAvatar';
+import { EmptyState } from '../shared/PageHeader';
+import { formatDateTime, relativeTime } from '../../lib/format';
 
 interface ActivityFeedProps {
   items: DashboardActivityItem[];
 }
 
-const SYSTEM_LABELS: Record<string, { label: string; color: string }> = {
-  bills:      { label: 'Legislature',  color: 'border-accent-bills      text-accent-bills' },
-  tickets:    { label: 'Tickets',      color: 'border-accent-tickets    text-accent-tickets' },
-  players:    { label: 'Players',      color: 'border-accent-players    text-accent-players' },
-  moderation: { label: 'Moderation',   color: 'border-accent-moderation text-accent-moderation' },
+const SYSTEM_META: Record<string, { label: string; dot: string; text: string }> = {
+  bills:      { label: 'Legislature', dot: 'bg-accent-bills',      text: 'text-accent-bills' },
+  tickets:    { label: 'Tickets',     dot: 'bg-accent-tickets',    text: 'text-accent-tickets' },
+  players:    { label: 'Players',     dot: 'bg-accent-players',    text: 'text-accent-players' },
+  moderation: { label: 'Moderation',  dot: 'bg-accent-moderation', text: 'text-accent-moderation' },
 };
 
-const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
-
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const diffSec = Math.round((then - now) / 1000);
-  const absSec = Math.abs(diffSec);
-  if (absSec < 60) return rtf.format(diffSec, 'second');
-  if (absSec < 3600) return rtf.format(Math.round(diffSec / 60), 'minute');
-  if (absSec < 86_400) return rtf.format(Math.round(diffSec / 3600), 'hour');
-  return rtf.format(Math.round(diffSec / 86_400), 'day');
+function dayKey(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? 'unknown' : d.toDateString();
 }
 
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'Undated';
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}),
+  });
+}
+
+/**
+ * Chronological record of recent proceedings, grouped by day like a sitting
+ * of the chamber. Each entry is tagged with its system and links to the
+ * record it concerns when the API supplies one.
+ */
 export function ActivityFeed({ items }: ActivityFeedProps) {
   if (items.length === 0) {
-    return (
-      <div className="text-center py-8">
-        <div className="text-2xl text-accent-primary mb-2">✦</div>
-        <p className="text-body-sm italic text-text-secondary">
-          All quiet on the chamber floor.
-        </p>
-      </div>
-    );
+    return <EmptyState title="All quiet on the chamber floor." />;
   }
 
-  // Group by system, preserving order within each group
-  const groups = new Map<string, DashboardActivityItem[]>();
+  const days: { key: string; label: string; items: DashboardActivityItem[] }[] = [];
   for (const item of items) {
-    const key = item.system;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(item);
+    const key = dayKey(item.timestamp);
+    let day = days[days.length - 1];
+    if (!day || day.key !== key) {
+      day = { key, label: dayLabel(item.timestamp), items: [] };
+      days.push(day);
+    }
+    day.items.push(item);
   }
 
   return (
     <div className="space-y-6">
-      {Array.from(groups.entries()).map(([system, sectionItems]) => {
-        const meta = SYSTEM_LABELS[system] ?? { label: system, color: 'border-border-default text-text-secondary' };
-        const [borderClass, textClass] = meta.color.split(/\s+/);
-        return (
-          <section key={system}>
-            <div className={`border-l-2 ${borderClass} pl-2 mb-2`}>
-              <span className={`text-mono text-xs uppercase tracking-wider font-semibold ${textClass}`}>
-                {meta.label}
-              </span>
-            </div>
-            <div className="space-y-1">
-              {sectionItems.map((item, idx) => {
-                // Activity feed items only carry actorName (no UUID), so we hash by
-                // name. Consequence: same player may show different color in
-                // feed vs in pages that hash by player.id. Acceptable.
-                const actorKey = item.actorName ?? 'unknown';
-                return (
-                  <div
-                    key={`${item.timestamp}-${idx}`}
-                    className="card flex items-center gap-3 px-3 py-2 transition-colors duration-150 ease-out"
-                  >
-                    <PlayerAvatar
-                      player={{
-                        id: actorKey,
-                        characterName: null,
-                        discordUsername: actorKey,
-                      }}
-                      size="sm"
-                    />
-                    <div className="flex-1 text-body-sm text-text-secondary">{item.description}</div>
-                    <div className="text-mono text-xs text-text-tertiary">{relativeTime(item.timestamp)}</div>
+      {days.map((day) => (
+        <section key={day.key} aria-label={day.label}>
+          <h3 className="text-label-ui text-text-tertiary mb-2">{day.label}</h3>
+          <ol className="relative border-l border-border-subtle ml-2.5 space-y-0.5">
+            {day.items.map((item, idx) => {
+              const meta = SYSTEM_META[item.system] ?? { label: item.system, dot: 'bg-border-strong', text: 'text-text-tertiary' };
+              const actorKey = item.actorId ?? item.actorName ?? 'unknown';
+              const body = (
+                <>
+                  <PlayerAvatar
+                    player={{ id: actorKey, characterName: item.actorName, discordUsername: item.actorName ?? '?' }}
+                    size="sm"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-body-sm text-text-primary leading-snug break-words">{item.description}</p>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs">
+                      <span className={`font-mono uppercase tracking-wider ${meta.text}`}>{meta.label}</span>
+                      {item.actorName && <span className="text-text-tertiary">· {item.actorName}</span>}
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          </section>
-        );
-      })}
+                  <time
+                    dateTime={item.timestamp}
+                    title={formatDateTime(item.timestamp)}
+                    className="text-mono text-xs text-text-tertiary whitespace-nowrap pt-0.5"
+                  >
+                    {relativeTime(item.timestamp)}
+                  </time>
+                </>
+              );
+              return (
+                <li key={`${item.timestamp}-${idx}`} className="relative pl-5">
+                  <span className={`absolute -left-[4.5px] top-4 w-2 h-2 rounded-full ring-4 ring-page ${meta.dot}`} aria-hidden="true" />
+                  {item.href ? (
+                    <Link
+                      to={item.href}
+                      className="flex items-start gap-3 rounded-card px-3 py-2.5 -mx-1 hover:bg-hover transition-colors"
+                    >
+                      {body}
+                    </Link>
+                  ) : (
+                    <div className="flex items-start gap-3 px-3 py-2.5 -mx-1">{body}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      ))}
     </div>
   );
 }

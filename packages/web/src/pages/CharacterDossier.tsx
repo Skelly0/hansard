@@ -12,6 +12,9 @@ import { DataTable, type Column } from '../components/shared/DataTable';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { useAuth } from '../api/hooks/useAuth';
+import { Breadcrumbs } from '../components/shared/PageHeader';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { sentenceCase } from '../lib/format';
 import type { PlayerDossier, PlayerEvent } from '../api/hooks/usePlayers';
 
 // ---------------------------------------------------------------------------
@@ -57,17 +60,13 @@ export function CharacterDossier() {
   const { data: player, isLoading, isError } = usePlayer(id);
   const { user, isStaff } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [bioExpanded, setBioExpanded] = useState(false);
+  useDocumentTitle(player ? player.characterName || player.discordUsername : null);
 
   if (isLoading) return <PageSkeleton />;
   if (isError || !player) {
     return (
-      <div className="p-8">
-        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-          <Link to="/players" className="hover:text-accent-primary transition-colors">Players</Link>
-          <span>/</span>
-          <span className="font-mono">{id}</span>
-        </div>
+      <div className="page">
+        <Breadcrumbs items={[{ label: 'Players', to: '/players' }, { label: 'Not found' }]} />
         <div className="card border-l-status-rejected">
           <h1 className="text-heading-1 text-text-primary mb-2">Character not found</h1>
           <p className="text-body text-text-secondary">
@@ -84,23 +83,14 @@ export function CharacterDossier() {
   const visibleTabs = canViewFavours ? TABS : TABS.filter((tab) => tab.key !== 'favours');
   const currentTab = activeTab === 'favours' && !canViewFavours ? 'overview' : activeTab;
 
-  const bioExcerptLength = 280;
-  const hasBioOverflow = (player.characterBio?.length ?? 0) > bioExcerptLength;
+  // One-line epigraph under the name; the full biography lives in Overview.
   const bioText = player.characterBio || '';
-  const bioExcerpt = hasBioOverflow && !bioExpanded
-    ? bioText.slice(0, bioExcerptLength).replace(/\s+\S*$/, '') + '\u2026'
-    : bioText;
+  const firstSentence = bioText.split(/(?<=[.!?])\s/)[0] ?? '';
+  const epigraph = firstSentence.length > 180 ? `${firstSentence.slice(0, 177).replace(/\s+\S*$/, '')}\u2026` : firstSentence;
 
   return (
-    <div className="p-8">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-        <Link to="/players" className="hover:text-accent-primary transition-colors">
-          Players
-        </Link>
-        <span>/</span>
-        <span className="text-text-secondary">{displayName}</span>
-      </div>
+    <div className="page">
+      <Breadcrumbs items={[{ label: isDeceased ? 'Graveyard' : 'Players', to: isDeceased ? '/graveyard' : '/players' }, { label: displayName }]} />
 
       {/* Deceased banner */}
       {isDeceased && (
@@ -114,21 +104,25 @@ export function CharacterDossier() {
       )}
 
       {/* ── Header ── */}
-      <div className="flex items-start gap-6 mb-8">
+      <div className="flex items-start gap-4 sm:gap-6 mb-8">
         {/* Portrait */}
-        <PlayerAvatar player={player} size="md" />
+        <PlayerAvatar player={player} size="lg" muted={isDeceased} />
 
         {/* Name + meta */}
         <div className="flex-1 min-w-0">
           {/* Name row */}
           <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-display truncate">{displayName}</h1>
-            <div
-              className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                isDeceased ? 'bg-status-deceased' : healthDotClass(player.healthStatus)
-              }`}
-              title={isDeceased ? 'Deceased' : player.healthStatus ?? 'Private'}
-            />
+            <h1 className="text-display break-words">{displayName}</h1>
+            {(isDeceased || player.healthStatus) && (
+              <span
+                className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                  isDeceased ? 'bg-status-deceased' : healthDotClass(player.healthStatus)
+                }`}
+                role="img"
+                aria-label={isDeceased ? 'Deceased' : `Health: ${player.healthStatus}`}
+                title={isDeceased ? 'Deceased' : sentenceCase(player.healthStatus)}
+              />
+            )}
           </div>
 
           {/* Tags row */}
@@ -168,31 +162,23 @@ export function CharacterDossier() {
             </span>
           </div>
 
-          {/* Bio excerpt */}
-          {bioText && (
-            <div>
-              <p className="text-body text-text-primary">{bioExcerpt}</p>
-              {hasBioOverflow && (
-                <button
-                  onClick={() => setBioExpanded(!bioExpanded)}
-                  className="text-body-sm text-accent-primary hover:underline font-medium mt-1"
-                >
-                  {bioExpanded ? 'Show less' : 'Read more'}
-                </button>
-              )}
-            </div>
+          {/* Epigraph */}
+          {epigraph && currentTab !== 'overview' && (
+            <p className="text-body italic text-text-secondary">{epigraph}</p>
           )}
         </div>
       </div>
 
       {/* ── Tabs ── */}
-      <div className="border-b border-border-subtle mb-6">
-        <nav className="flex gap-0 -mb-px">
+      <div className="border-b border-border-subtle mb-6 -mx-4 px-4 sm:mx-0 sm:px-0 overflow-x-auto">
+        <div className="flex gap-0 -mb-px" role="tablist" aria-label="Dossier sections">
           {visibleTabs.map((tab) => (
             <button
               key={tab.key}
+              role="tab"
+              aria-selected={currentTab === tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`text-label-ui px-4 py-2.5 border-b-2 transition-colors ${
+              className={`text-label-ui px-4 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
                 currentTab === tab.key
                   ? 'border-accent-primary text-text-primary'
                   : 'border-transparent text-text-tertiary hover:text-text-secondary hover:border-border-subtle'
@@ -201,7 +187,7 @@ export function CharacterDossier() {
               {tab.label}
             </button>
           ))}
-        </nav>
+        </div>
       </div>
 
       {/* ── Tab content ── */}
@@ -237,7 +223,7 @@ function OverviewTab({ player }: { player: PlayerDossier }) {
       {/* Basic stats grid */}
       <div>
         <h2 className="text-heading-2 text-text-secondary mb-3">At a Glance</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
           <StatCard
             label="Party"
             value={player.party?.name || 'Independent'}
@@ -248,7 +234,7 @@ function OverviewTab({ player }: { player: PlayerDossier }) {
           />
           <StatCard
             label="Health"
-            value={player.isAlive ? player.healthStatus ?? 'Private' : 'Deceased'}
+            value={player.isAlive ? (player.healthStatus ? sentenceCase(player.healthStatus) : 'Private') : 'Deceased'}
           />
           <StatCard
             label="Bills authored"

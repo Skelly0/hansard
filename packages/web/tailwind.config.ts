@@ -1,53 +1,63 @@
 import type { Config } from 'tailwindcss';
 
+/**
+ * Theme colours are CSS variables holding hex values (so light/dark swap at
+ * runtime). Tailwind 3 cannot apply opacity modifiers (`bg-accent-bills/10`,
+ * `hover:bg-status-rejected/90`) to a bare `var(--x)` — it silently emits no
+ * CSS at all. Routing each token through `color-mix` with `<alpha-value>`
+ * makes every modifier work while keeping the hex variables untouched.
+ */
+const token = (name: string) =>
+  `color-mix(in srgb, var(${name}) calc(<alpha-value> * 100%), transparent)`;
+
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   darkMode: ['selector', '[data-theme="dark"]'],
   theme: {
     extend: {
       colors: {
-        page: 'var(--page)',
-        card: 'var(--card)',
-        inset: 'var(--inset)',
-        hover: 'var(--hover)',
+        page: token('--page'),
+        card: token('--card'),
+        inset: token('--inset'),
+        hover: token('--hover'),
         accent: {
-          primary: 'var(--accent-primary)',
-          'primary-light': 'var(--accent-primary-soft)',
-          bills: 'var(--c-bills)',
-          voting: 'var(--c-voting)',
-          players: 'var(--c-players)',
-          offices: 'var(--c-offices)',
-          favours: 'var(--c-favours)',
-          tickets: 'var(--c-tickets)',
-          moderation: 'var(--c-moderation)',
-          graveyard: 'var(--c-graveyard)',
-          simulation: 'var(--c-simulation)',
+          primary: token('--accent-primary'),
+          'primary-light': token('--accent-primary-soft'),
+          bills: token('--c-bills'),
+          voting: token('--c-voting'),
+          players: token('--c-players'),
+          offices: token('--c-offices'),
+          favours: token('--c-favours'),
+          tickets: token('--c-tickets'),
+          moderation: token('--c-moderation'),
+          graveyard: token('--c-graveyard'),
+          simulation: token('--c-simulation'),
         },
         text: {
-          primary: 'var(--text-primary)',
-          secondary: 'var(--text-secondary)',
-          tertiary: 'var(--text-tertiary)',
-          inverse: 'var(--text-inverse)',
+          primary: token('--text-primary'),
+          secondary: token('--text-secondary'),
+          tertiary: token('--text-tertiary'),
+          inverse: token('--text-inverse'),
         },
         border: {
-          subtle: 'var(--border-subtle)',
-          DEFAULT: 'var(--border)',
-          strong: 'var(--border-strong)',
+          subtle: token('--border-subtle'),
+          DEFAULT: token('--border'),
+          strong: token('--border-strong'),
         },
         status: {
-          open: 'var(--status-open)',
-          active: 'var(--status-active)',
-          pending: 'var(--status-pending)',
-          closed: 'var(--status-closed)',
-          rejected: 'var(--status-rejected)',
-          passed: 'var(--status-passed)',
-          deceased: 'var(--status-deceased)',
+          open: token('--status-open'),
+          active: token('--status-active'),
+          pending: token('--status-pending'),
+          closed: token('--status-closed'),
+          rejected: token('--status-rejected'),
+          passed: token('--status-passed'),
+          deceased: token('--status-deceased'),
         },
         health: {
-          healthy: 'var(--health-healthy)',
-          minor: 'var(--health-minor)',
-          major: 'var(--health-major)',
-          critical: 'var(--health-critical)',
+          healthy: token('--health-healthy'),
+          minor: token('--health-minor'),
+          major: token('--health-major'),
+          critical: token('--health-critical'),
         },
       },
       fontFamily: {
@@ -65,6 +75,28 @@ export default {
         body: ['0.9375rem', { lineHeight: '1.7' }],
         'body-sm': ['0.875rem', { lineHeight: '1.6' }],
         label: ['0.75rem', { lineHeight: '1.4', fontWeight: '500', letterSpacing: '0.03em' }],
+      },
+      // Bare `border` (no colour class) should use the warm hairline, not
+      // Tailwind's default cool grey, which glares on the dark palette.
+      borderColor: {
+        DEFAULT: 'var(--border-subtle)',
+      },
+      transitionDuration: {
+        400: '400ms',
+      },
+      keyframes: {
+        'pulse-subtle': {
+          '0%, 100%': { opacity: '1' },
+          '50%': { opacity: '0.55' },
+        },
+        'fade-in': {
+          from: { opacity: '0', transform: 'translateY(2px)' },
+          to: { opacity: '1', transform: 'none' },
+        },
+      },
+      animation: {
+        'pulse-subtle': 'pulse-subtle 2.4s ease-in-out infinite',
+        'fade-in': 'fade-in 160ms ease-out both',
       },
       boxShadow: {
         modal: 'var(--shadow-modal)',

@@ -7,6 +7,7 @@
 /* ================================================================== */
 
 :root {
+  color-scheme: light;
   /* Light palette — warm parchment (existing system) */
   --page: #FAF9F5;
   --card: #FFFFFF;
@@ -59,6 +60,7 @@
 }
 
 [data-theme='dark'] {
+  color-scheme: dark;
   /* Dark palette — warm chamber at night.
      Same hue family as light, inverted lightness, accents lifted ~12-18% L
      for AA contrast on dark surfaces. */
@@ -113,6 +115,47 @@
 }
 
 @layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-page text-text-primary font-body antialiased;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  }
+
+  /* Visible keyboard focus everywhere; mouse clicks stay quiet. */
+  :focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+  }
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: none;
+  }
+
+  /* Tabular figures for every monospace/number surface. */
+  .font-mono,
+  .text-mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
   /* Type scale classes using the design system */
   .text-display {
     font: 600 1.75rem/1.2 'Crimson Pro', serif;
@@ -144,7 +187,12 @@
   .card {
     @apply bg-card border border-border-subtle rounded-card transition-colors duration-150 ease-out;
     border-left-width: 3px;
-    padding: 16px 20px;
+    padding: 14px 16px;
+  }
+  @media (min-width: 640px) {
+    .card {
+      padding: 16px 20px;
+    }
   }
   .card:hover {
     @apply border-border;
@@ -180,6 +228,78 @@
     @apply bg-accent-primary-light;
   }
 
+  .btn-danger {
+    @apply bg-status-rejected text-text-inverse font-display text-sm font-medium;
+    padding: 10px 20px;
+    border-radius: 6px;
+    transition: opacity 150ms;
+    cursor: pointer;
+  }
+  .btn-danger:hover {
+    opacity: 0.9;
+  }
+
+  .btn-ghost {
+    @apply text-text-secondary font-display text-sm font-medium rounded-card;
+    padding: 8px 14px;
+    transition: background-color 150ms, color 150ms;
+  }
+  .btn-ghost:hover {
+    @apply bg-hover text-text-primary;
+  }
+
+  .btn-primary:disabled,
+  .btn-secondary:disabled,
+  .btn-danger:disabled,
+  .btn-ghost:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .btn-sm {
+    padding: 6px 12px;
+    font-size: 0.8125rem;
+  }
+
+  /* Form controls — one look for every input/select/textarea. */
+  .field {
+    @apply bg-card border border-border rounded-card px-3 py-2 text-body-sm font-body text-text-primary
+      placeholder:text-text-tertiary transition-colors;
+  }
+  .field:hover {
+    @apply border-border-strong;
+  }
+  .field:focus {
+    @apply outline-none border-accent-primary;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+  .field:disabled {
+    @apply opacity-60 cursor-not-allowed;
+  }
+  select.field {
+    @apply pr-8 appearance-none cursor-pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237A7770' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9.5 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 14px;
+  }
+  .field-label {
+    @apply block text-label-ui text-text-tertiary mb-1.5;
+  }
+
+  /* Page wrapper: responsive gutters, readable max width on huge screens. */
+  .page {
+    @apply px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8 max-w-[1600px];
+  }
+
+  /* Keyboard-only skip link, revealed on focus. */
+  .skip-link {
+    @apply sr-only;
+  }
+  .skip-link:focus {
+    @apply not-sr-only fixed left-3 top-3 z-[200] bg-card text-text-primary border border-accent-primary rounded-card px-3 py-2 text-body-sm shadow-modal;
+  }
+
   /* Skeleton loading shimmer */
   .skeleton {
     @apply bg-inset rounded-card;
@@ -197,15 +317,6 @@
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
   }
-}
-
-/* Page transitions */
-.page-enter {
-  opacity: 0;
-}
-.page-enter-active {
-  opacity: 1;
-  transition: opacity 120ms ease;
 }
 
 /* === Login parchment === */

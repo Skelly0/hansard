@@ -1,39 +1,31 @@
 import { useState, useMemo } from 'react';
 import { Link } from '@tanstack/react-router';
 import { usePlayers } from '../api/hooks/usePlayers';
+import { useParties } from '../api/hooks/useParties';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { Tag } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
-import { Skeleton, PageSkeleton } from '../components/shared/SkeletonLoader';
+import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { PageHeader, EmptyState } from '../components/shared/PageHeader';
+import { FilterBar, FilterField, SearchInput } from '../components/shared/FilterBar';
+import { plural } from '../lib/format';
 import type { Player } from '../api/hooks/usePlayers';
 
-/** Health status to dot colour mapping */
-function healthDotClass(status?: string | null): string {
-  const map: Record<string, string> = {
-    healthy: 'bg-[var(--health-healthy)]',
-    minor: 'bg-[var(--health-minor)]',
-    major: 'bg-[var(--health-major)]',
-    critical: 'bg-[var(--health-critical)]',
-  };
-  return status ? map[status] || map.healthy : 'bg-border-default';
-}
+const HEALTH_DOT: Record<string, string> = {
+  healthy: 'bg-health-healthy',
+  minor: 'bg-health-minor',
+  major: 'bg-health-major',
+  critical: 'bg-health-critical',
+};
 
-/** Skeleton for a single player card while loading */
-function PlayerCardSkeleton() {
-  return (
-    <div className="card border-l-accent-players p-4">
-      <div className="flex items-start gap-3">
-        <Skeleton width="w-16" height="h-16" circle />
-        <div className="flex-1 min-w-0">
-          <Skeleton width="w-3/4" height="h-5" className="mb-2" />
-          <Skeleton width="w-1/2" height="h-3.5" className="mb-2" />
-          <Skeleton width="w-1/3" height="h-3" />
-        </div>
-      </div>
-    </div>
-  );
-}
+const HEALTH_LABEL: Record<string, string> = {
+  healthy: 'Healthy',
+  minor: 'Minor ailment',
+  major: 'Major ailment',
+  critical: 'Critical condition',
+};
 
 export function Players() {
   const [search, setSearch] = useState('');
@@ -41,108 +33,101 @@ export function Players() {
   const [partyFilter, setPartyFilter] = useState('');
   const [aliveFilter, setAliveFilter] = useState<boolean | undefined>(true);
   const [page, setPage] = useState(1);
+  const debouncedSearch = useDebouncedValue(search.trim(), 250);
   const limit = 24;
 
-  const { data, isLoading, isError, error } = usePlayers({
-    search: search || undefined,
+  const { data, isLoading, isError, error, isPlaceholderData } = usePlayers({
+    search: debouncedSearch || undefined,
     faction: factionFilter || undefined,
     party: partyFilter || undefined,
     alive: aliveFilter,
     page,
     limit,
   });
+  const { data: partyList } = useParties();
 
   const players = data?.data ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / limit);
 
-  // Extract unique factions and parties from current results for filter dropdowns.
-  // In a production app you'd fetch these from dedicated endpoints, but this works
-  // for the initial scaffold.
+  // Filter options come from the party registry (stable), not from the
+  // current page of results — otherwise choosing a party would empty the
+  // dropdown of every other party.
   const { factions, parties } = useMemo(() => {
     const factionMap = new Map<string, string>();
     const partyMap = new Map<string, string>();
+    for (const party of partyList ?? []) {
+      partyMap.set(party.id, party.name);
+      if (party.factionId && party.factionName) factionMap.set(party.factionId, party.factionName);
+    }
     for (const p of players) {
       if (p.faction) factionMap.set(p.faction.id, p.faction.name);
       if (p.party) partyMap.set(p.party.id, p.party.name);
     }
+    const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
     return {
-      factions: Array.from(factionMap, ([id, name]) => ({ id, name })),
-      parties: Array.from(partyMap, ([id, name]) => ({ id, name })),
+      factions: Array.from(factionMap, ([id, name]) => ({ id, name })).sort(byName),
+      parties: Array.from(partyMap, ([id, name]) => ({ id, name })).sort(byName),
     };
-  }, [players]);
+  }, [partyList, players]);
 
-  if (isLoading && page === 1) return <PageSkeleton />;
-  if (isError) {
+  if (isLoading && !data) return <PageSkeleton />;
+  if (isError && !data) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load players" error={error} />
       </div>
     );
   }
 
+  const filtered = !!(debouncedSearch || factionFilter || partyFilter);
+
   return (
-    <div className="p-8">
-      {/* Page header */}
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Players</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Character registry &mdash; {total} player{total !== 1 ? 's' : ''}
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Players"
+        subtitle={<>Character registry &mdash; {plural(total, aliveFilter === false ? 'departed character' : 'character')}</>}
+      />
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        {/* Search */}
-        <div className="flex-1 min-w-[200px] max-w-sm">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Search by name..."
-            className="w-full bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-primary"
-          />
-        </div>
+      <FilterBar>
+        <SearchInput
+          value={search}
+          onChange={(v) => { setSearch(v); setPage(1); }}
+          placeholder="Search by name…"
+          label="Search characters"
+        />
 
-        {/* Faction */}
         {factions.length > 0 && (
-          <div className="flex items-center gap-2">
-            <label className="text-label-ui text-text-tertiary">Faction</label>
+          <FilterField label="Faction">
             <select
               value={factionFilter}
               onChange={(e) => { setFactionFilter(e.target.value); setPage(1); }}
-              className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+              className="field"
             >
-              <option value="">All Factions</option>
+              <option value="">All factions</option>
               {factions.map((f) => (
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>
-          </div>
+          </FilterField>
         )}
 
-        {/* Party */}
         {parties.length > 0 && (
-          <div className="flex items-center gap-2">
-            <label className="text-label-ui text-text-tertiary">Party</label>
+          <FilterField label="Party">
             <select
               value={partyFilter}
               onChange={(e) => { setPartyFilter(e.target.value); setPage(1); }}
-              className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+              className="field"
             >
-              <option value="">All Parties</option>
+              <option value="">All parties</option>
               {parties.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
-          </div>
+          </FilterField>
         )}
 
-        {/* Alive / Deceased toggle */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Status</label>
+        <FilterField label="Status">
           <select
             value={aliveFilter === undefined ? 'all' : aliveFilter ? 'alive' : 'deceased'}
             onChange={(e) => {
@@ -150,34 +135,32 @@ export function Players() {
               setAliveFilter(v === 'all' ? undefined : v === 'alive');
               setPage(1);
             }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            className="field"
           >
             <option value="all">All</option>
             <option value="alive">Living</option>
             <option value="deceased">Deceased</option>
           </select>
-        </div>
-      </div>
+        </FilterField>
+      </FilterBar>
 
-      {/* Player grid */}
-      {isLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <PlayerCardSkeleton key={i} />
-          ))}
-        </div>
-      ) : players.length === 0 ? (
+      {players.length === 0 ? (
         <div className="card border-l-accent-players">
-          <p className="text-body text-text-tertiary italic">
-            No players match the current filters.
-          </p>
+          <EmptyState title={filtered ? 'No characters match these filters.' : 'No characters registered yet.'}>
+            {!filtered && 'Players create characters in Discord with /character create.'}
+          </EmptyState>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <ul
+          className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3 sm:gap-4 transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`}
+          aria-busy={isPlaceholderData}
+        >
           {players.map((player) => (
-            <PlayerCard key={player.id} player={player} />
+            <li key={player.id}>
+              <PlayerCard player={player} />
+            </li>
           ))}
-        </div>
+        </ul>
       )}
 
       <Pagination
@@ -193,59 +176,52 @@ export function Players() {
 function PlayerCard({ player }: { player: Player }) {
   const displayName = player.characterName || player.discordUsername;
   const isDeceased = !player.isAlive;
+  const health = player.healthStatus ?? null;
+  const partyColour = player.party?.colour && /^#[0-9a-f]{6}$/i.test(player.party.colour)
+    ? player.party.colour
+    : null;
 
   return (
     <Link
       to="/players/$id"
       params={{ id: player.id }}
-      className="block"
+      className={`card border-l-accent-players flex items-start gap-3 h-full hover:bg-hover/40 ${isDeceased ? 'opacity-75' : ''}`}
+      style={partyColour ? { borderLeftColor: partyColour } : undefined}
     >
-      <div
-        className={`card border-l-accent-players p-4 hover:border-border-default transition-colors cursor-pointer ${
-          isDeceased ? 'opacity-75' : ''
-        }`}
-      >
-        <div className="flex items-start gap-3">
-          {/* Portrait */}
-          <PlayerAvatar player={player} size="sm" />
+      <PlayerAvatar player={player} size="md" muted={isDeceased} />
 
-          {/* Info */}
-          <div className="flex-1 min-w-0">
-            {/* Name + health dot */}
-            <div className="flex items-center gap-2 mb-1">
-              <h2 className="text-heading-2 text-text-primary truncate">
-                {displayName}
-              </h2>
-              <div
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                  isDeceased ? 'bg-status-deceased' : healthDotClass(player.healthStatus)
-                }`}
-                title={isDeceased ? 'Deceased' : player.healthStatus ?? 'Private'}
-              />
-            </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <h2 className="text-heading-2 text-text-primary truncate">
+            {displayName}
+          </h2>
+          {(isDeceased || health) && (
+            <span
+              className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                isDeceased ? 'bg-status-deceased' : HEALTH_DOT[health!] ?? HEALTH_DOT.healthy
+              }`}
+              title={isDeceased ? 'Deceased' : HEALTH_LABEL[health!] ?? health!}
+              role="img"
+              aria-label={isDeceased ? 'Deceased' : HEALTH_LABEL[health!] ?? health!}
+            />
+          )}
+        </div>
 
-            {/* Party / Faction tags */}
-            <div className="flex flex-wrap gap-1 mb-2">
-              {player.party && (
-                <Tag color="players">{player.party.shortName || player.party.name}</Tag>
-              )}
-              {player.faction && (
-                <Tag color="primary">{player.faction.shortName || player.faction.name}</Tag>
-              )}
-              {isDeceased && (
-                <Tag color="deceased">Deceased</Tag>
-              )}
-            </div>
+        <div className="flex flex-wrap gap-1 mb-1.5">
+          {player.party ? (
+            <Tag color="players">{player.party.shortName || player.party.name}</Tag>
+          ) : (
+            <span className="text-xs italic text-text-tertiary">Independent</span>
+          )}
+          {player.faction && (
+            <Tag color="primary">{player.faction.shortName || player.faction.name}</Tag>
+          )}
+          {isDeceased && <Tag color="deceased">Deceased</Tag>}
+        </div>
 
-            {/* Age + office */}
-            <div className="flex items-center gap-3 text-text-tertiary">
-              {player.currentAge != null && (
-                <span className="font-mono text-xs">
-                  Age {player.currentAge}
-                </span>
-              )}
-            </div>
-          </div>
+        <div className="flex items-center gap-3 text-text-tertiary font-mono text-xs">
+          {player.currentAge != null && <span>Age {player.currentAge}</span>}
+          <span className="truncate">@{player.discordUsername}</span>
         </div>
       </div>
     </Link>

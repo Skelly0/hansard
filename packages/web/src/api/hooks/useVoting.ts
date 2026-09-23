@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -7,9 +7,9 @@ export interface Candidate {
   id: string;
   electionId: string;
   playerId: string;
-  player?: { id: string; characterName: string; discordUsername: string };
+  player?: { id: string; characterName: string | null; discordUsername: string };
   partyId?: string;
-  party?: { id: string; name: string; shortName?: string; colour?: string };
+  party?: { id: string; name: string; shortName?: string | null; colour?: string | null } | null;
   statement?: string;
   nominatedById?: string;
   isWithdrawn: boolean;
@@ -87,8 +87,10 @@ export interface Election {
   results?: ElectionResults | null;
   relatedBillId?: string | null;
   relatedBillSlug?: string | null;
+  /** Ballots come from emoji reactions on the Discord message, not buttons/web. */
+  useReactions?: boolean;
   createdById: string;
-  createdBy?: { id: string; characterName: string };
+  createdBy?: { id: string; characterName: string | null; discordUsername?: string };
   candidates?: Candidate[];
   createdAt: string;
   updatedAt: string;
@@ -125,6 +127,9 @@ export function useElections(filters?: ElectionFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['elections', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: Election[]; total: number }>(`/elections${qs ? `?${qs}` : ''}`),
   });
 }
@@ -203,10 +208,27 @@ export function useTallyVotes() {
   });
 }
 
+/** Whether the signed-in player may vote right now (and why not, if not). */
+export function useElectionEligibility(id?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['elections', id, 'eligibility'],
+    queryFn: () => api.get<{ eligible: boolean; reason?: string }>(`/elections/${id}/eligibility`),
+    enabled: !!id && enabled,
+  });
+}
+
+export type BallotVote =
+  | { type: 'yea_nay_abstain'; choice: 'yea' | 'nay' | 'abstain' }
+  | { type: 'fptp'; candidateId: string }
+  | { type: 'two_round'; candidateId: string }
+  | { type: 'exhaustive'; candidateId: string }
+  | { type: 'ranked'; ranking: string[] }
+  | { type: 'approval'; approved: string[] };
+
 export function useCastBallot() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ electionId, vote }: { electionId: string; vote: unknown }) =>
+    mutationFn: ({ electionId, vote }: { electionId: string; vote: BallotVote }) =>
       api.post(`/elections/${electionId}/vote`, { vote }),
     onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['elections', vars.electionId] }); },
   });

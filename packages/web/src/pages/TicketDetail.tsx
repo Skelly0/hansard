@@ -13,7 +13,10 @@ import {
 import { useAuth } from '../api/hooks/useAuth';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
-import { Modal } from '../components/shared/Modal';
+import { Modal, ConfirmModal } from '../components/shared/Modal';
+import { PageHeader, Breadcrumbs } from '../components/shared/PageHeader';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { formatDateTime, humanizeToken, recordNumber, relativeTime } from '../lib/format';
 
 const PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 type Priority = (typeof PRIORITIES)[number];
@@ -28,16 +31,14 @@ export function TicketDetail() {
 
   const [newMessage, setNewMessage] = useState('');
   const [isInternal, setIsInternal] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   if (isLoading) return <PageSkeleton />;
   if (isError || !ticket) {
     return (
-      <div className="p-8 max-w-4xl">
-        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-          <Link to="/tickets" className="hover:text-accent-primary transition-colors">Tickets</Link>
-          <span>/</span>
-          <span className="font-mono">{id}</span>
-        </div>
+      <div className="page max-w-4xl">
+        <Breadcrumbs items={[{ label: 'Tickets', to: '/tickets' }, { label: 'Not found' }]} />
         <div className="card border-l-status-rejected">
           <h1 className="text-heading-1 text-text-primary mb-2">Ticket not found</h1>
           <p className="text-body text-text-secondary">
@@ -52,38 +53,30 @@ export function TicketDetail() {
   const canClose = isStaff || isCreator;
 
   const handleSendMessage = () => {
-    if (!newMessage.trim()) return;
+    if (!newMessage.trim() || addMessage.isPending) return;
+    setSendError(null);
     addMessage.mutate(
       { ticketId: ticket.id, content: newMessage, isInternal },
-      { onSuccess: () => setNewMessage('') },
+      {
+        onSuccess: () => setNewMessage(''),
+        onError: (err: any) => setSendError(err?.message ?? 'Your reply could not be sent.'),
+      },
     );
   };
 
   const handleClose = () => {
-    closeTicket.mutate({ ticketId: ticket.id });
+    closeTicket.mutate({ ticketId: ticket.id }, { onSettled: () => setConfirmClose(false) });
   };
 
   return (
-    <div className="p-8 max-w-4xl">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-        <Link to="/tickets" className="hover:text-accent-primary transition-colors">
-          Tickets
-        </Link>
-        <span>/</span>
-        <span className="font-mono">#{String(ticket.number).padStart(3, '0')}</span>
-      </div>
-
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-6">
-        <div className="flex-1">
-          <div className="flex items-center gap-3 mb-2">
-            <span className="font-mono text-text-tertiary text-sm">
-              #{String(ticket.number).padStart(3, '0')}
-            </span>
-            <Tag color={statusToTagColor(ticket.status)}>
-              {ticket.status.replace(/_/g, ' ')}
-            </Tag>
+    <div className="page max-w-4xl">
+      <PageHeader
+        breadcrumbs={[{ label: 'Tickets', to: '/tickets' }, { label: recordNumber(ticket.number) }]}
+        documentTitle={`${recordNumber(ticket.number)} ${ticket.title}`}
+        eyebrow={
+          <>
+            <span className="font-mono text-text-tertiary text-sm">{recordNumber(ticket.number)}</span>
+            <Tag color={statusToTagColor(ticket.status)}>{humanizeToken(ticket.status)}</Tag>
             <Tag color={
               ticket.priority === 'urgent' ? 'rejected' :
               ticket.priority === 'high' ? 'primary' :
@@ -91,25 +84,36 @@ export function TicketDetail() {
             }>
               {ticket.priority}
             </Tag>
-          </div>
-          <h1 className="text-display">{ticket.title}</h1>
-        </div>
+          </>
+        }
+        title={ticket.title}
+        actions={
+          <>
+            {isStaff && ticket.status !== 'closed' && (
+              <PriorityChanger ticketId={ticket.id} current={ticket.priority} />
+            )}
+            {ticket.status !== 'closed' && canClose && (
+              <button
+                onClick={() => setConfirmClose(true)}
+                className="btn-secondary whitespace-nowrap"
+                disabled={closeTicket.isPending}
+              >
+                Close ticket
+              </button>
+            )}
+          </>
+        }
+      />
 
-        <div className="flex flex-col gap-2 items-end shrink-0">
-          {isStaff && ticket.status !== 'closed' && (
-            <PriorityChanger ticketId={ticket.id} current={ticket.priority} />
-          )}
-          {ticket.status !== 'closed' && canClose && (
-            <button
-              onClick={handleClose}
-              className="btn-secondary text-sm whitespace-nowrap"
-              disabled={closeTicket.isPending}
-            >
-              Close Ticket
-            </button>
-          )}
-        </div>
-      </div>
+      <ConfirmModal
+        open={confirmClose}
+        onClose={() => setConfirmClose(false)}
+        onConfirm={handleClose}
+        pending={closeTicket.isPending}
+        title={`Close ticket ${recordNumber(ticket.number)}?`}
+        message="Closing marks the matter resolved. It can be reopened later from Discord with /ticket reopen."
+        confirmLabel="Close ticket"
+      />
 
       {/* Metadata */}
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-body-sm text-text-secondary mb-6 pb-6 border-b border-border-subtle">
@@ -141,10 +145,8 @@ export function TicketDetail() {
         </div>
         <div>
           <span className="text-label-ui text-text-tertiary mr-2">Created</span>
-          <span className="font-mono text-xs">
-            {new Date(ticket.createdAt).toLocaleDateString('en-GB', {
-              day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-            })}
+          <span className="font-mono text-xs" title={formatDateTime(ticket.createdAt)}>
+            {formatDateTime(ticket.createdAt)}
           </span>
         </div>
         {ticket.tags.length > 0 && (
@@ -187,17 +189,23 @@ export function TicketDetail() {
                   className={`card ${msg.isInternal ? 'border-l-accent-moderation bg-accent-primary-light/30' : 'border-l-accent-tickets'}`}
                 >
                   <div className="flex items-center gap-2 mb-2">
+                    <PlayerAvatar
+                      player={{ id: msg.authorId, characterName: msg.author?.characterName, discordUsername: msg.author?.discordUsername ?? '?' }}
+                      size="sm"
+                    />
                     <span className="text-body-sm font-medium text-text-primary">
                       {msg.author?.characterName || msg.author?.discordUsername || 'Unknown'}
                     </span>
                     {msg.isInternal && (
                       <Tag color="moderation">Internal</Tag>
                     )}
-                    <span className="font-mono text-xs text-text-tertiary ml-auto">
-                      {new Date(msg.createdAt).toLocaleDateString('en-GB', {
-                        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                      })}
-                    </span>
+                    <time
+                      dateTime={msg.createdAt}
+                      title={formatDateTime(msg.createdAt)}
+                      className="font-mono text-xs text-text-tertiary ml-auto"
+                    >
+                      {relativeTime(msg.createdAt)}
+                    </time>
                   </div>
                   <p className="text-body text-text-primary whitespace-pre-wrap">{msg.content}</p>
                 </div>
@@ -209,14 +217,23 @@ export function TicketDetail() {
         {/* New message form */}
         {ticket.status !== 'closed' && (
           <div className="mt-4">
+            <label htmlFor="ticket-reply" className="sr-only">Reply</label>
             <textarea
+              id="ticket-reply"
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
-              placeholder="Type a reply..."
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
+              placeholder={isInternal ? 'Internal note — only staff will see this…' : 'Type a reply…'}
               rows={3}
-              className="w-full bg-card border border-border-subtle rounded-card px-4 py-3 text-body font-body text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-primary resize-y"
+              className={`field w-full px-4 py-3 text-body resize-y ${isInternal ? 'border-accent-moderation bg-accent-moderation/5' : ''}`}
             />
-            <div className="flex items-center justify-between mt-2">
+            {sendError && <p role="alert" className="text-body-sm text-status-rejected mt-2">{sendError}</p>}
+            <div className="flex flex-wrap items-center justify-between gap-2 mt-2">
               {isStaff ? (
                 <label className="flex items-center gap-2 text-body-sm text-text-secondary cursor-pointer">
                   <input
@@ -228,20 +245,23 @@ export function TicketDetail() {
                   Internal note (staff only)
                 </label>
               ) : <span />}
-              <button
-                onClick={handleSendMessage}
-                disabled={!newMessage.trim() || addMessage.isPending}
-                className="btn-primary text-sm disabled:opacity-50"
-              >
-                {addMessage.isPending ? 'Sending...' : 'Send'}
-              </button>
+              <div className="flex items-center gap-3">
+                <span className="hidden sm:inline text-xs text-text-tertiary">Ctrl + Enter to send</span>
+                <button
+                  onClick={handleSendMessage}
+                  disabled={!newMessage.trim() || addMessage.isPending}
+                  className="btn-primary"
+                >
+                  {addMessage.isPending ? 'Sending…' : isInternal ? 'Add note' : 'Send reply'}
+                </button>
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Audit Log */}
-      <div>
+      {/* Audit Log — staff only; the API never returns audit rows to players. */}
+      {isStaff && <div>
         <h2 className="text-heading-2 text-text-secondary mb-3">
           Audit Log ({ticket.auditLog.length})
         </h2>
@@ -257,22 +277,20 @@ export function TicketDetail() {
                 key={entry.id}
                 className="flex items-center gap-3 py-2 border-b border-border-subtle last:border-0"
               >
-                <span className="font-mono text-xs text-text-tertiary w-36 flex-shrink-0">
-                  {new Date(entry.createdAt).toLocaleDateString('en-GB', {
-                    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                  })}
+                <span className="font-mono text-xs text-text-tertiary w-40 flex-shrink-0">
+                  {formatDateTime(entry.createdAt)}
                 </span>
                 <span className="text-body-sm text-text-secondary">
                   <span className="font-medium text-text-primary">
                     {entry.actor?.characterName || entry.actor?.discordUsername || 'System'}
                   </span>
-                  {' '}{entry.action.replace(/_/g, ' ')}
+                  {' '}{humanizeToken(entry.action)}
                 </span>
               </div>
             ))}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -295,7 +313,7 @@ function PriorityChanger({ ticketId, current }: { ticketId: string; current: Pri
         value={current}
         onChange={onChange}
         disabled={update.isPending}
-        className="bg-card border border-border-subtle rounded-card px-2 py-1 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150"
+        className="field px-2 py-1"
       >
         {PRIORITIES.map((p) => (
           <option key={p} value={p}>{p}</option>
@@ -443,7 +461,7 @@ function LinkPicker({
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search tickets…"
           autoFocus
-          className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary transition-colors duration-150"
+          className="field w-full"
         />
         <div className="max-h-72 overflow-y-auto border border-border-subtle rounded-card divide-y divide-border-subtle">
           {candidates.length === 0 ? (

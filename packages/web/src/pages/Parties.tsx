@@ -477,7 +477,7 @@ export function Parties() {
       />
 
       {list.length === 0 ? (
-        <div className="card border-l-accent-offices">
+        <div className="card">
           <EmptyState title="No parties have been founded yet. The benches sit empty." />
         </div>
       ) : (
@@ -485,12 +485,17 @@ export function Parties() {
           {list.map((p) => (
             <div
               key={p.id}
-              className={`card border-l-accent-offices ${p.isActive ? '' : 'bg-page border-dashed'}`}
-              style={p.colour ? { borderLeftColor: p.colour } : undefined}
+              className={`card relative overflow-hidden ${p.isActive ? '' : 'bg-page border-dashed shadow-none'}`}
             >
+              {/* The party's colours, worn as a ribbon along the top. */}
+              <span
+                aria-hidden="true"
+                className="absolute inset-x-0 top-0 h-[3px] bg-border"
+                style={p.colour ? { backgroundColor: p.colour } : undefined}
+              />
               <div className="flex items-start justify-between mb-3">
                 <div className="min-w-0">
-                  <h2 className="font-display font-semibold text-text-primary">
+                  <h2 className="font-display font-semibold text-[1.25rem] leading-tight text-text-primary">
                     <button
                       type="button"
                       onClick={() => setUrl({ party: p.id })}

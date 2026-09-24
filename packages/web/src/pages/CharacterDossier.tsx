@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
 import { EditCharacterModal } from '../components/players/EditCharacterModal';
+import { MetricStrip } from '../components/shared/MetricCard';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
 import { useUrlState } from '../hooks/useUrlState';
 import {
   usePlayer,
@@ -14,7 +16,7 @@ import { DataTable, type Column } from '../components/shared/DataTable';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { useAuth } from '../api/hooks/useAuth';
-import { Breadcrumbs } from '../components/shared/PageHeader';
+import { Breadcrumbs, SectionHeading } from '../components/shared/PageHeader';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { sentenceCase } from '../lib/format';
 import type { PlayerDossier, PlayerEvent } from '../api/hooks/usePlayers';
@@ -72,7 +74,7 @@ export function CharacterDossier() {
     return (
       <div className="page">
         <Breadcrumbs items={[{ label: 'Players', to: '/players' }, { label: 'Not found' }]} />
-        <div className="card border-l-status-rejected">
+        <div className="notice notice-danger">
           <h1 className="text-heading-1 text-text-primary mb-2">Character not found</h1>
           <p className="text-body text-text-secondary">
             We couldn&rsquo;t load this dossier. The character may have been removed, or the link may be wrong.
@@ -102,19 +104,21 @@ export function CharacterDossier() {
 
       {/* Deceased banner */}
       {isDeceased && (
-        <div className="border-t-[3px] border-accent-graveyard bg-accent-graveyard/[0.06] rounded-card px-5 py-3 mb-6">
-          <p className="text-body text-text-secondary italic font-body">
-            Deceased
-            {player.causeOfDeath && <> &mdash; {player.causeOfDeath}</>}
-            {player.currentAge != null && <>, age {player.currentAge}</>}
+        <div className="notice notice-muted mb-6 flex items-center gap-3">
+          <span className="text-label-ui text-text-tertiary">In memoriam</span>
+          <p className="text-dek text-text-secondary">
+            {player.causeOfDeath ? player.causeOfDeath : 'Deceased'}
+            {player.currentAge != null && <>, aged {player.currentAge}</>}
           </p>
         </div>
       )}
 
       {/* ── Header ── */}
-      <div className="flex items-start gap-4 sm:gap-6 mb-8">
-        {/* Portrait */}
-        <PlayerAvatar player={player} size="lg" muted={isDeceased} />
+      <div className="flex items-start gap-5 sm:gap-7 mb-6">
+        {/* Portrait, mounted like a photograph in a file */}
+        <div className="rounded-full p-1 bg-card border border-border-subtle shadow-card flex-shrink-0">
+          <PlayerAvatar player={player} size="xl" muted={isDeceased} />
+        </div>
 
         {/* Name + meta */}
         <div className="flex-1 min-w-0">
@@ -185,49 +189,25 @@ export function CharacterDossier() {
 
           {/* Epigraph */}
           {epigraph && currentTab !== 'overview' && (
-            <p className="text-body italic text-text-secondary">{epigraph}</p>
+            <p className="text-dek text-text-secondary">{epigraph}</p>
           )}
         </div>
       </div>
 
+      <div className="rule-masthead mb-1" aria-hidden="true" />
+
       {/* ── Tabs ── */}
-      <div className="border-b border-border-subtle mb-6 -mx-4 px-4 sm:mx-0 sm:px-0 overflow-x-auto">
-        <div
-          className="flex gap-0 -mb-px"
-          role="tablist"
-          aria-label="Dossier sections"
-          onKeyDown={(e) => {
-            // Arrow keys move between tabs, per the WAI-ARIA tabs pattern.
-            if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-            const i = visibleTabs.findIndex((t) => t.key === currentTab);
-            const next = visibleTabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + visibleTabs.length) % visibleTabs.length];
-            setActiveTab(next.key);
-            document.getElementById(`dossier-tab-${next.key}`)?.focus();
-          }}
-        >
-          {visibleTabs.map((tab) => (
-            <button
-              key={tab.key}
-              id={`dossier-tab-${tab.key}`}
-              role="tab"
-              aria-selected={currentTab === tab.key}
-              aria-controls="dossier-panel"
-              tabIndex={currentTab === tab.key ? 0 : -1}
-              onClick={() => setActiveTab(tab.key)}
-              className={`text-label-ui px-4 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
-                currentTab === tab.key
-                  ? 'border-accent-primary text-text-primary'
-                  : 'border-transparent text-text-tertiary hover:text-text-secondary hover:border-border-subtle'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Tabs
+        idPrefix="dossier"
+        label="Dossier sections"
+        items={visibleTabs}
+        value={currentTab}
+        onChange={setActiveTab}
+        className="mb-7 -mx-4 px-4 sm:mx-0 sm:px-0"
+      />
 
       {/* ── Tab content ── */}
-      <div id="dossier-panel" role="tabpanel" aria-labelledby={`dossier-tab-${currentTab}`}>
+      <div {...tabPanelProps('dossier', currentTab)}>
         {currentTab === 'overview' && <OverviewTab player={player} onEdit={isSelf && canEdit ? () => setEditing(true) : undefined} />}
         {currentTab === 'offices' && <OfficesTab playerId={player.id} inlineOffices={player.offices} />}
         {currentTab === 'legislation' && <LegislationTab playerId={player.id} inlineBills={player.bills} />}
@@ -262,8 +242,8 @@ function OverviewTab({ player, onEdit }: { player: PlayerDossier; onEdit?: () =>
       {/* Full bio */}
       {player.characterBio && (
         <div>
-          <h2 className="text-heading-2 text-text-secondary mb-3">Biography</h2>
-          <div className="card border-l-accent-players">
+          <SectionHeading>Biography</SectionHeading>
+          <div className="card">
             <p className="text-body text-text-primary whitespace-pre-wrap leading-relaxed">
               {player.characterBio}
             </p>
@@ -273,35 +253,29 @@ function OverviewTab({ player, onEdit }: { player: PlayerDossier; onEdit?: () =>
 
       {/* Basic stats grid */}
       <div>
-        <h2 className="text-heading-2 text-text-secondary mb-3">At a Glance</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-          <StatCard
-            label="Party"
-            value={player.party?.name || 'Independent'}
-          />
-          <StatCard
-            label="Faction"
-            value={player.faction?.name || 'None'}
-          />
-          <StatCard
-            label="Health"
-            value={player.isAlive ? (player.healthStatus ? sentenceCase(player.healthStatus) : 'Private') : 'Deceased'}
-          />
-          <StatCard
-            label="Bills authored"
-            value={String(player.bills?.length ?? 0)}
-            mono
-          />
-        </div>
+        <SectionHeading>At a Glance</SectionHeading>
+        <MetricStrip
+          size="sm"
+          className="grid-cols-2 md:grid-cols-4"
+          metrics={[
+            { label: 'Party', value: player.party?.name || 'Independent' },
+            { label: 'Faction', value: player.faction?.name || 'None' },
+            {
+              label: 'Health',
+              value: player.isAlive ? (player.healthStatus ? sentenceCase(player.healthStatus) : 'Private') : 'Deceased',
+            },
+            { label: 'Bills authored', value: String(player.bills?.length ?? 0) },
+          ]}
+        />
       </div>
 
       {/* Ailments */}
       {player.ailments && player.ailments.length > 0 && (
         <div>
-          <h2 className="text-heading-2 text-text-secondary mb-3">Ailments</h2>
+          <SectionHeading>Ailments</SectionHeading>
           <div className="space-y-2">
             {player.ailments.map((a, i) => (
-              <div key={i} className="card border-l-accent-graveyard flex items-start gap-3">
+              <div key={i} className="card flex items-start gap-3">
                 <div
                   className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${
                     a.severity === 'critical'
@@ -337,16 +311,6 @@ function OverviewTab({ player, onEdit }: { player: PlayerDossier; onEdit?: () =>
   );
 }
 
-function StatCard({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="card border-l-accent-players">
-      <p className="text-label-ui text-text-tertiary mb-1">{label}</p>
-      <p className={`text-body text-text-primary font-medium ${mono ? 'font-mono text-sm' : ''}`}>
-        {value}
-      </p>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Tab: Offices
@@ -364,7 +328,7 @@ function OfficesTab({
 
   if (offices.length === 0) {
     return (
-      <div className="card border-l-accent-offices">
+      <div className="card">
         <p className="text-body text-text-tertiary italic">No offices held.</p>
       </div>
     );
@@ -372,13 +336,13 @@ function OfficesTab({
 
   return (
     <div className="space-y-3">
-      <h2 className="text-heading-2 text-text-secondary mb-1">Offices Held</h2>
+      <SectionHeading>Offices Held</SectionHeading>
       {offices.map((office, i) => {
         const isCurrent = !office.endDate;
         return (
           <div
             key={`${office.officeId}-${i}`}
-            className={`card border-l-accent-offices flex items-start gap-4 ${
+            className={`card flex items-start gap-4 ${
               isCurrent ? '' : 'opacity-80'
             }`}
           >
@@ -459,7 +423,7 @@ function LegislationTab({
         <Link
           to="/bills/$slug"
           params={{ slug: row.slug }}
-          className="text-text-primary hover:text-accent-primary transition-colors font-display font-medium"
+          className="text-text-primary hover:text-accent-primary transition-colors font-display font-semibold text-[1.0625rem] leading-snug"
         >
           {row.title}
         </Link>
@@ -486,8 +450,8 @@ function LegislationTab({
 
   return (
     <div>
-      <h2 className="text-heading-2 text-text-secondary mb-3">Legislation</h2>
-      <div className="card border-l-accent-bills">
+      <SectionHeading>Legislation</SectionHeading>
+      <div className="card card-flush">
         <DataTable
           columns={columns}
           data={bills}
@@ -518,7 +482,7 @@ function VotesTab({
       key: 'electionTitle',
       header: 'Election / Bill',
       render: (row) => (
-        <span className="text-text-primary font-display font-medium">
+        <span className="text-text-primary font-display font-semibold text-[1.0625rem] leading-snug">
           {row.electionTitle}
         </span>
       ),
@@ -552,8 +516,8 @@ function VotesTab({
 
   return (
     <div>
-      <h2 className="text-heading-2 text-text-secondary mb-3">Voting Record</h2>
-      <div className="card border-l-accent-voting">
+      <SectionHeading>Voting Record</SectionHeading>
+      <div className="card card-flush">
         <DataTable
           columns={columns}
           data={votes}
@@ -575,8 +539,8 @@ function FavoursTab({ player }: { player: PlayerDossier }) {
   if (favours.length === 0) {
     return (
       <div>
-        <h2 className="text-heading-2 text-text-secondary mb-3">Favours</h2>
-        <div className="card border-l-accent-favours">
+        <SectionHeading>Favours</SectionHeading>
+        <div className="card">
           <p className="text-body text-text-tertiary italic">No favour balances recorded.</p>
         </div>
       </div>
@@ -587,10 +551,10 @@ function FavoursTab({ player }: { player: PlayerDossier }) {
 
   return (
     <div>
-      <h2 className="text-heading-2 text-text-secondary mb-3">Favour Balances</h2>
+      <SectionHeading>Favour Balances</SectionHeading>
 
       {/* Horizontal bar chart */}
-      <div className="card border-l-accent-favours space-y-4">
+      <div className="card space-y-4">
         {favours.map((fav) => {
           const pct = Math.abs(fav.balance) / maxBalance * 100;
           const isNegative = fav.balance < 0;
@@ -638,8 +602,8 @@ function HistoryTab({
   if (events.length === 0) {
     return (
       <div>
-        <h2 className="text-heading-2 text-text-secondary mb-3">Event History</h2>
-        <div className="card border-l-accent-graveyard">
+        <SectionHeading>Event History</SectionHeading>
+        <div className="card">
           <p className="text-body text-text-tertiary italic">No events recorded.</p>
         </div>
       </div>
@@ -648,7 +612,7 @@ function HistoryTab({
 
   return (
     <div>
-      <h2 className="text-heading-2 text-text-secondary mb-3">Event History</h2>
+      <SectionHeading>Event History</SectionHeading>
       <div className="space-y-1">
         {events.map((event) => (
           <div

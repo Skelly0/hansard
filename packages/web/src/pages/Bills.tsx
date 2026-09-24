@@ -85,7 +85,7 @@ export function Bills() {
           <Link
             to="/bills/$slug"
             params={{ slug: row.slug }}
-            className="text-text-primary hover:text-accent-primary transition-colors font-display font-medium text-[0.975rem] leading-snug"
+            className="text-text-primary hover:text-accent-primary transition-colors font-display font-semibold text-[1.0625rem] leading-snug"
           >
             {row.title}
           </Link>
@@ -195,7 +195,7 @@ export function Bills() {
         </FilterField>
       </FilterBar>
 
-      <div className={`card border-l-accent-bills transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
+      <div className={`card card-flush transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
           columns={columns}
           data={bills}

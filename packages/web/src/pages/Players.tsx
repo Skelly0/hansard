@@ -140,7 +140,7 @@ export function Players() {
       </FilterBar>
 
       {players.length === 0 ? (
-        <div className="card border-l-accent-players">
+        <div className="card">
           <EmptyState title={filtered ? 'No characters match these filters.' : 'No characters registered yet.'}>
             {!filtered && 'Players create characters in Discord with /character create.'}
           </EmptyState>
@@ -180,14 +180,19 @@ function PlayerCard({ player }: { player: Player }) {
     <Link
       to="/players/$id"
       params={{ id: player.id }}
-      className={`card border-l-accent-players flex items-start gap-3 h-full hover:bg-hover/40 ${isDeceased ? 'opacity-75' : ''}`}
-      style={partyColour ? { borderLeftColor: partyColour } : undefined}
+      className={`card card-interactive relative overflow-hidden flex items-start gap-3.5 h-full ${isDeceased ? 'opacity-75' : ''}`}
     >
+      {/* The party's colours, worn as a ribbon along the top. */}
+      <span
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 h-[3px] bg-border"
+        style={partyColour ? { backgroundColor: partyColour } : undefined}
+      />
       <PlayerAvatar player={player} size="md" muted={isDeceased} />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <h2 className="text-heading-2 text-text-primary truncate">
+          <h2 className="font-display text-[1.1875rem] font-semibold leading-tight text-text-primary truncate">
             {displayName}
           </h2>
           {(isDeceased || health) && (

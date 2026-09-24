@@ -16,6 +16,7 @@ import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { RedlineDiff, type DiffHunk } from '../components/shared/RedlineDiff';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
 import { PageHeader } from '../components/shared/PageHeader';
 import { FilterBar, FilterField, SearchInput } from '../components/shared/FilterBar';
 import { Modal } from '../components/shared/Modal';
@@ -235,22 +236,19 @@ function DocumentReader({ slug, onClose }: { slug: string; onClose: () => void }
             )}
           </div>
 
-          <div className="flex gap-1 mb-4 border-b border-border-subtle" role="tablist" aria-label="Document views">
-            {([['read', 'Read'], ['history', 'History']] as const).map(([key, label]) => (
-              <button
-                key={key}
-                role="tab"
-                aria-selected={tab === key}
-                onClick={() => setTab(key)}
-                className={`px-3 py-2 -mb-px border-b-2 text-body-sm transition-colors ${
-                  tab === key ? 'border-accent-primary text-text-primary' : 'border-transparent text-text-tertiary hover:text-text-secondary'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            idPrefix="document"
+            label="Document views"
+            items={[
+              { key: 'read', label: 'Read' },
+              { key: 'history', label: 'History' },
+            ]}
+            value={tab}
+            onChange={setTab}
+            className="mb-5"
+          />
 
+          <div {...tabPanelProps('document', tab)}>
           {tab === 'read' ? (
             body.trim() ? (
               <article className="text-body text-text-primary leading-[1.8] max-w-[70ch]">
@@ -264,6 +262,7 @@ function DocumentReader({ slug, onClose }: { slug: string; onClose: () => void }
           ) : (
             <VersionHistoryPanel doc={doc} />
           )}
+          </div>
         </>
       )}
     </Modal>
@@ -314,7 +313,7 @@ export function Documents() {
       render: (row) => (
         <button
           onClick={() => setOpenSlug(row.slug)}
-          className="font-display font-medium text-text-primary hover:text-accent-primary transition-colors text-left"
+          className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary hover:text-accent-primary transition-colors text-left"
           style={row.hierarchyLevel > 0 ? { paddingLeft: `${row.hierarchyLevel * 0.875}rem` } : undefined}
         >
           {row.hierarchyLevel > 0 && <span className="text-text-tertiary mr-1" aria-hidden="true">↳</span>}
@@ -421,7 +420,7 @@ export function Documents() {
             <button
               key={col.id}
               onClick={() => setUrl({ collection: col.id, page: 1 })}
-              className="card border-l-accent-bills text-left hover:bg-hover/40"
+              className="card text-left hover:bg-hover/40"
             >
               <h2 className="text-heading-2 text-text-primary mb-1">{col.name}</h2>
               {col.description && (
@@ -435,7 +434,7 @@ export function Documents() {
         </div>
       )}
 
-      <div className={`card border-l-accent-bills transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
+      <div className={`card card-flush transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
           columns={columns}
           data={documents}

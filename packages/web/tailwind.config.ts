@@ -17,6 +17,8 @@ export default {
     extend: {
       colors: {
         page: token('--page'),
+        sidebar: token('--sidebar'),
+        rule: token('--rule'),
         card: token('--card'),
         inset: token('--inset'),
         hover: token('--hover'),
@@ -42,10 +44,12 @@ export default {
           voting: token('--c-voting-ink'),
           players: token('--c-players-ink'),
           offices: token('--c-offices-ink'),
+          favours: token('--c-favours-ink'),
           tickets: token('--c-tickets-ink'),
           moderation: token('--c-moderation-ink'),
           graveyard: token('--c-graveyard-ink'),
           simulation: token('--c-simulation-ink'),
+          open: token('--status-open-ink'),
           pending: token('--status-pending-ink'),
           rejected: token('--status-rejected-ink'),
           passed: token('--status-passed-ink'),
@@ -85,14 +89,10 @@ export default {
       borderRadius: {
         card: '6px',
       },
-      fontSize: {
-        display: ['1.75rem', { lineHeight: '1.2', fontWeight: '600', letterSpacing: '-0.01em' }],
-        'heading-1': ['1.25rem', { lineHeight: '1.3', fontWeight: '600' }],
-        'heading-2': ['1rem', { lineHeight: '1.4', fontWeight: '500' }],
-        body: ['0.9375rem', { lineHeight: '1.7' }],
-        'body-sm': ['0.875rem', { lineHeight: '1.6' }],
-        label: ['0.75rem', { lineHeight: '1.4', fontWeight: '500', letterSpacing: '0.03em' }],
-      },
+      // The type scale (`text-display`, `text-heading-1/2`, `text-body`,
+      // `text-body-sm`, `text-label-ui`, `text-dek`) lives in main.css so each
+      // class carries its family too. Don't redeclare them here: generated
+      // utilities would override the stylesheet's sizes.
       // Text utilities for accent/status/health use the darker "ink"
       // variants so small text meets WCAG AA; fills, borders, and bars keep
       // the pastel palette above.
@@ -142,6 +142,10 @@ export default {
           from: { opacity: '0', transform: 'translateY(2px)' },
           to: { opacity: '1', transform: 'none' },
         },
+        'rise-in': {
+          from: { opacity: '0', transform: 'translateY(6px)' },
+          to: { opacity: '1', transform: 'none' },
+        },
       },
       animation: {
         'pulse-subtle': 'pulse-subtle 2.4s ease-in-out infinite',
@@ -149,8 +153,11 @@ export default {
         // `transform` makes the element a containing block for `fixed`
         // descendants, which clips overlays rendered inside the page.
         'fade-in': 'fade-in 160ms ease-out backwards',
+        'rise-in': 'rise-in 320ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards',
       },
       boxShadow: {
+        card: 'var(--shadow-card)',
+        lift: 'var(--shadow-lift)',
         modal: 'var(--shadow-modal)',
         'modal-warm': 'var(--shadow-modal-warm)',
       },

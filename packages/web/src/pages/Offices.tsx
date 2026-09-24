@@ -8,7 +8,7 @@ import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
-import { PageHeader, EmptyState } from '../components/shared/PageHeader';
+import { PageHeader, EmptyState, SectionHeading } from '../components/shared/PageHeader';
 import { formatDate, formatSimDate, humanizeToken, relativeTime, sentenceCase } from '../lib/format';
 
 const tierOrder = ['head_of_state', 'head_of_government', 'cabinet', 'legislature', 'regional'];
@@ -141,7 +141,7 @@ export function Offices() {
       />
 
       {grouped.length === 0 && (
-        <div className="card border-l-accent-offices">
+        <div className="card">
           <EmptyState title="No offices have been established yet." />
         </div>
       )}
@@ -149,7 +149,7 @@ export function Offices() {
       <div className="space-y-8">
         {grouped.map((group) => (
           <div key={group.tier}>
-            <h2 className="text-heading-1 text-text-secondary mb-4">{group.label}</h2>
+            <SectionHeading size="lg" className="mb-4">{group.label}</SectionHeading>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
               {group.offices.map((office) => {
                 const holders = office.currentHolders || [];
@@ -158,7 +158,7 @@ export function Offices() {
                 return (
                   <div
                     key={office.id}
-                    className={`card border-l-accent-offices ${
+                    className={`card ${
                       vacant ? 'border-dashed bg-page' : ''
                     }`}
                   >

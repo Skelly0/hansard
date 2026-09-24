@@ -4,12 +4,12 @@ import { useModActions, useModStats, type ModAction } from '../api/hooks/useMode
 import { usePlayers } from '../api/hooks/usePlayers';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag } from '../components/shared/Tag';
-import { MetricCard } from '../components/shared/MetricCard';
+import { MetricStrip } from '../components/shared/MetricCard';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { ModActionModal } from '../components/shared/ModActionModal';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
-import { PageHeader } from '../components/shared/PageHeader';
+import { PageHeader, SectionHeading } from '../components/shared/PageHeader';
 import { SearchInput } from '../components/shared/FilterBar';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { formatDate as formatDisplayDate, relativeTime } from '../lib/format';
@@ -252,44 +252,25 @@ export function Moderation() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
-        <MetricCard
-          label="Total Actions"
-          value={stats?.totalActions ?? 0}
-          color="text-accent-moderation"
-          borderColor="border-l-accent-moderation"
-        />
-        <MetricCard
-          label="Active Actions"
-          value={stats?.activeActions ?? 0}
-          color="text-status-rejected"
-          borderColor="border-l-accent-moderation"
-          subtitle={stats?.activeActions ? 'Currently enforced' : undefined}
-        />
-        <MetricCard
-          label="Warnings This Week"
-          value={warningsThisWeek}
-          color="text-status-pending"
-          borderColor="border-l-accent-moderation"
-        />
-        <MetricCard
-          label="Pending Appeals"
-          value={stats?.pendingAppeals ?? 0}
-          color="text-accent-primary"
-          borderColor="border-l-accent-moderation"
-          subtitle={stats?.pendingAppeals ? 'Awaiting review' : undefined}
-        />
-      </div>
+      <MetricStrip
+        className="grid-cols-2 lg:grid-cols-4 mb-8"
+        metrics={[
+          { label: 'Total Actions', value: stats?.totalActions ?? 0, color: 'text-accent-moderation' },
+          { label: 'Active Actions', value: stats?.activeActions ?? 0, color: 'text-status-rejected', hint: stats?.activeActions ? 'Currently enforced' : undefined },
+          { label: 'Warnings This Week', value: warningsThisWeek, color: 'text-status-pending' },
+          { label: 'Pending Appeals', value: stats?.pendingAppeals ?? 0, color: 'text-accent-primary', hint: stats?.pendingAppeals ? 'Awaiting review' : undefined },
+        ]}
+      />
 
       {/* Active mod actions */}
       {activeActions.length > 0 && (
         <section className="mb-8">
-          <h2 className="text-heading-1 mb-4">Active Actions</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <SectionHeading size="lg" className="mb-4">Active Actions</SectionHeading>
+          <div className="grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {activeActions.map((action) => (
               <div
                 key={action.id}
-                className="card border-l-accent-moderation"
+                className="card"
               >
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <span className="text-heading-2 text-text-primary">
@@ -323,8 +304,8 @@ export function Moderation() {
 
       {/* Full action log */}
       <section>
-        <h2 className="text-heading-1 mb-4">Action Log</h2>
-        <div className="card border-l-accent-moderation">
+        <SectionHeading size="lg" className="mb-4">Action Log</SectionHeading>
+        <div className="card card-flush">
           <DataTable
             columns={columns}
             data={actions}

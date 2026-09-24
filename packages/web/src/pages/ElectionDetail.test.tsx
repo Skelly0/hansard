@@ -98,8 +98,8 @@ describe('ElectionDetail', () => {
     // The user should see a clear "sealed until close" callout.
     expect(screen.getByText(/sealed until close/i)).toBeInTheDocument();
 
-    // And no "Margin:" / finalTallies-derived bars should be rendered.
-    expect(screen.queryByText(/Margin:/i)).not.toBeInTheDocument();
+    // And no majority / finalTallies-derived bars should be rendered.
+    expect(screen.queryByText('Majority')).not.toBeInTheDocument();
   });
 
   it('does not crash for unsealed-pending shape ({ sealed: false, results: null })', () => {
@@ -131,7 +131,7 @@ describe('ElectionDetail', () => {
 
     expect(() => render(<ElectionDetail />)).not.toThrow();
     // No tally bars yet.
-    expect(screen.queryByText(/Margin:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Majority')).not.toBeInTheDocument();
   });
 
   it('renders final tallies for a fully-tallied election', () => {
@@ -169,7 +169,10 @@ describe('ElectionDetail', () => {
     } as any);
 
     expect(() => render(<ElectionDetail />)).not.toThrow();
-    expect(screen.getByText(/Margin:/i)).toBeInTheDocument();
+    expect(screen.getByText('Majority')).toBeInTheDocument();
+    // 7 yea to 3 nay: a majority of 4, and the chair declares for the ayes.
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.getByText('The Ayes have it.')).toBeInTheDocument();
   });
 
   describe('candidacy', () => {

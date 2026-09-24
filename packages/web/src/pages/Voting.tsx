@@ -8,6 +8,7 @@ import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
 import { PageHeader } from '../components/shared/PageHeader';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
 import { FilterBar, FilterField } from '../components/shared/FilterBar';
 import { formatDate, humanizeToken, plural, relativeTime } from '../lib/format';
 import type { Election } from '../api/hooks/useVoting';
@@ -122,7 +123,7 @@ export function Voting() {
           <Link
             to="/voting/$id"
             params={{ id: row.id }}
-            className="font-display font-medium text-text-primary hover:text-accent-primary transition-colors"
+            className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary hover:text-accent-primary transition-colors"
           >
             {row.title}
           </Link>
@@ -242,27 +243,14 @@ export function Voting() {
       />
 
       {/* Scope tabs — quick presets that override the status dropdown */}
-      <div className="flex flex-wrap gap-1 mb-4 border-b border-border-subtle" role="tablist" aria-label="Vote scope">
-        {SCOPE_TABS.map((tab) => {
-          const isActive = scope === tab.key && status === 'all';
-          return (
-            <button
-              key={tab.key}
-              role="tab"
-              aria-selected={isActive}
-              onClick={() => setUrl({ scope: tab.key, status: 'all', page: 1 })}
-              className={`px-3 py-2 -mb-px border-b-2 text-body-sm transition-colors ${
-                isActive
-                  ? 'border-accent-primary text-text-primary'
-                  : 'border-transparent text-text-tertiary hover:text-text-secondary'
-              }`}
-              title={tab.description}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        idPrefix="vote-scope"
+        label="Vote scope"
+        items={SCOPE_TABS.map((tab) => ({ key: tab.key, label: tab.label, title: tab.description }))}
+        value={status === 'all' ? scope : null}
+        onChange={(key) => setUrl({ scope: key, status: 'all', page: 1 })}
+        className="mb-5"
+      />
 
       <FilterBar>
         <FilterField label="Status">
@@ -294,7 +282,7 @@ export function Voting() {
       </FilterBar>
 
       {/* Table */}
-      <div className={`card border-l-accent-voting transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
+      <div {...tabPanelProps('vote-scope', status === 'all' ? scope : null)} className={`card card-flush transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
           caption="Votes"
           columns={columns}

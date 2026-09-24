@@ -18,6 +18,7 @@ import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal, ConfirmModal } from '../components/shared/Modal';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
 import { PageHeader } from '../components/shared/PageHeader';
 
 // ---- Types for the matrix view ----
@@ -132,7 +133,7 @@ function StaffOverview() {
         <Link
           to="/players/$id"
           params={{ id: row.playerId }}
-          className="font-display font-medium text-text-primary hover:text-accent-primary transition-colors"
+          className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary hover:text-accent-primary transition-colors"
         >
           {row.characterName}
         </Link>
@@ -161,7 +162,7 @@ function StaffOverview() {
   ];
 
   return (
-    <div className="card border-l-accent-favours">
+    <div className="card card-flush">
       <DataTable
         columns={columns}
         data={rows}
@@ -223,7 +224,7 @@ function MyFavours({ playerId }: { playerId: string }) {
   return (
     <div className="space-y-6">
       {/* Horizontal bar chart */}
-      <div className="card border-l-accent-favours">
+      <div className="card">
         <h2 className="text-heading-2 mb-4">Balances</h2>
         {barData.length === 0 ? (
           <p className="text-body-sm text-text-tertiary italic">No balances to display.</p>
@@ -253,7 +254,7 @@ function MyFavours({ playerId }: { playerId: string }) {
       </div>
 
       {/* Transaction history */}
-      <div className="card border-l-accent-favours">
+      <div className="card">
         <h2 className="text-heading-2 mb-4">Transaction History</h2>
         {(!history || history.length === 0) ? (
           <p className="text-body-sm text-text-tertiary italic">No transactions yet.</p>
@@ -484,7 +485,7 @@ function ManageCategories() {
         </button>
       </div>
 
-      <div className="card border-l-accent-favours">
+      <div className="card">
         {sorted.length === 0 ? (
           <p className="text-body text-text-tertiary italic">
             No categories defined yet.
@@ -499,7 +500,7 @@ function ManageCategories() {
                 <span className="text-lg w-6 text-center">{cat.emoji || '·'}</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-display font-medium text-text-primary truncate">
+                    <span className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary truncate">
                       {cat.name}
                     </span>
                     {cat.shortName && (
@@ -701,68 +702,35 @@ export function Favours() {
       />
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-border-subtle overflow-x-auto" role="tablist" aria-label="Favour views">
-        {isStaff && (
-          <TabButton active={tab === 'staff'} onClick={() => setTab('staff')}>
-            Staff Overview
-          </TabButton>
-        )}
-        <TabButton active={tab === 'my'} onClick={() => setTab('my')}>
-          My Favours
-        </TabButton>
-        {isStaff && (
-          <TabButton active={tab === 'categories'} onClick={() => setTab('categories')}>
-            Manage Categories
-          </TabButton>
-        )}
-      </div>
+      <Tabs
+        idPrefix="favours"
+        label="Favour views"
+        items={[
+          ...(isStaff ? [{ key: 'staff' as const, label: 'Staff overview' }] : []),
+          { key: 'my' as const, label: 'My favours' },
+          ...(isStaff ? [{ key: 'categories' as const, label: 'Manage categories' }] : []),
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
 
       {/* Content */}
+      <div {...tabPanelProps('favours', tab)}>
       {isStaff && tab === 'categories' && <ManageCategories />}
       {isStaff && tab === 'staff' && <StaffOverview />}
       {tab === 'my' && (
         playerId ? (
           <MyFavours playerId={playerId} />
         ) : (
-          <div className="card border-l-accent-favours">
+          <div className="card">
             <p className="text-body text-text-secondary italic">
               Sign in to view your personal favour balances and history.
             </p>
           </div>
         )
       )}
+      </div>
     </div>
   );
 }
 
-// ---- Tab button ----
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={`
-        px-4 py-2.5 text-body-sm font-medium transition-colors relative whitespace-nowrap
-        ${active
-          ? 'text-text-primary'
-          : 'text-text-tertiary hover:text-text-secondary'
-        }
-      `}
-    >
-      {children}
-      {active && (
-        <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-favours" aria-hidden="true" />
-      )}
-    </button>
-  );
-}

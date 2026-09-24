@@ -4,24 +4,29 @@
 
 /* ================================================================== */
 /* THEME TOKENS                                                        */
+/* "The Official Report": warm paper, ink, and printed rules.          */
 /* ================================================================== */
 
 :root {
   color-scheme: light;
-  /* Light palette — warm parchment (existing system) */
-  --page: #FAF9F5;
-  --card: #FFFFFF;
-  --inset: #F2F0E8;
-  --hover: #EDEADF;
+  /* Light palette — warm paper */
+  --page: #F7F4EC;
+  --card: #FFFDF8;
+  --inset: #F0ECE2;
+  --hover: #EBE6D9;
+  /* The sidebar is the bound spine of the record: a shade deeper. */
+  --sidebar: #F1EDE3;
 
-  --text-primary: #141413;
-  --text-secondary: #524F48;
-  --text-tertiary: #6B6963; /* 4.6:1 on inset; was #7A7770 (4.2:1) */
+  --text-primary: #1B1915;
+  --text-secondary: #4F4B43;
+  --text-tertiary: #645F56; /* >= 5:1 on every surface, hover included */
   --text-inverse: #FAF9F5;
 
-  --border-subtle: #E8E6DC;
-  --border: #D4D1C7;
-  --border-strong: #B0AEA5;
+  --border-subtle: #E6E0D2;
+  --border: #D4CDBC;
+  --border-strong: #ACA491;
+  /* Printed rules (mastheads, ledgers). */
+  --rule: #3A362E;
 
   --accent-primary: #D97757;
   --accent-primary-soft: #F5E6DF;
@@ -50,40 +55,49 @@
   --health-critical: #C25B4E;
 
   /* Text ("ink") variants of the accents. The fills above are pastel by
-     design and fail WCAG AA as small text on parchment; Tailwind's text-*
+     design and fail WCAG AA as small text on paper; Tailwind's text-*
      utilities for accent/status/health resolve to these instead (see
      tailwind.config.ts textColor). Each clears 4.6:1 on page, card, inset,
-     and its own 10% tag tint. */
-  --accent-primary-ink: #B14A28;
-  --c-bills-ink: #8D612A;
-  --c-voting-ink: #386EA4;
-  --c-players-ink: #5F6F4A;
-  --c-offices-ink: #8059A5;
-  --c-favours-ink: #8D612A;
-  --c-tickets-ink: #5A6B89;
-  --c-moderation-ink: #AE493C;
-  --c-graveyard-ink: #6F6B63;
-  --c-simulation-ink: #4B7063;
-  --status-open-ink: #386EA4;
-  --status-active-ink: #5F6F4A;
-  --status-pending-ink: #8D612A;
-  --status-closed-ink: #6F6B63;
-  --status-rejected-ink: #AE493C;
-  --status-passed-ink: #5F6F4A;
-  --status-deceased-ink: #6E6B60;
-  --health-healthy-ink: #5F6F4A;
-  --health-minor-ink: #8D612A;
-  --health-major-ink: #B14A28;
-  --health-critical-ink: #AE493C;
+     hover and sidebar, and on its own 10% tag tint over any of them; cream
+     text on each clears 5.7:1. */
+  --accent-primary-ink: #A14324;
+  --c-bills-ink: #805826;
+  --c-voting-ink: #336495;
+  --c-players-ink: #566543;
+  --c-offices-ink: #735094;
+  --c-favours-ink: #805826;
+  --c-tickets-ink: #51607B;
+  --c-moderation-ink: #9D4236;
+  --c-graveyard-ink: #646059;
+  --c-simulation-ink: #44665A;
+  --status-open-ink: #336495;
+  --status-active-ink: #566543;
+  --status-pending-ink: #805826;
+  --status-closed-ink: #646059;
+  --status-rejected-ink: #9D4236;
+  --status-passed-ink: #566543;
+  --status-deceased-ink: #656258;
+  --health-healthy-ink: #566543;
+  --health-minor-ink: #805826;
+  --health-major-ink: #A14324;
+  --health-critical-ink: #9D4236;
 
+  --btn-primary-hover: #8A391E;
+  --btn-danger-hover: #87382E;
+
+  --shadow-card: 0 1px 0 rgba(58, 45, 25, 0.04), 0 1px 3px rgba(58, 45, 25, 0.04);
+  --shadow-lift: 0 1px 0 rgba(58, 45, 25, 0.05), 0 6px 18px -6px rgba(58, 45, 25, 0.16);
   --shadow-modal: 0 4px 12px rgba(20, 20, 19, 0.08);
-  --shadow-modal-warm: 0 8px 32px rgba(120, 90, 60, 0.18);
+  --shadow-modal-warm: 0 18px 48px -12px rgba(90, 60, 30, 0.28), 0 2px 6px rgba(90, 60, 30, 0.08);
 
-  --shimmer-from: #F2F0E8;
-  --shimmer-mid: #FAF9F5;
+  --shimmer-from: #F0ECE2;
+  --shimmer-mid: #F8F5EE;
 
-  --parchment-from: #FAF9F5;
-  --parchment-to: #F5E6DF;
+  --parchment-from: #F9F6EF;
+  --parchment-to: #F2E4DA;
+
+  /* Paper tooth: a faint fractal-noise tile under the page. */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.36 0 0 0 0 0.27 0 0 0 0 0.15 0 0 0 0.07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 [data-theme='dark'] {
@@ -95,6 +109,7 @@
   --card: #1C1812;
   --inset: #221E16;
   --hover: #2A251B;
+  --sidebar: #100D08;
 
   --text-primary: #F4EFE2;
   --text-secondary: #BDB39E;
@@ -104,6 +119,7 @@
   --border-subtle: #2A2519;
   --border: #3A3422;
   --border-strong: #524A33;
+  --rule: #7A705C;
 
   --accent-primary: #E89478;
   --accent-primary-soft: #3A2418;
@@ -149,20 +165,28 @@
   --status-closed-ink: var(--status-closed);
   --status-rejected-ink: var(--status-rejected);
   --status-passed-ink: var(--status-passed);
-  --status-deceased-ink: #968D79;
+  --status-deceased-ink: #A59C88;
   --health-healthy-ink: var(--health-healthy);
   --health-minor-ink: var(--health-minor);
   --health-major-ink: var(--health-major);
   --health-critical-ink: var(--health-critical);
 
+  /* On dark the ink buttons are light; hover lifts rather than darkens. */
+  --btn-primary-hover: #F0AB93;
+  --btn-danger-hover: #EA978F;
+
+  --shadow-card: 0 1px 0 rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 1px 0 rgba(0, 0, 0, 0.4), 0 8px 22px -8px rgba(0, 0, 0, 0.7);
   --shadow-modal: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(232, 148, 120, 0.04);
-  --shadow-modal-warm: 0 8px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(232, 148, 120, 0.05);
+  --shadow-modal-warm: 0 18px 48px -12px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(232, 148, 120, 0.06);
 
   --shimmer-from: #221E16;
   --shimmer-mid: #2A251B;
 
-  --parchment-from: #14110B;
-  --parchment-to: #1C1812;
+  --parchment-from: #16120C;
+  --parchment-to: #1E1812;
+
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.95 0 0 0 0 0.85 0 0 0 0 0.7 0 0 0 0.035 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 @layer base {
@@ -172,7 +196,19 @@
   }
 
   body {
-    @apply bg-page text-text-primary font-body antialiased;
+    @apply text-text-primary font-body antialiased;
+    background-color: var(--page);
+    background-image: var(--grain);
+    /* Old-style figures read naturally in running prose. */
+    font-variant-numeric: oldstyle-nums proportional-nums;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-variant-numeric: lining-nums;
+    text-wrap: balance;
   }
 
   ::selection {
@@ -190,10 +226,10 @@
     outline: none;
   }
 
-  /* Tabular figures for every monospace/number surface. */
+  /* Tabular lining figures for every monospace/number surface. */
   .font-mono,
   .text-mono {
-    font-variant-numeric: tabular-nums;
+    font-variant-numeric: lining-nums tabular-nums;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -207,16 +243,18 @@
     }
   }
 
-  /* Type scale classes using the design system */
+  /* ---- Type scale ------------------------------------------------ */
+  /* Crimson Pro carries the headings and labels; Lora the prose. */
   .text-display {
-    font: 600 1.75rem/1.2 'Crimson Pro', serif;
-    letter-spacing: -0.01em;
+    font: 600 clamp(1.875rem, 1.45rem + 1.5vw, 2.5rem) / 1.08 'Crimson Pro', serif;
+    letter-spacing: -0.018em;
   }
   .text-heading-1 {
-    font: 600 1.25rem/1.3 'Crimson Pro', serif;
+    font: 600 1.5rem/1.2 'Crimson Pro', serif;
+    letter-spacing: -0.008em;
   }
   .text-heading-2 {
-    font: 500 1rem/1.4 'Crimson Pro', serif;
+    font: 600 1.125rem/1.3 'Crimson Pro', serif;
   }
   .text-body {
     font: 400 0.9375rem/1.7 'Lora', serif;
@@ -224,81 +262,200 @@
   .text-body-sm {
     font: 400 0.875rem/1.6 'Lora', serif;
   }
+  /* Tracked capitals, as on a printed order paper. */
   .text-label-ui {
-    font: 500 0.75rem/1.4 'Lora', serif;
-    letter-spacing: 0.03em;
+    font: 600 0.8125rem/1.3 'Crimson Pro', serif;
+    letter-spacing: 0.09em;
     text-transform: uppercase;
   }
   .text-mono {
     font: 400 0.8125rem/1.5 'JetBrains Mono', monospace;
   }
+  /* Italic standfirst under a title. */
+  .text-dek {
+    font: italic 400 1.125rem/1.45 'Crimson Pro', serif;
+  }
+  /* Large display figures (metrics, tallies). */
+  .figure {
+    font-family: 'Crimson Pro', serif;
+    font-weight: 600;
+    font-variant-numeric: lining-nums tabular-nums;
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
 }
 
 @layer components {
+  /* ---- Surfaces -------------------------------------------------- */
+  /* A sheet of paper laid on the page: quiet border, faint shadow. The
+     module colour lives in labels and marks, not in a border. */
   .card {
-    @apply bg-card border border-border-subtle rounded-card transition-colors duration-150 ease-out;
-    border-left-width: 3px;
+    @apply bg-card border border-border-subtle rounded-card transition-[border-color,box-shadow,background-color] duration-150 ease-out;
+    box-shadow: var(--shadow-card);
     padding: 14px 16px;
   }
   @media (min-width: 640px) {
     .card {
-      padding: 16px 20px;
+      padding: 18px 22px;
     }
   }
-  .card:hover {
+  /* A card that is a link or button: lifts on hover. */
+  .card-interactive {
+    cursor: pointer;
+  }
+  .card-interactive:hover {
     @apply border-border;
+    box-shadow: var(--shadow-lift);
+  }
+  .card-flush {
+    padding: 0 !important;
+    overflow: hidden;
   }
 
+  /* Tinted callout for notices, errors, prompts. */
+  .notice {
+    @apply rounded-card border px-4 py-3 sm:px-5 sm:py-4;
+    border-color: var(--border);
+    background-color: var(--inset);
+  }
+  .notice-accent {
+    border-color: color-mix(in srgb, var(--accent-primary) 38%, transparent);
+    background-color: color-mix(in srgb, var(--accent-primary) 7%, var(--card));
+  }
+  .notice-danger {
+    border-color: color-mix(in srgb, var(--status-rejected) 40%, transparent);
+    background-color: color-mix(in srgb, var(--status-rejected) 7%, var(--card));
+  }
+  .notice-info {
+    border-color: color-mix(in srgb, var(--status-open) 40%, transparent);
+    background-color: color-mix(in srgb, var(--status-open) 7%, var(--card));
+  }
+  .notice-muted {
+    border-style: dashed;
+    background-color: transparent;
+  }
+
+  /* ---- Rules ----------------------------------------------------- */
+  /* Thick-thin rule under a masthead. */
+  .rule-masthead {
+    height: 5px;
+    border-top: 2px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  /* Section heading with a hairline running to the margin. */
+  .section-head {
+    @apply flex items-baseline gap-3 mb-3;
+  }
+  .section-head::after {
+    content: '';
+    order: 1;
+    flex: 1;
+    border-top: 1px solid var(--border);
+    transform: translateY(-0.28em);
+    min-width: 1.5rem;
+  }
+  .section-head > .section-head-action {
+    order: 2;
+  }
+
+  /* ---- Tags: rubber stamps -------------------------------------- */
   .tag {
-    @apply font-body text-xs font-medium uppercase tracking-wide whitespace-nowrap;
-    padding: 3px 10px;
-    border-radius: 99px;
-    letter-spacing: 0.03em;
+    @apply whitespace-nowrap border;
+    font: 600 0.75rem/1.3 'Crimson Pro', serif;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 7px 1px;
+    border-radius: 3px;
   }
 
+  /* ---- Tabs: tracked capitals on a ruled baseline ---------------- */
+  .tab-list {
+    @apply flex gap-1 overflow-x-auto;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    @apply relative whitespace-nowrap text-label-ui text-text-tertiary transition-colors;
+    margin-bottom: -1px;
+    padding: 0.7rem 0.9rem 0.6rem;
+    border-bottom: 2px solid transparent;
+  }
+  .tab:hover {
+    @apply text-text-secondary;
+    border-bottom-color: var(--border-strong);
+  }
+  .tab[aria-selected='true'] {
+    @apply text-text-primary;
+    border-bottom-color: var(--accent-primary);
+  }
+
+  /* ---- Links ----------------------------------------------------- */
+  .link {
+    color: var(--accent-primary-ink);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+    transition: text-decoration-color 150ms, color 150ms;
+  }
+  .link:hover {
+    text-decoration-color: currentColor;
+  }
+  /* Quiet link: reads as text, underlines on hover. */
+  .link-quiet {
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    text-decoration-color: transparent;
+    transition: text-decoration-color 150ms, color 150ms;
+  }
+  .link-quiet:hover {
+    color: var(--accent-primary-ink);
+    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  }
+
+  /* ---- Buttons --------------------------------------------------- */
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-card whitespace-nowrap;
+    font: 600 0.9375rem/1.25 'Crimson Pro', serif;
+    letter-spacing: 0.01em;
+    padding: 9px 18px;
+    cursor: pointer;
+    transition: background-color 150ms, border-color 150ms, color 150ms, box-shadow 150ms;
+  }
   .btn-primary {
-    @apply text-text-inverse font-display text-sm font-medium;
+    @apply text-text-inverse;
     /* Ink, not the pastel fill: cream on #D97757 is only 3:1. */
     background-color: var(--accent-primary-ink);
-    padding: 10px 20px;
-    border-radius: 6px;
-    border: none;
-    transition: opacity 150ms;
-    cursor: pointer;
+    border: 1px solid transparent;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   }
-  .btn-primary:hover {
-    opacity: 0.9;
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--btn-primary-hover);
   }
-
   .btn-secondary {
-    @apply bg-transparent text-accent-primary border border-accent-primary font-display text-sm font-medium;
-    padding: 10px 20px;
-    border-radius: 6px;
-    transition: background-color 150ms;
-    cursor: pointer;
+    @apply bg-card text-text-primary border border-border;
+    box-shadow: 0 1px 0 rgba(58, 45, 25, 0.05);
   }
-  .btn-secondary:hover {
-    @apply bg-accent-primary-light;
+  .btn-secondary:hover:not(:disabled) {
+    @apply bg-hover border-border-strong;
   }
-
   .btn-danger {
-    @apply text-text-inverse font-display text-sm font-medium;
+    @apply text-text-inverse;
     background-color: var(--status-rejected-ink);
-    padding: 10px 20px;
-    border-radius: 6px;
-    transition: opacity 150ms;
-    cursor: pointer;
+    border: 1px solid transparent;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   }
-  .btn-danger:hover {
-    opacity: 0.9;
+  .btn-danger:hover:not(:disabled) {
+    background-color: var(--btn-danger-hover);
   }
-
   .btn-ghost {
-    @apply text-text-secondary font-display text-sm font-medium rounded-card;
-    padding: 8px 14px;
-    transition: background-color 150ms, color 150ms;
+    @apply text-text-secondary border border-transparent;
+    padding: 8px 12px;
   }
-  .btn-ghost:hover {
+  .btn-ghost:hover:not(:disabled) {
     @apply bg-hover text-text-primary;
   }
 
@@ -311,14 +468,15 @@
   }
 
   .btn-sm {
-    padding: 6px 12px;
-    font-size: 0.8125rem;
+    padding: 5px 11px;
+    font-size: 0.875rem;
   }
 
-  /* Form controls — one look for every input/select/textarea. */
+  /* ---- Form controls: one look for every input/select/textarea --- */
   .field {
     @apply bg-card border border-border rounded-card px-3 py-2 text-body-sm font-body text-text-primary
       placeholder:text-text-tertiary transition-colors;
+    box-shadow: inset 0 1px 2px rgba(58, 45, 25, 0.04);
   }
   .field:hover {
     @apply border-border-strong;
@@ -341,9 +499,10 @@
     @apply block text-label-ui text-text-tertiary mb-1.5;
   }
 
+  /* ---- Layout ---------------------------------------------------- */
   /* Page wrapper: responsive gutters, readable max width on huge screens. */
   .page {
-    @apply px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8 max-w-[1600px];
+    @apply px-4 py-6 sm:px-6 sm:py-8 lg:px-10 lg:py-10 max-w-[1560px];
   }
 
   /* Keyboard-only skip link, revealed on focus. */
@@ -373,9 +532,19 @@
   }
 }
 
+/* === Paper surface (body and the app shell) === */
+.paper {
+  background-color: var(--page);
+  background-image: var(--grain);
+}
+
 /* === Login parchment === */
 .bg-parchment {
-  background: linear-gradient(180deg, var(--parchment-from) 0%, var(--parchment-to) 100%);
+  background-color: var(--parchment-from);
+  background-image:
+    var(--grain),
+    radial-gradient(ellipse at 50% 0%, var(--parchment-from) 0%, transparent 60%),
+    linear-gradient(180deg, var(--parchment-from) 0%, var(--parchment-to) 100%);
 }
 
 .parchment-frame {
@@ -407,17 +576,20 @@
   margin: 1.5rem 0;
 }
 
-/* === Subtle paper-grain glow on dark === */
+/* === Candlelight on dark === */
+[data-theme='dark'] .paper,
 [data-theme='dark'] body {
   background-image:
-    radial-gradient(ellipse at 20% 0%, rgba(217, 119, 87, 0.025), transparent 50%),
-    radial-gradient(ellipse at 100% 100%, rgba(106, 155, 204, 0.018), transparent 50%);
+    var(--grain),
+    radial-gradient(ellipse at 20% 0%, rgba(217, 119, 87, 0.035), transparent 50%),
+    radial-gradient(ellipse at 100% 100%, rgba(106, 155, 204, 0.02), transparent 50%);
   background-attachment: fixed;
 }
 
 [data-theme='dark'] .card {
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.012), transparent 40%);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.014), transparent 40%);
 }
+
 
 /* ------------------------------------------------------------------
    Print: the record on paper. Chrome (nav, toasts, action buttons) is
@@ -430,7 +602,8 @@
   }
 
   html,
-  body {
+  body,
+  .paper {
     background: #fff !important;
   }
 

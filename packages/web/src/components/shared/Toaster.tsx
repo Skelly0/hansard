@@ -1,10 +1,10 @@
 import { useToastStore, type ToastTone } from '../../lib/toast';
-import { Icon } from './Icon';
+import { Icon, type IconName } from './Icon';
 
-const TONE: Record<ToastTone, { rail: string; mark: string; symbol: string }> = {
-  success: { rail: 'bg-status-passed', mark: 'text-status-passed', symbol: '✓' },
-  error: { rail: 'bg-status-rejected', mark: 'text-status-rejected', symbol: '!' },
-  info: { rail: 'bg-accent-voting', mark: 'text-accent-voting', symbol: 'i' },
+const TONE: Record<ToastTone, { rail: string; mark: string; icon: IconName }> = {
+  success: { rail: 'bg-status-passed', mark: 'text-status-passed', icon: 'check' },
+  error: { rail: 'bg-status-rejected', mark: 'text-status-rejected', icon: 'alert' },
+  info: { rail: 'bg-accent-voting', mark: 'text-accent-voting', icon: 'info' },
 };
 
 /** Fixed notification stack; announced politely (errors assertively). */
@@ -24,11 +24,11 @@ export function Toaster() {
           <div
             key={t.id}
             role={t.tone === 'error' ? 'alert' : 'status'}
-            className="pointer-events-auto bg-card border border-border-subtle rounded-card shadow-modal-warm overflow-hidden flex animate-fade-in"
+            className="pointer-events-auto bg-card border border-border-subtle rounded-card shadow-modal-warm overflow-hidden flex animate-rise-in"
           >
             <div className={`w-[3px] flex-shrink-0 ${tone.rail}`} aria-hidden="true" />
             <div className="flex items-start gap-3 px-4 py-3 flex-1 min-w-0">
-              <span className={`font-display font-semibold leading-6 ${tone.mark}`} aria-hidden="true">{tone.symbol}</span>
+              <Icon name={tone.icon} size={18} className={`mt-0.5 ${tone.mark}`} />
               <div className="min-w-0 flex-1">
                 <p className="text-body-sm font-medium text-text-primary">{t.title}</p>
                 {t.description && <p className="text-body-sm text-text-secondary mt-0.5 break-words">{t.description}</p>}

@@ -99,7 +99,7 @@ export function BallotPanel({ election }: { election: Election }) {
     return (
       <Panel title="Your ballot" tone="passed">
         <p className="text-body-sm text-text-secondary flex items-center gap-2">
-          <span className="text-status-passed text-lg leading-none" aria-hidden="true">✓</span>
+          <Icon name="check" size={18} className="text-status-passed" />
           Your ballot has been recorded.
         </p>
       </Panel>
@@ -174,11 +174,11 @@ export function BallotPanel({ election }: { election: Election }) {
                 role="radio"
                 aria-checked={selected}
                 onClick={() => setChoice(opt.value)}
-                className={`rounded-card border px-2 py-3 text-center transition-colors ${
+                className={`rounded-card border px-2 py-3.5 text-center transition-colors ${
                   selected ? opt.tone : 'border-border hover:border-border-strong text-text-primary'
                 }`}
               >
-                <span className="block font-display text-lg font-semibold">{opt.label}</span>
+                <span className="block font-display text-xl font-semibold">{opt.label}</span>
                 <span className="block text-[0.6875rem] text-text-tertiary">{opt.hint}</span>
               </button>
             );
@@ -349,14 +349,16 @@ function RankedBallot({
   );
 }
 
+/** A ballot paper: coloured rail, tracked-caps label, the question. */
 function Panel({ title, children, tone }: { title: string; children: React.ReactNode; tone?: 'passed' }) {
   return (
-    <section
-      aria-label={title}
-      className={`card mb-6 ${tone === 'passed' ? 'border-l-status-passed' : 'border-l-accent-voting'}`}
-    >
-      <h2 className="text-heading-2 text-text-secondary mb-3">{title}</h2>
-      {children}
+    <section aria-label={title} className="card card-flush mb-6">
+      <div className={`h-[3px] ${tone === 'passed' ? 'bg-status-passed' : 'bg-accent-voting'}`} aria-hidden="true" />
+      <div className="px-4 py-4 sm:px-6 sm:py-5">
+        <p className={`text-label-ui ${tone === 'passed' ? 'text-status-passed' : 'text-accent-voting'}`}>Ballot paper</p>
+        <h2 className="text-heading-1 text-text-primary mt-0.5 mb-4">{title}</h2>
+        {children}
+      </div>
     </section>
   );
 }

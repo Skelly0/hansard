@@ -157,7 +157,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
   let lastGroup = '';
   return createPortal(
     <div
-      className="fixed inset-0 z-[120] bg-black/40 flex items-start justify-center px-3 pt-[8vh] sm:pt-[12vh] animate-fade-in"
+      className="fixed inset-0 z-[120] bg-[#1b140c]/45 backdrop-blur-[2px] flex items-start justify-center px-3 pt-[8vh] sm:pt-[12vh] animate-fade-in"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
@@ -165,7 +165,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
         role="dialog"
         aria-modal="true"
         aria-label="Search Hansard"
-        className="w-full max-w-xl bg-card rounded-card shadow-modal-warm border border-border-subtle overflow-hidden flex flex-col max-h-[75vh]"
+        className="w-full max-w-xl bg-card rounded-card shadow-modal-warm border border-border-subtle overflow-hidden flex flex-col max-h-[75vh] animate-rise-in"
       >
         <div className="flex items-center gap-3 px-4 border-b border-border-subtle">
           <Icon name="search" size={18} className="text-text-tertiary" />

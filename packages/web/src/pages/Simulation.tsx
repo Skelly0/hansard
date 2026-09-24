@@ -14,12 +14,12 @@ import {
 import { useSearchPlayers, usePlayer } from '../api/hooks/usePlayers';
 import { useAuth } from '../api/hooks/useAuth';
 import { Tag } from '../components/shared/Tag';
-import { MetricCard } from '../components/shared/MetricCard';
+import { MetricStrip } from '../components/shared/MetricCard';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal } from '../components/shared/Modal';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
-import { PageHeader } from '../components/shared/PageHeader';
+import { PageHeader, SectionHeading } from '../components/shared/PageHeader';
 import { ConfirmModal } from '../components/shared/Modal';
 import { formatSimDate } from '../lib/format';
 
@@ -60,7 +60,7 @@ function ClockHeader() {
 
   if (isLoading || !clock) {
     return (
-      <div className="card border-l-accent-simulation mb-6">
+      <div className="card mb-6">
         <div className="skeleton w-48 h-8 mb-2" />
         <div className="skeleton w-32 h-5" />
       </div>
@@ -68,36 +68,36 @@ function ClockHeader() {
   }
 
   return (
-    <div className="card border-l-accent-simulation mb-6">
+    <div className="card mb-6 relative overflow-hidden">
+      <span className="absolute inset-x-0 top-0 h-[3px] bg-accent-simulation" aria-hidden="true" />
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-heading-1 mb-3">{clock.seasonName}</h2>
-          <div className="flex flex-wrap items-baseline gap-6">
+        <div className="min-w-0">
+          <p className="text-label-ui text-accent-simulation">The simulation clock</p>
+          <h2 className="text-heading-1 mt-0.5 mb-5">{clock.seasonName}</h2>
+          <dl className="flex flex-wrap items-start gap-x-10 gap-y-4">
             <div>
-              <p className="text-label-ui text-text-tertiary mb-1">Sim Date</p>
-              <p className="font-mono text-2xl text-text-primary leading-tight">
+              <dt className="text-label-ui text-text-tertiary mb-1.5">Sim date</dt>
+              <dd className="figure text-[2.25rem] sm:text-[2.75rem] text-text-primary">
                 {formatDate(clock.currentDate)}
-              </p>
+              </dd>
             </div>
             <div>
-              <p className="text-label-ui text-text-tertiary mb-1">Tick</p>
-              <p className="font-mono text-2xl text-text-primary leading-tight">
+              <dt className="text-label-ui text-text-tertiary mb-1.5">Tick</dt>
+              <dd className="figure text-[2.25rem] sm:text-[2.75rem] text-text-primary">
                 {clock.currentTick}
-              </p>
+              </dd>
             </div>
             <div>
-              <p className="text-label-ui text-text-tertiary mb-1">Unit</p>
-              <p className="font-mono text-sm text-text-secondary">
-                {clock.tickUnit}
-              </p>
+              <dt className="text-label-ui text-text-tertiary mb-1.5">Each tick</dt>
+              <dd className="font-display italic text-[1.375rem] text-text-secondary pt-1">
+                one {clock.tickUnit}
+              </dd>
             </div>
-          </div>
+          </dl>
         </div>
-        <div className="pt-1">
-          <Tag color={clock.isPaused ? 'pending' : 'active'}>
-            {clock.isPaused ? 'Paused' : 'Running'}
-          </Tag>
-        </div>
+        <Tag color={clock.isPaused ? 'pending' : 'active'}>
+          {clock.isPaused ? 'Paused' : 'Running'}
+        </Tag>
       </div>
     </div>
   );
@@ -132,7 +132,7 @@ function ControlsCard() {
   return (
     <div className="space-y-4 mb-6">
       {/* Controls */}
-      <div className="card border-l-accent-simulation">
+      <div className="card">
         <h2 className="text-heading-2 mb-4">Advance Time</h2>
         <div className="flex flex-wrap items-end gap-4">
           <div>
@@ -211,7 +211,7 @@ function ControlsCard() {
 
       {/* Preview results */}
       {showPreview && (
-        <div className="card border-l-accent-simulation">
+        <div className="card">
           <h2 className="text-heading-2 mb-3">Preview Results</h2>
           <p className="text-body-sm text-text-tertiary mb-4">
             What would happen if time advances by {ticks} tick{ticks !== 1 ? 's' : ''}
@@ -233,38 +233,16 @@ function ControlsCard() {
               </div>
 
               {/* Metrics row */}
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-                <MetricCard
-                  label="Deaths"
-                  value={preview.deathDetails.length}
-                  color={preview.deathDetails.length > 0 ? 'text-status-rejected' : 'text-text-tertiary'}
-                  borderColor="border-border-subtle"
-                />
-                <MetricCard
-                  label="Death Rolls"
-                  value={preview.pendingDeathDetails.length}
-                  color={preview.pendingDeathDetails.length > 0 ? 'text-status-rejected' : 'text-text-tertiary'}
-                  borderColor="border-border-subtle"
-                />
-                <MetricCard
-                  label="New Ailments"
-                  value={preview.ailmentDetails.length}
-                  color={preview.ailmentDetails.length > 0 ? 'text-health-major' : 'text-text-tertiary'}
-                  borderColor="border-border-subtle"
-                />
-                <MetricCard
-                  label="Recoveries"
-                  value={preview.recoveryDetails.length}
-                  color={preview.recoveryDetails.length > 0 ? 'text-status-passed' : 'text-text-tertiary'}
-                  borderColor="border-border-subtle"
-                />
-                <MetricCard
-                  label="Players Aged"
-                  value={preview.aged}
-                  color="text-accent-simulation"
-                  borderColor="border-border-subtle"
-                />
-              </div>
+              <MetricStrip
+                className="grid-cols-2 lg:grid-cols-5"
+                metrics={[
+                  { label: 'Deaths', value: preview.deathDetails.length, color: preview.deathDetails.length > 0 ? 'text-status-rejected' : 'text-text-tertiary' },
+                  { label: 'Death Rolls', value: preview.pendingDeathDetails.length, color: preview.pendingDeathDetails.length > 0 ? 'text-status-rejected' : 'text-text-tertiary' },
+                  { label: 'New Ailments', value: preview.ailmentDetails.length, color: preview.ailmentDetails.length > 0 ? 'text-health-major' : 'text-text-tertiary' },
+                  { label: 'Recoveries', value: preview.recoveryDetails.length, color: preview.recoveryDetails.length > 0 ? 'text-status-passed' : 'text-text-tertiary' },
+                  { label: 'Players Aged', value: preview.aged, color: 'text-accent-simulation' },
+                ]}
+              />
 
               {/* Death details */}
               {preview.deathDetails.length > 0 && (
@@ -372,7 +350,7 @@ function AdvanceHistoryLog() {
     return (
       <div className="space-y-3">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="card border-l-accent-simulation">
+          <div key={i} className="card">
             <div className="skeleton w-48 h-4 mb-2" />
             <div className="skeleton w-full h-3 mb-1" />
             <div className="skeleton w-2/3 h-3" />
@@ -388,7 +366,7 @@ function AdvanceHistoryLog() {
 
   if (!history || history.length === 0) {
     return (
-      <div className="card border-l-accent-simulation">
+      <div className="card">
         <p className="text-body text-text-secondary italic">
           No time advances recorded yet.
         </p>
@@ -415,7 +393,7 @@ function AdvanceCard({ entry }: { entry: TimeAdvanceEntry }) {
   const nameOf = (id: string) => entry.playerNames?.[id] ?? id;
 
   return (
-    <div className="card border-l-accent-simulation">
+    <div className="card">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
         {/* Date range */}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -539,11 +517,11 @@ export function Simulation() {
       {isStaff && <PlayerHealthControls />}
 
       {/* History */}
-      <h2 className="text-heading-1 mt-8 mb-4">Recent Advances</h2>
+      <SectionHeading size="lg" className="mt-10 mb-4">Recent Advances</SectionHeading>
       <AdvanceHistoryLog />
 
       {/* Sim event log */}
-      <h2 className="text-heading-1 mt-8 mb-4">Sim Event Log</h2>
+      <SectionHeading size="lg" className="mt-10 mb-4">Sim Event Log</SectionHeading>
       <SimEventLog />
     </div>
   );
@@ -567,7 +545,7 @@ function PlayerHealthControls() {
   const fc = 'field w-full';
 
   return (
-    <div className="card border-l-accent-simulation mb-6">
+    <div className="card mb-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-heading-2">Character Health</h2>
         <Tag color="moderation">staff</Tag>
@@ -605,7 +583,7 @@ function PlayerHealthControls() {
           <div className="flex items-center gap-3">
             <PlayerAvatar player={selected} size="md" />
             <div className="flex-1">
-              <p className="font-display font-medium text-text-primary">
+              <p className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary">
                 {selected.characterName ?? selected.discordUsername}
               </p>
               {dossier && (
@@ -879,21 +857,21 @@ function SimEventLog() {
   const { data: events, isLoading, isError, error } = useSimEvents(50);
 
   if (isLoading) {
-    return <div className="card border-l-accent-simulation"><div className="skeleton h-4 w-3/4" /></div>;
+    return <div className="card"><div className="skeleton h-4 w-3/4" /></div>;
   }
   if (isError) {
     return <QueryErrorState title="Could not load simulation events" error={error} />;
   }
   if (!events || events.length === 0) {
     return (
-      <div className="card border-l-accent-simulation">
+      <div className="card">
         <p className="text-body text-text-tertiary italic">No sim events recorded yet.</p>
       </div>
     );
   }
 
   return (
-    <div className="card border-l-accent-simulation">
+    <div className="card">
       <div className="space-y-1">
         {events.map((e) => <SimEventRow key={e.id} event={e} />)}
       </div>

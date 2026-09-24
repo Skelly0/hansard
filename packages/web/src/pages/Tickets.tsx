@@ -4,9 +4,10 @@ import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
-import { MetricCard } from '../components/shared/MetricCard';
+import { MetricStrip } from '../components/shared/MetricCard';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
-import { PageHeader } from '../components/shared/PageHeader';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
+import { PageHeader, SectionHeading } from '../components/shared/PageHeader';
 import { FilterBar, FilterField } from '../components/shared/FilterBar';
 import { formatDate, humanizeToken, plural, recordNumber } from '../lib/format';
 import { useUrlState } from '../hooks/useUrlState';
@@ -157,21 +158,19 @@ export function Tickets() {
       />
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-5 border-b border-border-subtle" role="tablist" aria-label="Ticket views">
-        {([['list', 'All Tickets'], ['metrics', 'Metrics']] as const).map(([key, label]) => (
-          <button
-            key={key}
-            role="tab"
-            aria-selected={tab === key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-2.5 text-body-sm font-medium relative transition-colors duration-150 ${tab === key ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}`}
-          >
-            {label}
-            {tab === key && <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-tickets" aria-hidden="true" />}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        idPrefix="tickets"
+        label="Ticket views"
+        items={[
+          { key: 'list', label: 'All tickets' },
+          { key: 'metrics', label: 'Metrics' },
+        ]}
+        value={tab}
+        onChange={setTab}
+        className="mb-5"
+      />
 
+      <div {...tabPanelProps('tickets', tab)}>
       {tab === 'metrics' && <TicketMetricsView />}
       {tab === 'list' && <>
 
@@ -213,7 +212,7 @@ export function Tickets() {
       </FilterBar>
 
       {/* Table */}
-      <div className={`card border-l-accent-tickets transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
+      <div className={`card card-flush transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
           columns={columns}
           data={tickets}
@@ -231,6 +230,7 @@ export function Tickets() {
         className="mt-6 justify-center flex"
       />
       </>}
+      </div>
     </div>
   );
 }
@@ -250,7 +250,7 @@ function TicketMetricsView() {
   if (isError) return <QueryErrorState title="Could not load ticket metrics" error={error} />;
   if (!metrics) {
     return (
-      <div className="card border-l-accent-tickets">
+      <div className="card">
         <p className="text-body text-text-tertiary italic">No metrics available.</p>
       </div>
     );
@@ -258,37 +258,20 @@ function TicketMetricsView() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-        <MetricCard
-          label="Open"
-          value={metrics.openCount}
-          color="text-accent-tickets"
-          borderColor="border-l-accent-tickets"
-        />
-        <MetricCard
-          label="In Progress"
-          value={metrics.inProgressCount ?? 0}
-          color="text-status-pending"
-          borderColor="border-l-status-pending"
-        />
-        <MetricCard
-          label="Resolved (24h)"
-          value={metrics.resolvedToday ?? 0}
-          color="text-status-passed"
-          borderColor="border-l-status-passed"
-        />
-        <MetricCard
-          label="Avg First Response"
-          value={formatDuration(metrics.avgResponseTimeMs)}
-          color="text-text-primary"
-          borderColor="border-l-border-subtle"
-        />
-      </div>
+      <MetricStrip
+        className="grid-cols-2 md:grid-cols-4"
+        metrics={[
+          { label: 'Open', value: metrics.openCount, color: 'text-accent-tickets' },
+          { label: 'In Progress', value: metrics.inProgressCount ?? 0, color: 'text-status-pending' },
+          { label: 'Resolved (24h)', value: metrics.resolvedToday ?? 0, color: 'text-status-passed' },
+          { label: 'Avg First Response', value: formatDuration(metrics.avgResponseTimeMs), color: 'text-text-primary' },
+        ]}
+      />
 
       {metrics.byCategory && metrics.byCategory.length > 0 && (
         <div>
-          <h2 className="text-heading-2 text-text-secondary mb-3">By Category</h2>
-          <div className="card border-l-accent-tickets space-y-2">
+          <SectionHeading>By Category</SectionHeading>
+          <div className="card space-y-2">
             {metrics.byCategory.map((row) => (
               <div key={row.categoryId} className="flex items-center justify-between py-1">
                 <span className="text-body-sm text-text-primary">{row.categoryName}</span>
@@ -301,8 +284,8 @@ function TicketMetricsView() {
 
       {metrics.byPriority && Object.keys(metrics.byPriority).length > 0 && (
         <div>
-          <h2 className="text-heading-2 text-text-secondary mb-3">By Priority</h2>
-          <div className="card border-l-accent-tickets space-y-2">
+          <SectionHeading>By Priority</SectionHeading>
+          <div className="card space-y-2">
             {Object.entries(metrics.byPriority).map(([prio, count]) => (
               <div key={prio} className="flex items-center justify-between py-1">
                 <span className="text-body-sm text-text-primary capitalize">{prio}</span>

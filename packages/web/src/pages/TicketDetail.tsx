@@ -14,7 +14,7 @@ import { useAuth } from '../api/hooks/useAuth';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal, ConfirmModal } from '../components/shared/Modal';
-import { PageHeader, Breadcrumbs } from '../components/shared/PageHeader';
+import { PageHeader, Breadcrumbs, SectionHeading } from '../components/shared/PageHeader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { formatDateTime, humanizeToken, recordNumber, relativeTime } from '../lib/format';
 
@@ -39,7 +39,7 @@ export function TicketDetail() {
     return (
       <div className="page max-w-4xl">
         <Breadcrumbs items={[{ label: 'Tickets', to: '/tickets' }, { label: 'Not found' }]} />
-        <div className="card border-l-status-rejected">
+        <div className="notice notice-danger">
           <h1 className="text-heading-1 text-text-primary mb-2">Ticket not found</h1>
           <p className="text-body text-text-secondary">
             We couldn&rsquo;t load this ticket. It may have been removed, closed to you, or the link may be wrong.
@@ -87,6 +87,8 @@ export function TicketDetail() {
           </>
         }
         title={ticket.title}
+        rule={false}
+        className="mb-4"
         actions={
           <>
             {isStaff && ticket.status !== 'closed' && (
@@ -116,7 +118,7 @@ export function TicketDetail() {
       />
 
       {/* Metadata */}
-      <div className="flex flex-wrap gap-x-6 gap-y-2 text-body-sm text-text-secondary mb-6 pb-6 border-b border-border-subtle">
+      <div className="flex flex-wrap gap-x-6 gap-y-2 text-body-sm text-text-secondary mb-5">
         <div>
           <span className="text-label-ui text-text-tertiary mr-2">Created by</span>
           {ticket.createdBy ? (
@@ -159,26 +161,26 @@ export function TicketDetail() {
         )}
       </div>
 
+      <div className="rule-masthead mb-8" aria-hidden="true" />
+
       {/* Linked tickets */}
       <LinkedTickets ticketId={ticket.id} linkedIds={ticket.linkedTicketIds ?? []} canManage={isStaff} />
 
       {/* Description */}
       <div className="mb-8">
-        <h2 className="text-heading-2 text-text-secondary mb-3">Description</h2>
-        <div className="card border-l-accent-tickets">
+        <SectionHeading>Description</SectionHeading>
+        <div className="card">
           <p className="text-body text-text-primary whitespace-pre-wrap">{ticket.description}</p>
         </div>
       </div>
 
       {/* Messages */}
       <div className="mb-8">
-        <h2 className="text-heading-2 text-text-secondary mb-3">
-          Messages ({ticket.messages.length})
-        </h2>
+        <SectionHeading>Messages ({ticket.messages.length})</SectionHeading>
 
         <div className="space-y-3">
           {ticket.messages.length === 0 ? (
-            <div className="card border-l-border-subtle">
+            <div className="card">
               <p className="text-body text-text-tertiary italic">No messages yet.</p>
             </div>
           ) : (
@@ -186,7 +188,7 @@ export function TicketDetail() {
               (isStaff || !msg.isInternal) && (
                 <div
                   key={msg.id}
-                  className={`card ${msg.isInternal ? 'border-l-accent-moderation bg-accent-primary-light/30' : 'border-l-accent-tickets'}`}
+                  className={`card ${msg.isInternal ? 'border-dashed border-accent-moderation/50 bg-accent-moderation/[0.04] shadow-none' : ''}`}
                 >
                   <div className="flex items-center gap-2 mb-2">
                     <PlayerAvatar
@@ -262,12 +264,10 @@ export function TicketDetail() {
 
       {/* Audit Log — staff only; the API never returns audit rows to players. */}
       {isStaff && <div>
-        <h2 className="text-heading-2 text-text-secondary mb-3">
-          Audit Log ({ticket.auditLog.length})
-        </h2>
+        <SectionHeading>Audit Log ({ticket.auditLog.length})</SectionHeading>
 
         {ticket.auditLog.length === 0 ? (
-          <div className="card border-l-border-subtle">
+          <div className="card">
             <p className="text-body text-text-tertiary italic">No audit entries.</p>
           </div>
         ) : (
@@ -345,27 +345,23 @@ function LinkedTickets({
 
   return (
     <div className="mb-8">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-heading-2 text-text-secondary">
-          Linked Tickets {linkedIds.length > 0 && `(${linkedIds.length})`}
-        </h2>
-        {canManage && (
-          <button
-            onClick={() => setPickerOpen(true)}
-            className="text-body-sm text-accent-primary hover:underline"
-          >
-            + Link Ticket
+      <SectionHeading
+        action={canManage ? (
+          <button onClick={() => setPickerOpen(true)} className="link text-body-sm">
+            + Link ticket
           </button>
-        )}
-      </div>
+        ) : undefined}
+      >
+        Linked Tickets {linkedIds.length > 0 && `(${linkedIds.length})`}
+      </SectionHeading>
       {linkedIds.length === 0 ? (
-        <div className="card border-l-border-subtle">
+        <div className="card">
           <p className="text-body-sm text-text-tertiary italic">No linked tickets.</p>
         </div>
       ) : (
         <div className="space-y-2">
           {linked.map((t) => (
-            <div key={t.id} className="card border-l-accent-tickets flex items-center gap-3">
+            <div key={t.id} className="card flex items-center gap-3">
               <Link
                 to="/tickets/$id"
                 params={{ id: t.id }}
@@ -394,7 +390,7 @@ function LinkedTickets({
           ))}
           {/* Show stale ids that we couldn't resolve from the recent slice */}
           {linkedIds.filter((id) => !linked.find((t) => t.id === id)).map((id) => (
-            <div key={id} className="card border-l-border-subtle flex items-center gap-3">
+            <div key={id} className="card flex items-center gap-3">
               <Link to="/tickets/$id" params={{ id }} className="text-body-sm text-accent-primary hover:underline">
                 View ticket →
               </Link>

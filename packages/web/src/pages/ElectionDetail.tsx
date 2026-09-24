@@ -22,11 +22,11 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { StatusTimeline } from '../components/shared/StatusTimeline';
 import { ResultsBars, MultiRoundBars } from '../components/shared/ResultsBars';
-import { MetricCard } from '../components/shared/MetricCard';
+import { MetricStrip } from '../components/shared/MetricCard';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal, ConfirmModal } from '../components/shared/Modal';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
-import { PageHeader, Breadcrumbs } from '../components/shared/PageHeader';
+import { PageHeader, Breadcrumbs, SectionHeading } from '../components/shared/PageHeader';
 import { BallotPanel } from '../components/voting/BallotPanel';
 import { Countdown } from '../components/shared/Countdown';
 import { formatDate, formatDateTime, humanizeToken, relativeTime } from '../lib/format';
@@ -106,7 +106,7 @@ export function ElectionDetail() {
     return (
       <div className="page">
         <Breadcrumbs items={[{ label: 'Voting', to: '/voting' }, { label: 'Not found' }]} />
-        <div className="card border-l-status-rejected">
+        <div className="notice notice-danger">
           <h1 className="text-heading-1 text-text-primary mb-2">Election not found</h1>
           <p className="text-body text-text-secondary">
             We couldn&rsquo;t load this election. It may have been removed, or the link may be wrong.
@@ -155,12 +155,13 @@ export function ElectionDetail() {
           </>
         }
         title={election.title}
-        subtitle={election.description ? <span className="text-body text-text-secondary">{election.description}</span> : undefined}
+        subtitle={election.description || undefined}
+        rule={false}
         className="mb-4"
       />
 
       {/* Metadata */}
-      <dl className="flex flex-wrap gap-x-6 gap-y-2 text-body-sm text-text-secondary mb-6">
+      <dl className="flex flex-wrap gap-x-6 gap-y-2 text-body-sm text-text-secondary mb-5">
         <div className="flex items-baseline gap-1.5">
           <dt className="text-label-ui text-text-tertiary">Method</dt>
           <dd className="font-mono text-xs">{methodLabel[election.method] || election.method}</dd>
@@ -198,49 +199,39 @@ export function ElectionDetail() {
         )}
       </dl>
 
+      <div className="rule-masthead mb-6" aria-hidden="true" />
+
       {/* Timeline */}
-      <div className="mb-8 pb-6 border-b border-border-subtle">
+      <section aria-label="Stages of the vote" className="card mb-8 py-5 sm:py-6">
         <StatusTimeline
           stages={stagesFor(election.method)}
           currentIndex={stageIndex}
           horizontal
         />
-      </div>
+      </section>
 
       {/* Staff controls */}
       {isStaff && <StaffControls electionId={election.id} status={election.status} method={election.method} />}
 
       {/* Metrics row: turnout only means something once ballots can be cast. */}
       {turnout && !beforeVoting && (
-        <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-8">
-          <MetricCard
-            label="Eligible Voters"
-            value={turnout.eligible}
-            color="text-accent-voting"
-            borderColor="border-l-accent-voting"
-          />
-          <MetricCard
-            label="Votes Cast"
-            value={turnout.voted}
-            color="text-accent-voting"
-            borderColor="border-l-accent-voting"
-          />
-          <MetricCard
-            label="Turnout"
-            value={`${Math.round(turnout.turnoutPct)}%`}
-            color="text-accent-voting"
-            borderColor="border-l-accent-voting"
-          />
-        </div>
+        <MetricStrip
+          className="grid-cols-3 mb-8"
+          metrics={[
+            { label: 'Eligible voters', value: turnout.eligible, color: 'text-accent-voting' },
+            { label: 'Votes cast', value: turnout.voted, color: 'text-accent-voting' },
+            { label: 'Turnout', value: `${Math.round(turnout.turnoutPct)}%`, color: 'text-accent-voting' },
+          ]}
+        />
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
         {/* Results area */}
         <div className="lg:col-span-2 min-w-0">
           <BallotPanel election={election} />
 
           {beforeVoting && (
-            <div className="card border-l-accent-voting mb-4">
+            <div className="card mb-4">
               <p className="text-label-ui text-text-tertiary mb-1">Voting has not opened</p>
               <p className="text-body-sm text-text-secondary">
                 Ballots open {formatDateTime(election.votingOpensAt)}
@@ -252,7 +243,7 @@ export function ElectionDetail() {
 
           {/* Cancelled note even if no results were ever tallied */}
           {!tally && election.status === 'cancelled' && (
-            <div className="card border-l-status-rejected mb-4">
+            <div className="notice notice-danger mb-4">
               <p className="text-label-ui text-text-tertiary mb-1">Vote Cancelled</p>
               <p className="text-body-sm text-text-secondary">
                 This vote was cancelled before completion. No final tally was recorded.
@@ -263,7 +254,7 @@ export function ElectionDetail() {
           {/* Sealed-open notice: voting is still live and results are hidden
               until close, so we cannot render tallies yet. */}
           {sealedOpen && (
-            <div className="card border-l-accent-voting mb-4">
+            <div className="card mb-4">
               <p className="text-label-ui text-text-tertiary mb-1">Results Sealed</p>
               <p className="text-body-sm text-text-secondary">
                 Results are sealed until close. Tallies will appear here once
@@ -276,46 +267,49 @@ export function ElectionDetail() {
               inline ElectionResults payload. */}
           {tally && (
             <div className="mb-6">
-              <h2 className="text-heading-1 mb-4">Results</h2>
+              <SectionHeading size="lg" className="mb-4">Results</SectionHeading>
 
-              {/* Winner announcement */}
-              {tally.winners && tally.winners.length > 0 && (
-                <div className="card border-l-accent-primary mb-4">
-                  <p className="text-label-ui text-text-tertiary mb-1">
-                    {tally.winners.length > 1 ? 'Winners' : 'Winner'}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
+              {/* The declaration: a motion's division, or who was elected. */}
+              {isYeaNay && tally.passed !== undefined ? (
+                <div className="card mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-label-ui text-text-tertiary mb-1">The division</p>
+                    <p className={`text-display ${tally.passed ? 'text-status-passed' : 'text-status-rejected'}`}>
+                      {tally.passed ? 'The Ayes have it.' : 'The Noes have it.'}
+                    </p>
+                  </div>
+                  <Tag color={tally.passed ? 'passed' : 'rejected'}>
+                    {tally.passed ? 'Motion passed' : 'Motion failed'}
+                  </Tag>
+                </div>
+              ) : tally.winners && tally.winners.length > 0 ? (
+                <div className="card mb-4">
+                  <p className="text-label-ui text-text-tertiary mb-1">Declared elected</p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {tally.winners.map((winnerId) => (
                       <span key={winnerId} className="text-display text-accent-primary">
-                        {isYeaNay
-                          ? winnerId.charAt(0).toUpperCase() + winnerId.slice(1)
-                          : candidateNames[winnerId] || winnerId}
+                        {candidateNames[winnerId] || winnerId}
                       </span>
                     ))}
                   </div>
                   {tally.passed !== undefined && (
-                    <Tag color={tally.passed ? 'passed' : 'rejected'} className="mt-2">
-                      {tally.passed ? 'Motion Passed' : 'Motion Failed'}
+                    <Tag color={tally.passed ? 'passed' : 'rejected'} className="mt-3">
+                      {tally.passed ? 'Motion passed' : 'Motion failed'}
                     </Tag>
                   )}
                 </div>
-              )}
-
-              {/* Pass/fail callout for yea/nay motions where no "winner" list
-                  is built (e.g. tallied with passed=false and no candidates). */}
-              {(!tally.winners || tally.winners.length === 0) &&
-                tally.passed !== undefined && (
-                <div className="card border-l-accent-primary mb-4">
-                  <p className="text-label-ui text-text-tertiary mb-1">Final Outcome</p>
+              ) : tally.passed !== undefined ? (
+                <div className="card mb-4">
+                  <p className="text-label-ui text-text-tertiary mb-1">Final outcome</p>
                   <Tag color={tally.passed ? 'passed' : 'rejected'}>
-                    {tally.passed ? 'Motion Passed' : 'Motion Failed'}
+                    {tally.passed ? 'Motion passed' : 'Motion failed'}
                   </Tag>
                 </div>
-              )}
+              ) : null}
 
               {/* Cancelled state — show a clear note instead of empty bars */}
               {election.status === 'cancelled' && (
-                <div className="card border-l-status-rejected mb-4">
+                <div className="notice notice-danger mb-4">
                   <p className="text-label-ui text-text-tertiary mb-1">Vote Cancelled</p>
                   <p className="text-body-sm text-text-secondary">
                     This vote was cancelled before completion. No final tally was recorded.
@@ -325,24 +319,25 @@ export function ElectionDetail() {
 
               {/* Yea/Nay bars */}
               {isYeaNay && tally.finalTallies && (
-                <div className="card border-l-accent-voting">
+                <div className="card">
                   <ResultsBars
                     yea={tally.finalTallies['yea'] || 0}
                     nay={tally.finalTallies['nay'] || 0}
                     abstain={tally.finalTallies['abstain'] || 0}
                   />
-                  {/* Margin */}
-                  <div className="mt-3 text-center">
-                    <span className="font-mono text-lg text-text-primary">
-                      Margin: {Math.abs((tally.finalTallies['yea'] || 0) - (tally.finalTallies['nay'] || 0))}
+                  {/* Majority */}
+                  <p className="mt-4 pt-3 border-t border-border-subtle flex items-baseline justify-between">
+                    <span className="text-label-ui text-text-tertiary">Majority</span>
+                    <span className="figure text-2xl text-text-primary">
+                      {Math.abs((tally.finalTallies['yea'] || 0) - (tally.finalTallies['nay'] || 0))}
                     </span>
-                  </div>
+                  </p>
                 </div>
               )}
 
               {/* Multi-round results */}
               {hasMultipleRounds && !isYeaNay && (
-                <div className="card border-l-accent-voting">
+                <div className="card">
                   <MultiRoundBars
                     rounds={tally.rounds!}
                     candidateNames={candidateNames}
@@ -352,7 +347,7 @@ export function ElectionDetail() {
 
               {/* Single-round candidate results (bar per candidate) */}
               {!isYeaNay && !hasMultipleRounds && tally.finalTallies && (
-                <div className="card border-l-accent-voting space-y-3">
+                <div className="card space-y-4">
                   {Object.entries(tally.finalTallies)
                     .sort(([, a], [, b]) => b - a)
                     .map(([candidateId, votes]) => {
@@ -363,16 +358,16 @@ export function ElectionDetail() {
 
                       return (
                         <div key={candidateId}>
-                          <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-baseline justify-between mb-1.5">
                             <span className={`text-body-sm ${isWinner ? 'font-medium text-text-primary' : 'text-text-secondary'}`}>
                               {candidateNames[candidateId] || candidateId}
-                              {isWinner && <span className="text-accent-primary ml-1">&bull;</span>}
+                              {isWinner && <span className="text-label-ui text-[0.6875rem] text-accent-primary ml-2">Elected</span>}
                             </span>
-                            <span className="font-mono text-sm text-text-primary">{votes}</span>
+                            <span className="figure text-xl text-text-primary">{votes}</span>
                           </div>
-                          <div className="h-5 bg-inset rounded overflow-hidden">
+                          <div className="h-2.5 bg-inset rounded-full overflow-hidden">
                             <div
-                              className={`h-full rounded transition-all duration-400 ease-out ${
+                              className={`h-full rounded-full transition-all duration-400 ease-out ${
                                 isWinner ? 'bg-accent-primary' : 'bg-accent-voting'
                               }`}
                               style={{ width: `${pct}%` }}
@@ -389,14 +384,14 @@ export function ElectionDetail() {
           {/* Rounds navigation */}
           {rounds && rounds.length > 1 && (
             <div className="mb-6">
-              <h2 className="text-heading-2 text-text-secondary mb-3">All Rounds</h2>
+              <SectionHeading>All Rounds</SectionHeading>
               <div className="space-y-2">
                 {rounds.map((round) => (
                   <Link
                     key={round.id}
                     to="/voting/$id"
                     params={{ id: round.id }}
-                    className="card border-l-accent-voting flex items-center justify-between hover:border-border transition-colors"
+                    className="card flex items-center justify-between hover:border-border transition-colors"
                   >
                     <div>
                       <span className="text-body-sm font-medium text-text-primary">
@@ -417,18 +412,16 @@ export function ElectionDetail() {
         </div>
 
         {/* Sidebar: Candidates & NPC confirmation */}
-        <div className="space-y-6">
+        <div className="space-y-8">
           {/* Candidates */}
           {candidateBased && (candidates.length > 0 || acceptsNominations) && (
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-heading-2 text-text-secondary">
-                  Candidates ({candidates.filter((c) => !c.isWithdrawn).length})
-                </h2>
-                {isStaff && acceptsNominations && (
-                  <AddCandidateButton electionId={election.id} />
-                )}
-              </div>
+              <SectionHeading
+                size="sm"
+                action={isStaff && acceptsNominations ? <AddCandidateButton electionId={election.id} /> : undefined}
+              >
+                Candidates ({candidates.filter((c) => !c.isWithdrawn).length})
+              </SectionHeading>
               {user && !myCandidacy && election.status === 'nominations_open' && (
                 <StandForElection electionId={election.id} closesAt={election.nominationsCloseAt} />
               )}
@@ -439,7 +432,7 @@ export function ElectionDetail() {
                 {candidates.map((candidate) => (
                   <div
                     key={candidate.id}
-                    className={`card border-l-accent-players ${
+                    className={`card ${
                       candidate.isWithdrawn ? 'bg-page border-dashed' : ''
                     }`}
                   >
@@ -490,8 +483,8 @@ export function ElectionDetail() {
           {/* NPC Confirmation */}
           {election.npcConfirmation && (
             <div>
-              <h2 className="text-heading-2 text-text-secondary mb-3">NPC Confirmation</h2>
-              <div className="card border-l-accent-voting">
+              <SectionHeading size="sm">NPC Confirmation</SectionHeading>
+              <div className="card">
                 <Tag color={
                   election.npcConfirmation.status === 'confirmed' ? 'passed' :
                   election.npcConfirmation.status === 'rejected' ? 'rejected' : 'pending'
@@ -517,8 +510,8 @@ export function ElectionDetail() {
 
           {election.relatedBillId && (
             <div>
-              <h2 className="text-heading-2 text-text-secondary mb-3">Related Bill</h2>
-              <div className="card border-l-accent-bills">
+              <SectionHeading size="sm">Related Bill</SectionHeading>
+              <div className="card">
                 {election.relatedBillSlug ? (
                   <Link
                     to="/bills/$slug"
@@ -589,33 +582,37 @@ function StaffControls({
   const canNpc = ['tallied', 'npc_pending'].includes(status);
   const isYeaNay = method === 'yea_nay_abstain';
 
+  // Only what can be done now; the natural next step is the primary button.
+  const actions: { key: string; label: string; primary: boolean; onClick: () => void }[] = [
+    canOpen && { key: 'open', label: 'Open voting', primary: true, onClick: () => setConfirmAction('open') },
+    canClose && { key: 'close', label: 'Close voting', primary: false, onClick: () => setConfirmAction('close') },
+    canTally && { key: 'tally', label: 'Tally votes', primary: status === 'voting_closed', onClick: () => setConfirmAction('tally') },
+    canRunoff && { key: 'runoff', label: 'Create runoff', primary: true, onClick: () => setConfirmAction('runoff') },
+    canNpc && { key: 'npc', label: 'Enter NPC confirmation', primary: false, onClick: () => setNpcOpen(true) },
+    canCertify && { key: 'certify', label: 'Certify results', primary: true, onClick: () => setConfirmAction('certify') },
+  ].filter(Boolean) as { key: string; label: string; primary: boolean; onClick: () => void }[];
+
   return (
-    <div className="card border-l-accent-voting mb-8">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-heading-2 text-text-secondary">Staff Controls</h2>
-        <Tag color="moderation">staff</Tag>
+    <section aria-labelledby="staff-desk-heading" className="notice notice-muted mb-8 flex flex-wrap items-center gap-x-5 gap-y-3">
+      <div className="flex items-center gap-2 mr-auto">
+        <Tag color="moderation">Staff</Tag>
+        <h2 id="staff-desk-heading" className="text-heading-2 text-text-primary">
+          {actions.length ? 'Staff desk' : 'Nothing left to do'}
+        </h2>
+        {!actions.length && (
+          <span className="text-body-sm italic text-text-tertiary">This vote is {humanizeToken(status)}.</span>
+        )}
       </div>
-      <div className="flex flex-wrap gap-2">
-        <button onClick={() => setConfirmAction('open')} disabled={!canOpen} className="btn-secondary text-sm disabled:opacity-40">
-          Open Voting
-        </button>
-        <button onClick={() => setConfirmAction('close')} disabled={!canClose} className="btn-secondary text-sm disabled:opacity-40">
-          Close Voting
-        </button>
-        <button onClick={() => setConfirmAction('tally')} disabled={!canTally} className="btn-secondary text-sm disabled:opacity-40">
-          Tally Votes
-        </button>
-        <button onClick={() => setConfirmAction('runoff')} disabled={!canRunoff} className="btn-secondary text-sm disabled:opacity-40">
-          Create Runoff
-        </button>
-        <button onClick={() => setNpcOpen(true)} disabled={!canNpc} className="btn-secondary text-sm disabled:opacity-40">
-          Enter NPC Confirmation
-        </button>
-        <button onClick={() => setConfirmAction('certify')} disabled={!canCertify} className="btn-primary text-sm disabled:opacity-40">
-          Certify Results
-        </button>
-      </div>
-      {error && <p className="text-body-sm text-status-rejected mt-3">{error}</p>}
+      {actions.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {actions.map((a) => (
+            <button key={a.key} onClick={a.onClick} className={`${a.primary ? 'btn-primary' : 'btn-secondary'} btn-sm`}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {error && <p role="alert" className="basis-full text-body-sm text-status-rejected">{error}</p>}
 
       <ConfirmModal
         open={confirmAction === 'certify'}
@@ -668,7 +665,7 @@ function StaffControls({
         onClose={() => setNpcOpen(false)}
         electionId={electionId}
       />
-    </div>
+    </section>
   );
 }
 
@@ -843,7 +840,7 @@ function StandForElection({ electionId, closesAt }: { electionId: string; closes
   };
 
   return (
-    <div className="card border-l-accent-voting mb-3">
+    <div className="card mb-3">
       <p className="text-body-sm text-text-primary font-medium">Nominations are open.</p>
       <p className="text-xs text-text-tertiary mt-0.5 mb-3">
         {closesAt ? <>Closes <Countdown to={closesAt} prefix="in" />. </> : null}

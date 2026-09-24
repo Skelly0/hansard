@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { Ornament } from '../components/shared/PageHeader';
 
 /**
  * Router-level 404. Rendered outside the app shell (the root route has no
@@ -8,23 +9,18 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 export function NotFound() {
   useDocumentTitle('Not found');
   return (
-    <div className="bg-parchment min-h-screen flex items-center justify-center p-6">
-      <main className="parchment-frame w-full max-w-md py-16 px-8 sm:px-12 text-center">
-        <div className="text-mono text-text-tertiary text-xs tracking-[0.15em] uppercase mb-6">
-          — Error 404 —
-        </div>
-        <h1 className="font-display italic text-[2.25rem] leading-tight text-text-primary mb-4">
+    <div className="bg-parchment min-h-screen flex items-center justify-center p-4 sm:p-6">
+      <main className="parchment-frame w-full max-w-lg bg-card/70 shadow-modal-warm rounded-card py-14 sm:py-16 px-9 sm:px-14 text-center animate-rise-in">
+        <p className="text-label-ui text-[0.75rem] tracking-[0.24em] text-text-tertiary">Error 404</p>
+        <div className="rule-masthead my-4" aria-hidden="true" />
+        <h1 className="font-display italic font-medium text-[2.75rem] sm:text-[3.25rem] leading-[1] tracking-tight text-text-primary">
           No such record
         </h1>
-        <div className="flex items-center justify-center gap-3 mb-6" aria-hidden="true">
-          <div className="h-px w-8 bg-border-strong" />
-          <div className="text-border-strong text-base">✦</div>
-          <div className="h-px w-8 bg-border-strong" />
-        </div>
-        <p className="font-body italic text-body text-text-secondary mb-8 leading-relaxed">
+        <Ornament className="my-7" />
+        <p className="font-body italic text-body text-text-secondary mb-8 leading-relaxed max-w-sm mx-auto">
           The clerk searched the archive and found nothing filed under this address.
         </p>
-        <Link to="/" className="btn-primary inline-block">
+        <Link to="/" className="btn-primary px-6 py-3 text-base">
           Return to the chamber
         </Link>
       </main>

@@ -17,7 +17,7 @@ import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { isGoogleDocsHttpUrl } from '../lib/url';
 import { RedlineDiff, type DiffHunk } from '../components/shared/RedlineDiff';
 import { Modal } from '../components/shared/Modal';
-import { PageHeader, Breadcrumbs } from '../components/shared/PageHeader';
+import { PageHeader, Breadcrumbs, SectionHeading } from '../components/shared/PageHeader';
 import { Icon } from '../components/shared/Icon';
 import { formatDate, formatDateTime, humanizeToken, recordNumber } from '../lib/format';
 import type { BillVoter, BillDetail as BillDetailType } from '../api/hooks/useBills';
@@ -80,7 +80,7 @@ export function BillDetail() {
     return (
       <div className="page">
         <Breadcrumbs items={[{ label: 'Bills', to: '/bills' }, { label: 'Not found' }]} />
-        <div className="card border-l-status-rejected">
+        <div className="notice notice-danger">
           <h1 className="text-heading-1 text-text-primary mb-2">Bill not found</h1>
           <p className="text-body text-text-secondary">
             We couldn&rsquo;t load this bill. It may have been removed, or the link may be wrong.
@@ -159,11 +159,12 @@ export function BillDetail() {
             )}
           </>
         }
+        rule={false}
         className="mb-4"
       />
 
       {/* Metadata line */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-body-sm text-text-secondary mb-6">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-body-sm text-text-secondary mb-5">
         <div>
           <span className="text-label-ui text-text-tertiary mr-1">Author</span>
           <Link
@@ -251,14 +252,16 @@ export function BillDetail() {
         )}
       </div>
 
-      {/* Status Timeline (horizontal) */}
-      <div className="mb-8 pb-6 border-b border-border-subtle">
+      <div className="rule-masthead mb-6" aria-hidden="true" />
+
+      {/* Passage of the bill */}
+      <section aria-label="Passage of the bill" className="card mb-8 py-5 sm:py-6">
         <StatusTimeline
           stages={timelineStages}
           currentIndex={stageIndex}
           horizontal
         />
-      </div>
+      </section>
 
       {/* Redline diff viewer (for amendment bills) */}
       {(bill.amendsBillId || bill.amendsDocumentId) && (
@@ -288,13 +291,13 @@ export function BillDetail() {
       )}
 
       {/* Two-column layout: content + sidebar */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
         {/* Left: cached content */}
         <div className="lg:col-span-2 min-w-0">
           {bill.summary && (
-            <div className="mb-6">
-              <h2 className="text-heading-2 text-text-secondary mb-2">Summary</h2>
-              <div className="card border-l-accent-bills">
+            <div className="mb-8">
+              <SectionHeading>Summary</SectionHeading>
+              <div className="card">
                 <p className="text-body text-text-primary">{bill.summary}</p>
               </div>
             </div>
@@ -302,22 +305,23 @@ export function BillDetail() {
 
           {bill.cachedContent ? (
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="text-heading-2 text-text-secondary">{isShortBill ? 'Text of the Bill' : 'Bill Content'}</h2>
-                {bill.cachedAt && (
+              <SectionHeading
+                action={bill.cachedAt && (
                   <span className="font-mono text-xs text-text-tertiary">
                     {isShortBill ? 'Recorded' : 'Cached'} {formatDateTime(bill.cachedAt)}
                   </span>
                 )}
-              </div>
-              <article className="card border-l-accent-bills">
-                <div className="font-body text-[1rem] text-text-primary whitespace-pre-wrap leading-[1.8] max-w-[70ch] break-words">
+              >
+                {isShortBill ? 'Text of the Bill' : 'Bill Content'}
+              </SectionHeading>
+              <article className="card sm:!px-10 sm:!py-9">
+                <div className="font-body text-[1.0625rem] text-text-primary whitespace-pre-wrap leading-[1.85] max-w-[68ch] break-words">
                   {bill.cachedContent}
                 </div>
               </article>
             </div>
           ) : (
-            <div className="card border-l-accent-bills">
+            <div className="card">
               <p className="text-body text-text-tertiary italic">
                 {isShortBill
                   ? 'Short bill text is not available.'
@@ -328,9 +332,9 @@ export function BillDetail() {
 
           {/* Status History */}
           {statusLog.length > 0 && (
-            <div className="mt-6">
-              <h2 className="text-heading-2 text-text-secondary mb-3">Status History</h2>
-              <div className="space-y-1">
+            <div className="mt-8">
+              <SectionHeading>Status History</SectionHeading>
+              <div>
                 {statusLog.map((entry) => (
                   <div
                     key={entry.id}
@@ -368,12 +372,12 @@ export function BillDetail() {
         </div>
 
         {/* Right sidebar */}
-        <div className="space-y-6 min-w-0">
+        <div className="space-y-8 min-w-0">
           {/* Player House Vote */}
           <div>
-            <h3 className="text-heading-2 text-text-secondary mb-3">Player House Vote</h3>
+            <SectionHeading as="h3" size="sm">Player House Vote</SectionHeading>
             {voters && voters.length > 0 ? (
-              <div className="card border-l-accent-voting">
+              <div className="card">
                 <ResultsBars
                   yea={voteTally.yea}
                   nay={voteTally.nay}
@@ -384,7 +388,7 @@ export function BillDetail() {
                 {/* Expandable voter list */}
                 <button
                   onClick={() => setVoteExpanded(!voteExpanded)}
-                  className="text-body-sm text-accent-primary hover:underline font-medium"
+                  className="link text-body-sm font-medium"
                 >
                   {voteExpanded ? 'Hide voter list' : `Show all ${voters.length} voters`}
                 </button>
@@ -416,7 +420,7 @@ export function BillDetail() {
                 )}
               </div>
             ) : (
-              <div className="card border-l-accent-voting">
+              <div className="card">
                 <p className="text-body-sm text-text-tertiary italic">
                   {bill.status === 'voting' ? 'The vote is open; no ballots are public yet.' : 'No player vote recorded yet.'}
                 </p>
@@ -434,18 +438,21 @@ export function BillDetail() {
               seasons where the NPC house is switched off. */}
           {(bill.npcVote || ['npc_pending', 'npc_passed', 'npc_rejected'].includes(bill.status)) && (
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-heading-2 text-text-secondary">NPC House</h3>
-                {isStaff && (
+              <SectionHeading
+                as="h3"
+                size="sm"
+                action={isStaff && (
                   <button
                     onClick={() => setNpcOpen(true)}
-                    className="text-body-sm text-accent-primary hover:underline"
+                    className="link text-body-sm"
                   >
                     Record vote
                   </button>
                 )}
-              </div>
-              <div className="card border-l-accent-voting">
+              >
+                NPC House
+              </SectionHeading>
+              <div className="card">
                 {bill.npcVote ? (
                   <>
                     <div className="flex items-center gap-2 mb-3">
@@ -478,26 +485,29 @@ export function BillDetail() {
           {/* Estimated Effects */}
           {(bill.estimatedEffects || isStaff) && (
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-heading-2 text-text-secondary">Estimated Effects</h3>
-                {isStaff && (
+              <SectionHeading
+                as="h3"
+                size="sm"
+                action={isStaff && (
                   <button
                     onClick={() => setEffectsOpen(true)}
-                    className="text-body-sm text-accent-primary hover:underline"
+                    className="link text-body-sm"
                   >
                     {bill.estimatedEffects ? 'Edit' : 'Set'}
                   </button>
                 )}
-              </div>
+              >
+                Estimated Effects
+              </SectionHeading>
               {!bill.estimatedEffects && isStaff && (
-                <div className="card border-l-accent-simulation">
+                <div className="card">
                   <p className="text-body-sm text-text-tertiary italic">
                     No effects recorded yet.
                   </p>
                 </div>
               )}
               {bill.estimatedEffects && (
-              <div className="card border-l-accent-simulation space-y-3">
+              <div className="card space-y-3">
                 {bill.estimatedEffects.economy && (
                   <div>
                     <p className="text-label-ui text-text-tertiary mb-1">Economy</p>
@@ -541,7 +551,7 @@ export function BillDetail() {
           {/* Tags */}
           {bill.tags.length > 0 && (
             <div>
-              <h3 className="text-heading-2 text-text-secondary mb-3">Tags</h3>
+              <SectionHeading as="h3" size="sm">Tags</SectionHeading>
               <div className="flex flex-wrap gap-1.5">
                 {bill.tags.map((tag) => (
                   <Tag key={tag} color="bills">{tag}</Tag>

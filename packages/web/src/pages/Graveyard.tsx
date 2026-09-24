@@ -87,7 +87,7 @@ function ObituaryCard({ player }: { player: Player }) {
   const obituary = buildObituary(player, birthYear, deathYear, age);
 
   return (
-    <article className="card border-l-accent-graveyard">
+    <article className="card">
       <div className="flex gap-4 sm:gap-5">
         {/* Portrait */}
         <ObituaryPortrait player={player} />
@@ -237,7 +237,7 @@ export function Graveyard() {
 
       {/* Obituary list */}
       {deceased.length === 0 ? (
-        <div className="card border-l-accent-graveyard text-center py-12">
+        <div className="card text-center py-12">
           <p className="text-body text-text-tertiary italic">
             None have been laid to rest.
           </p>

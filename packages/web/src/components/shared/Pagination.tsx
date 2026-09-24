@@ -1,3 +1,5 @@
+import { Icon } from './Icon';
+
 interface PaginationProps {
   currentPage: number;
   totalPages: number;
@@ -50,27 +52,27 @@ export function Pagination({
       <button
         onClick={() => onPageChange(currentPage - 1)}
         disabled={currentPage === 1}
-        className="px-2.5 py-1.5 text-body-sm text-text-secondary hover:text-text-primary
-                   hover:bg-hover rounded-card transition-colors disabled:opacity-30 disabled:cursor-not-allowed
-                   font-body"
+        className="inline-flex items-center gap-1 pl-1.5 pr-2.5 h-8 text-label-ui text-text-secondary hover:text-text-primary
+                   hover:bg-hover rounded-card transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
         aria-label="Previous page"
       >
+        <Icon name="chevron-left" size={16} />
         Prev
       </button>
 
       {/* Page numbers */}
       {pages.map((page, i) =>
         page === '...' ? (
-          <span key={`ellipsis-${i}`} className="px-1 text-text-tertiary font-body text-sm">
-            ...
+          <span key={`ellipsis-${i}`} className="px-1 text-text-tertiary figure text-base" aria-hidden="true">
+            …
           </span>
         ) : (
           <button
             key={page}
             onClick={() => onPageChange(page)}
-            className={`min-w-[32px] h-8 px-2 rounded-card text-sm font-body transition-colors ${
+            className={`min-w-[32px] h-8 px-2 rounded-card figure text-[1.0625rem] transition-colors ${
               page === currentPage
-                ? 'bg-ink-primary text-text-inverse font-medium'
+                ? 'bg-ink-primary text-text-inverse shadow-card'
                 : 'text-text-secondary hover:text-text-primary hover:bg-hover'
             }`}
             aria-current={page === currentPage ? 'page' : undefined}
@@ -84,12 +86,12 @@ export function Pagination({
       <button
         onClick={() => onPageChange(currentPage + 1)}
         disabled={currentPage === totalPages}
-        className="px-2.5 py-1.5 text-body-sm text-text-secondary hover:text-text-primary
-                   hover:bg-hover rounded-card transition-colors disabled:opacity-30 disabled:cursor-not-allowed
-                   font-body"
+        className="inline-flex items-center gap-1 pl-2.5 pr-1.5 h-8 text-label-ui text-text-secondary hover:text-text-primary
+                   hover:bg-hover rounded-card transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
         aria-label="Next page"
       >
         Next
+        <Icon name="chevron-right" size={16} />
       </button>
     </nav>
   );

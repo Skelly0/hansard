@@ -30,7 +30,7 @@ interface PlayerAvatarProps {
     discordUsername: string;
     characterPortraitUrl?: string | null;
   };
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   /** Greyscale portrait, for the deceased. */
   muted?: boolean;
 }
@@ -39,6 +39,7 @@ const SIZE_CLASSES: Record<NonNullable<PlayerAvatarProps['size']>, string> = {
   sm: 'w-[22px] h-[22px] text-[11px]',
   md: 'w-8 h-8 text-sm',
   lg: 'w-16 h-16 text-2xl',
+  xl: 'w-20 h-20 sm:w-24 sm:h-24 text-[2.25rem] sm:text-[2.75rem]',
 };
 
 export function PlayerAvatar({ player, size = 'sm', muted = false }: PlayerAvatarProps) {

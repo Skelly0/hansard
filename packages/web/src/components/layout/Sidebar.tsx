@@ -7,7 +7,7 @@ import { Icon } from '../shared/Icon';
 import { formatSimDate } from '../../lib/format';
 import { UserMenu } from './UserMenu';
 import { SHORTCUT_LABEL } from './CommandPalette';
-import { NAV_ITEMS, isNavItemActive } from './navItems';
+import { ACCENT_TEXT, NAV_ITEMS, isNavItemActive } from './navItems';
 
 interface SidebarProps {
   /** Desktop rail collapsed to icons only. Ignored in the mobile drawer. */
@@ -52,7 +52,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
         data-testid="app-sidebar"
         aria-label="Primary"
         className={`
-          fixed left-0 top-0 z-50 h-full bg-page border-r border-border-subtle flex flex-col print:hidden
+          fixed left-0 top-0 z-50 h-full bg-sidebar border-r border-border-subtle flex flex-col print:hidden
           w-72 transition-[transform,width] duration-200 ease-out
           ${mobileOpen ? 'translate-x-0 shadow-modal-warm' : '-translate-x-full'}
           lg:translate-x-0 lg:shadow-none
@@ -60,28 +60,31 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
         `}
       >
         {/* Masthead */}
-        <div className={`flex items-center gap-2 border-b border-border-subtle ${railCollapsed ? 'lg:justify-center lg:px-2' : ''} px-4 h-[68px] flex-shrink-0`}>
+        <div className={`flex items-start gap-2 px-5 pt-5 pb-4 flex-shrink-0 ${railCollapsed ? 'lg:justify-center lg:px-2' : ''}`}>
           <Link
             to="/"
             className={`min-w-0 flex-1 group ${railCollapsed ? 'lg:hidden' : ''}`}
             aria-label="Hansard — dashboard"
           >
-            <div className="font-display italic text-[1.45rem] leading-none text-text-primary tracking-tight group-hover:text-accent-primary transition-colors">
+            <div className="font-display italic font-medium text-[1.875rem] leading-[0.9] text-text-primary tracking-tight group-hover:text-accent-primary transition-colors">
               Hansard
             </div>
-            {clock && (
-              <div
-                className="text-mono text-[0.6875rem] text-text-tertiary truncate mt-1"
-                title={`${clock.seasonName} — ${clock.currentDate}${clock.isPaused ? ' (paused)' : ''}`}
-              >
-                {formatSimDate(clock.currentDate)}
-                {clock.isPaused && <span className="text-status-pending"> · paused</span>}
-              </div>
-            )}
+            <div className="text-label-ui text-[0.625rem] tracking-[0.2em] text-text-tertiary mt-1.5">
+              The Official Report
+            </div>
           </Link>
+          {railCollapsed && (
+            <Link
+              to="/"
+              className="hidden lg:flex items-center justify-center w-9 h-9 font-display italic font-semibold text-[1.5rem] text-text-primary hover:text-accent-primary"
+              aria-label="Hansard — dashboard"
+            >
+              H
+            </Link>
+          )}
           <button
             onClick={onToggle}
-            className="hidden lg:inline-flex text-text-tertiary hover:text-text-primary hover:bg-hover rounded-card transition-colors p-1.5"
+            className={`hidden lg:inline-flex text-text-tertiary hover:text-text-primary hover:bg-hover rounded-card transition-colors p-1.5 -mr-1.5 ${railCollapsed ? 'lg:hidden' : ''}`}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-expanded={!collapsed}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -91,19 +94,45 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
           <button
             ref={closeRef}
             onClick={onMobileClose}
-            className="lg:hidden text-text-tertiary hover:text-text-primary hover:bg-hover rounded-card transition-colors p-1.5"
+            className="lg:hidden text-text-tertiary hover:text-text-primary hover:bg-hover rounded-card transition-colors p-1.5 -mr-1.5"
             aria-label="Close navigation"
           >
             <Icon name="close" size={18} />
           </button>
         </div>
 
+        {/* Sitting: season and simulation date */}
+        {clock && (
+          <div
+            className={`mx-5 mb-4 ${railCollapsed ? 'lg:hidden' : ''}`}
+            title={`${clock.seasonName} — ${clock.currentDate}${clock.isPaused ? ' (paused)' : ''}`}
+          >
+            <div className="rule-masthead mb-2.5 opacity-80" aria-hidden="true" />
+            <div className="font-display italic text-[0.9375rem] leading-snug text-text-secondary truncate">{clock.seasonName}</div>
+            <div className="font-mono text-[0.6875rem] text-text-tertiary mt-0.5 flex items-center gap-1.5">
+              {formatSimDate(clock.currentDate)}
+              {clock.isPaused && <span className="text-status-pending">· paused</span>}
+            </div>
+          </div>
+        )}
+        {railCollapsed && (
+          <button
+            onClick={onToggle}
+            className="hidden lg:flex mx-auto mb-2 text-text-tertiary hover:text-text-primary hover:bg-hover rounded-card transition-colors p-1.5"
+            aria-label="Expand sidebar"
+            aria-expanded={false}
+            title="Expand sidebar"
+          >
+            <Icon name="chevron-right" size={18} />
+          </button>
+        )}
+
         {/* Search */}
-        <div className={`px-2 pt-3 ${railCollapsed ? 'lg:px-2' : ''}`}>
+        <div className="px-3">
           <button
             onClick={onOpenSearch}
             title={railCollapsed ? `Search (${SHORTCUT_LABEL})` : undefined}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-card border border-border-subtle bg-card text-body-sm text-text-tertiary hover:text-text-secondary hover:border-border transition-colors ${
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-card border border-border-subtle bg-card shadow-card text-body-sm text-text-tertiary hover:text-text-secondary hover:border-border transition-colors ${
               railCollapsed ? 'lg:justify-center lg:px-0 lg:border-transparent lg:bg-transparent' : ''
             }`}
           >
@@ -114,7 +143,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
         </div>
 
         {/* Navigation */}
-        <div className="flex-1 overflow-y-auto overscroll-contain py-2">
+        <div className="flex-1 overflow-y-auto overscroll-contain pt-1 pb-4">
           {visibleNavItems.map((item, i) => {
             const isActive = isNavItemActive(item.path, currentPath);
             const badge = item.path === '/voting' && awaitingCount > 0 ? awaitingCount : 0;
@@ -122,8 +151,9 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
               <div key={item.path}>
                 {item.section && (
                   <>
-                    <div className={`text-label-ui text-text-tertiary px-5 pt-5 pb-1.5 ${railCollapsed ? 'lg:hidden' : ''}`}>
+                    <div className={`flex items-center gap-2 text-label-ui text-[0.6875rem] tracking-[0.14em] text-text-tertiary px-5 pt-5 pb-1.5 ${railCollapsed ? 'lg:hidden' : ''}`}>
                       {item.section}
+                      <span className="flex-1 h-px bg-border" aria-hidden="true" />
                     </div>
                     {i > 0 && (
                       <div className={`hidden mx-4 my-2 border-t border-border-subtle ${railCollapsed ? 'lg:block' : ''}`} />
@@ -136,24 +166,24 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
                   aria-label={badge ? `${item.label}, ${badge} awaiting your ballot` : undefined}
                   title={railCollapsed ? (badge ? `${item.label} — ${badge} awaiting your ballot` : item.label) : undefined}
                   className={`
-                    group flex items-center gap-3 mx-2 px-3 py-2 rounded-card text-body-sm transition-colors relative
+                    group flex items-center gap-3 mx-3 px-3 py-[7px] rounded-card text-[0.9375rem] font-body border transition-colors relative
                     ${railCollapsed ? 'lg:justify-center lg:px-0' : ''}
                     ${isActive
-                      ? 'text-text-primary bg-hover font-medium'
-                      : 'text-text-secondary hover:text-text-primary hover:bg-hover'}
+                      ? 'text-text-primary bg-card border-border-subtle shadow-card font-medium'
+                      : 'text-text-secondary border-transparent hover:text-text-primary hover:bg-hover/70'}
                   `}
                 >
                   {isActive && (
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-accent-primary rounded-r" aria-hidden="true" />
+                    <span className="absolute -left-3 top-1/2 -translate-y-1/2 w-[3px] h-6 bg-accent-primary rounded-r" aria-hidden="true" />
                   )}
                   <span className="relative flex-shrink-0">
                     <Icon
                       name={item.icon}
                       size={19}
-                      className={isActive ? 'text-accent-primary' : 'text-text-tertiary group-hover:text-text-secondary'}
+                      className={isActive ? ACCENT_TEXT[item.accent] : 'text-text-tertiary group-hover:text-text-secondary'}
                     />
                     {badge > 0 && railCollapsed && (
-                      <span className="hidden lg:block absolute -top-1 -right-1 w-2 h-2 rounded-full bg-accent-primary ring-2 ring-page" aria-hidden="true" />
+                      <span className="hidden lg:block absolute -top-1 -right-1 w-2 h-2 rounded-full bg-accent-primary ring-2 ring-sidebar" aria-hidden="true" />
                     )}
                   </span>
                   <span className={railCollapsed ? 'lg:sr-only' : ''}>{item.label}</span>

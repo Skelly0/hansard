@@ -63,11 +63,11 @@ export function Shell({ children }: ShellProps) {
   }, [drawerOpen]);
 
   return (
-    <div className="min-h-screen bg-page">
+    <div className="min-h-screen paper">
       <a href="#main" className="skip-link">Skip to content</a>
 
       {/* Mobile top bar */}
-      <header className="lg:hidden print:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-page/95 backdrop-blur border-b border-border-subtle">
+      <header className="lg:hidden print:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-page/90 backdrop-blur-md border-b border-border-subtle">
         <button
           onClick={() => setDrawerOpen(true)}
           className="p-2 -ml-1 rounded-card text-text-secondary hover:text-text-primary hover:bg-hover transition-colors"
@@ -76,7 +76,7 @@ export function Shell({ children }: ShellProps) {
         >
           <Icon name="menu" size={22} />
         </button>
-        <Link to="/" className="font-display italic text-[1.35rem] leading-none text-text-primary">
+        <Link to="/" className="font-display italic font-medium text-[1.5rem] leading-none text-text-primary">
           Hansard
         </Link>
         <button

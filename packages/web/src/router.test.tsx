@@ -65,7 +65,7 @@ describe('router shell layout', () => {
 
     // The Login card should appear.
     await waitFor(() => {
-      expect(screen.getByText(/Per Order of the Chamber/i)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Sign in with Discord/i })).toBeInTheDocument();
     });
 
     // The Sidebar must NOT leak into the unauthenticated layout.

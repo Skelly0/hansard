@@ -100,7 +100,7 @@ function DialogFrame({
   // clip the backdrop to the page content.
   return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4 animate-fade-in"
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-[#1b140c]/45 backdrop-blur-[2px] p-0 sm:p-4 animate-fade-in"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
@@ -109,31 +109,34 @@ function DialogFrame({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`bg-card rounded-t-card sm:rounded-card shadow-modal-warm w-full ${maxWidth} max-h-[92vh] flex flex-col overflow-hidden focus:outline-none`}
+        className={`bg-card border border-border-subtle rounded-t-card sm:rounded-card shadow-modal-warm w-full ${maxWidth} max-h-[92vh] flex flex-col overflow-hidden focus:outline-none animate-rise-in`}
       >
         <div className={`h-[3px] flex-shrink-0 ${railClass}`} />
-        <div className="p-5 sm:p-6 overflow-y-auto">
-          <div className="flex items-start justify-between gap-4 mb-5">
-            <div className="min-w-0">
-              {eyebrow && (
-                <div className="text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
-                  {eyebrow}
-                </div>
-              )}
-              <h2 id={titleId} className="text-heading-1 text-text-primary">{title}</h2>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="-mr-1 -mt-1 p-1.5 rounded-card text-text-tertiary hover:text-text-primary hover:bg-hover transition-colors duration-150"
-              aria-label="Close"
-            >
-              <Icon name="close" size={18} />
-            </button>
+        <div className="px-5 pt-5 sm:px-6 sm:pt-6 flex items-start justify-between gap-4 flex-shrink-0">
+          <div className="min-w-0">
+            {eyebrow && (
+              <div className="text-label-ui text-text-tertiary mb-1">
+                {eyebrow}
+              </div>
+            )}
+            <h2 id={titleId} className="text-heading-1 text-text-primary">{title}</h2>
           </div>
-          <div>{children}</div>
-          {footer && <div className="mt-5 flex flex-wrap justify-end gap-2">{footer}</div>}
+          <button
+            type="button"
+            onClick={onClose}
+            className="-mr-1.5 -mt-1 p-1.5 rounded-card text-text-tertiary hover:text-text-primary hover:bg-hover transition-colors duration-150"
+            aria-label="Close"
+          >
+            <Icon name="close" size={18} />
+          </button>
         </div>
+        <div className="px-5 pt-4 pb-5 sm:px-6 sm:pb-6 overflow-y-auto">{children}</div>
+        {/* Outside the scroll area, so the actions stay in reach on long forms. */}
+        {footer && (
+          <div className="flex flex-wrap justify-end gap-2 px-5 py-3.5 sm:px-6 border-t border-border-subtle bg-inset/50 flex-shrink-0">
+            {footer}
+          </div>
+        )}
       </div>
     </div>,
     document.body,

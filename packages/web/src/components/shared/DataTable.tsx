@@ -1,5 +1,6 @@
 import { type ReactNode, type KeyboardEvent } from 'react';
 import { useIsWide } from '../../hooks/useMediaQuery';
+import { EmptyState } from './PageHeader';
 
 export interface Column<T> {
   key: string;
@@ -40,12 +41,10 @@ function cellValue<T>(col: Column<T>, row: T, index: number): ReactNode {
 }
 
 /**
- * Clean data table following the Hansard design system:
- * - No alternating row backgrounds, 1px hairline per row
- * - Column headers in uppercase small Lora (text-label-ui)
- * - Monospace for number columns
- * - Below `md` the rows become stacked record cards so nothing is squeezed
- *   into unreadable columns on a phone.
+ * A ledger: tracked-caps header band, hairline rows, monospace figures.
+ * Cells carry their own edge padding, so place it in a `card card-flush`
+ * sheet. Below `md` the rows become stacked records so nothing is squeezed
+ * into unreadable columns on a phone.
  */
 export function DataTable<T>({
   columns,
@@ -73,11 +72,7 @@ export function DataTable<T>({
   };
 
   if (data.length === 0) {
-    return (
-      <div className={`text-body text-text-tertiary py-10 text-center italic ${className}`}>
-        {emptyMessage}
-      </div>
-    );
+    return <EmptyState title={emptyMessage} className={className} />;
   }
 
   if (!isWide) {
@@ -95,12 +90,12 @@ export function DataTable<T>({
         {data.map((row, rowIdx) => (
           <li
             key={rowKey(row)}
-            className={`py-3 first:pt-0 last:pb-0 ${onRowClick ? 'cursor-pointer active:bg-hover rounded-card' : ''}`}
+            className={`px-4 py-3.5 ${onRowClick ? 'cursor-pointer active:bg-hover transition-colors' : ''}`}
             onClick={onRowClick ? () => onRowClick(row) : undefined}
             onKeyDown={onRowClick ? activate(row) : undefined}
             tabIndex={onRowClick ? 0 : undefined}
           >
-            <div className="text-body-sm text-text-primary mb-1.5">{cellValue(primary, row, rowIdx)}</div>
+            <div className="text-body-sm text-text-primary mb-2">{cellValue(primary, row, rowIdx)}</div>
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 items-baseline">
               {rest.map((col) => (
                 <div key={col.key} className="contents">
@@ -122,12 +117,12 @@ export function DataTable<T>({
       <table className="w-full">
         {caption && <caption className="sr-only">{caption}</caption>}
         <thead>
-          <tr className="border-b border-border">
+          <tr className="border-b border-border bg-inset/60">
             {columns.map((col) => (
               <th
                 key={col.key}
                 scope="col"
-                className={`text-label-ui text-text-tertiary pb-3 pr-4 font-medium whitespace-nowrap ${alignClass(col.align)}`}
+                className={`text-label-ui text-text-tertiary py-2.5 px-3 first:pl-5 last:pr-5 whitespace-nowrap ${alignClass(col.align)}`}
                 style={col.minWidth ? { minWidth: col.minWidth } : undefined}
               >
                 {col.header}
@@ -141,7 +136,7 @@ export function DataTable<T>({
               key={rowKey(row)}
               className={`border-b border-border-subtle last:border-0 ${
                 onRowClick
-                  ? 'cursor-pointer hover:bg-hover focus-visible:bg-hover transition-colors'
+                  ? 'cursor-pointer hover:bg-hover/60 focus-visible:bg-hover transition-colors'
                   : ''
               }`}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
@@ -151,7 +146,7 @@ export function DataTable<T>({
               {columns.map((col) => (
                 <td
                   key={col.key}
-                  className={`py-3 pr-4 align-middle ${
+                  className={`py-3.5 px-3 first:pl-5 last:pr-5 align-middle ${
                     col.mono ? 'font-mono text-[0.8125rem] leading-[1.5]' : 'text-body-sm'
                   } text-text-primary ${alignClass(col.align)}`}
                 >

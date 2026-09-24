@@ -30,7 +30,7 @@ export function ResultsBars({
   if (total === 0) {
     return (
       <div className={`${className}`}>
-        <div className="h-7 bg-inset rounded flex items-center justify-center">
+        <div className="h-7 rounded-full border border-dashed border-border flex items-center justify-center">
           <span className="text-body-sm text-text-tertiary italic">No votes cast</span>
         </div>
       </div>
@@ -49,14 +49,12 @@ export function ResultsBars({
 
   return (
     <div className={className}>
-      {/* Bar */}
-      <div className="flex h-7 rounded overflow-hidden" style={{ minHeight: 28 }}>
-        {segments.map((seg, i) => (
+      {/* Bar: segments separated by a hairline of the surface colour. */}
+      <div className="flex h-7 gap-[2px] rounded-full overflow-hidden">
+        {segments.map((seg) => (
           <div
             key={seg.label}
-            className={`${seg.bg} flex items-center justify-center transition-all duration-400 ease-out ${
-              i === 0 ? 'rounded-l' : ''
-            } ${i === segments.length - 1 ? 'rounded-r' : ''}`}
+            className={`${seg.bg} flex items-center justify-center transition-all duration-400 ease-out`}
             style={{ width: `${seg.pct}%` }}
           >
             {seg.pct > 12 && showCounts && (
@@ -70,16 +68,16 @@ export function ResultsBars({
 
       {/* Labels below */}
       {showLabels && (
-        <div className="flex gap-4 mt-2">
+        <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2.5">
           {segments.map((seg) => (
-            <div key={seg.label} className="flex items-center gap-1.5">
-              <div className={`w-2.5 h-2.5 rounded-full ${seg.bg}`} />
+            <div key={seg.label} className="flex items-baseline gap-1.5">
+              <span className={`w-2 h-2 rounded-full self-center ${seg.bg}`} />
               <span className="text-body-sm text-text-secondary">
                 {seg.label}
               </span>
               {showCounts && (
                 <span className="font-mono text-xs text-text-tertiary">
-                  {seg.count} ({Math.round(seg.pct)}%)
+                  {seg.count} · {Math.round(seg.pct)}%
                 </span>
               )}
             </div>
@@ -129,7 +127,7 @@ export function MultiRoundBars({
         return (
           <div key={round.round}>
             <p className="text-label-ui text-text-tertiary mb-1">Round {round.round}</p>
-            <div className="flex h-7 rounded overflow-hidden" style={{ minHeight: 28 }}>
+            <div className="flex h-7 gap-[2px] rounded-full overflow-hidden">
               {allCandidates
                 .filter((c) => (round.tallies[c] ?? 0) > 0)
                 .map((candidateId, ci) => {

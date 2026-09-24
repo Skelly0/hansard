@@ -31,9 +31,9 @@ const RAIL_COLOR: Record<ModType, string> = {
 };
 
 const SUBMIT_COLOR: Record<ModType, string> = {
-  warn: 'bg-status-pending hover:bg-status-pending/90',
-  mute: 'bg-accent-tickets hover:bg-accent-tickets/90',
-  suspend: 'bg-accent-moderation hover:bg-accent-moderation/90',
+  warn: 'bg-ink-pending hover:bg-ink-pending/90',
+  mute: 'bg-ink-tickets hover:bg-ink-tickets/90',
+  suspend: 'bg-ink-moderation hover:bg-ink-moderation/90',
 };
 
 const DURATION_PRESETS = [

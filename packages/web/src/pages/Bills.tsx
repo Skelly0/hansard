@@ -4,6 +4,7 @@ import { useBills, useCreateBill } from '../api/hooks/useBills';
 import { useAuth } from '../api/hooks/useAuth';
 import { useSearchPlayers } from '../api/hooks/usePlayers';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useUrlState, useUrlText } from '../hooks/useUrlState';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
@@ -32,11 +33,9 @@ const SORT_OPTIONS = [
 
 export function Bills() {
   const [submitOpen, setSubmitOpen] = useState(false);
-  const [status, setStatus] = useState('all');
-  const [sort, setSort] = useState('newest');
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const debouncedSearch = useDebouncedValue(search.trim(), 250);
+  const [{ status, sort, q: debouncedSearch, page }, setUrl] = useUrlState({ status: 'all', sort: 'newest', q: '', page: 1 });
+  const [search, setSearch] = useUrlText(debouncedSearch, (q) => setUrl({ q, page: 1 }));
+  const setPage = (p: number) => setUrl({ page: p });
   const limit = 20;
 
   const { data, isLoading, isError, error, isPlaceholderData } = useBills({
@@ -166,14 +165,14 @@ export function Bills() {
       <FilterBar>
         <SearchInput
           value={search}
-          onChange={(v) => { setSearch(v); setPage(1); }}
+          onChange={setSearch}
           placeholder="Search bills…"
           label="Search bills"
         />
         <FilterField label="Status">
           <select
             value={status}
-            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+            onChange={(e) => setUrl({ status: e.target.value, page: 1 })}
             className="field"
           >
             {BILL_STATUSES.map((s) => (
@@ -186,7 +185,7 @@ export function Bills() {
         <FilterField label="Sort">
           <select
             value={sort}
-            onChange={(e) => { setSort(e.target.value); setPage(1); }}
+            onChange={(e) => setUrl({ sort: e.target.value, page: 1 })}
             className="field"
           >
             {SORT_OPTIONS.map((o) => (

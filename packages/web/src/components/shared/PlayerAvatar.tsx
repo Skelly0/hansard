@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { isSafeHttpUrl } from '../../lib/url';
 
+// Ink tones so the cream initial clears WCAG AA on every disc.
 const PALETTE = [
-  'bg-accent-bills',
-  'bg-accent-voting',
-  'bg-accent-players',
-  'bg-accent-offices',
-  'bg-accent-tickets',
-  'bg-accent-simulation',
-  'bg-accent-graveyard',
+  'bg-ink-bills',
+  'bg-ink-voting',
+  'bg-ink-players',
+  'bg-ink-offices',
+  'bg-ink-tickets',
+  'bg-ink-simulation',
+  'bg-ink-graveyard',
 ] as const;
 
 /**
@@ -64,7 +65,7 @@ export function PlayerAvatar({ player, size = 'sm', muted = false }: PlayerAvata
     );
   }
 
-  const color = muted ? 'bg-accent-graveyard' : colorForId(player.id);
+  const color = muted ? 'bg-ink-graveyard' : colorForId(player.id);
 
   return (
     <span

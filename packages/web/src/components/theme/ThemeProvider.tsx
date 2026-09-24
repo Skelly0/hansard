@@ -57,6 +57,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => media.removeEventListener('change', handler);
   }, [theme]);
 
+  // Paper is white: print in the light palette whatever the screen shows,
+  // then restore the active theme once the print dialog closes.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const toLight = () => applyTheme('light');
+    const restore = () => applyTheme(resolvedTheme);
+    window.addEventListener('beforeprint', toLight);
+    window.addEventListener('afterprint', restore);
+    return () => {
+      window.removeEventListener('beforeprint', toLight);
+      window.removeEventListener('afterprint', restore);
+    };
+  }, [resolvedTheme]);
+
   const setTheme = (next: ThemePreference) => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(STORAGE_KEY, next);

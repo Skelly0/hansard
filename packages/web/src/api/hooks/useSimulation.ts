@@ -1,5 +1,19 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
+import { formatSimDate, plural } from '../../lib/format';
+
+/** "Clock advanced to 1 January 2076 · 1 death, 2 ailments" */
+function describeAdvance(result: { toDate?: string; summary?: { deaths?: unknown[]; ailments?: unknown[]; recoveries?: unknown[]; pendingDeaths?: unknown[] } } | undefined) {
+  if (!result?.toDate) return 'Clock advanced';
+  const s = result.summary ?? {};
+  const parts = [
+    s.deaths?.length ? plural(s.deaths.length, 'death') : null,
+    s.pendingDeaths?.length ? plural(s.pendingDeaths.length, 'pending death') : null,
+    s.ailments?.length ? plural(s.ailments.length, 'new ailment') : null,
+    s.recoveries?.length ? plural(s.recoveries.length, 'recovery', 'recoveries') : null,
+  ].filter(Boolean);
+  return `Clock advanced to ${formatSimDate(result.toDate)}${parts.length ? ` · ${parts.join(', ')}` : ''}`;
+}
 
 // ---- Types ----
 
@@ -130,6 +144,7 @@ export function useAdvancePreview(ticks: number) {
 export function useAdvanceTime() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: describeAdvance },
     mutationFn: (body: { ticks: number; notes?: string }) =>
       api.post<TimeAdvanceEntry>('/simulation/advance', body),
     onSuccess: () => {
@@ -142,6 +157,7 @@ export function useAdvanceTime() {
 export function useUpdateClock() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Clock updated', errorMessage: 'Could not update the clock' },
     mutationFn: (body: { tickUnit?: string; isPaused?: boolean }) =>
       api.patch<SimulationClock>('/simulation/clock', body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['simulation', 'clock'] }); },
@@ -151,6 +167,7 @@ export function useUpdateClock() {
 export function useAssignAilment() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Ailment assigned' },
     mutationFn: (body: { playerId: string; condition: string; severity: 'minor' | 'major' | 'critical'; notes?: string; durationYears?: number }) =>
       api.post('/simulation/ailment', body),
     onSuccess: (_d, vars) => {
@@ -163,6 +180,7 @@ export function useAssignAilment() {
 export function useKillCharacter() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Death recorded' },
     mutationFn: (body: { playerId: string; causeOfDeath: string }) =>
       api.post('/simulation/death', body),
     onSuccess: (_d, vars) => {
@@ -176,6 +194,7 @@ export function useKillCharacter() {
 export function useHealCharacter() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Ailment removed', errorMessage: 'Could not remove the ailment' },
     mutationFn: (body: { playerId: string; condition: string }) =>
       api.post('/simulation/heal', body),
     onSuccess: (_d, vars) => {

@@ -171,4 +171,56 @@ describe('ElectionDetail', () => {
     expect(() => render(<ElectionDetail />)).not.toThrow();
     expect(screen.getByText(/Margin:/i)).toBeInTheDocument();
   });
+
+  describe('candidacy', () => {
+    const baseElection = {
+      id: 'election-1',
+      title: 'Speaker Election',
+      type: 'custom',
+      method: 'fptp',
+      config: {},
+      roundNumber: 1,
+      votingOpensAt: '2026-05-01T00:00:00.000Z',
+      votingClosesAt: '2026-05-08T00:00:00.000Z',
+      createdById: 'someone-else',
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    const me = { id: 'me', username: 'me', isStaff: false, permissions: [] };
+    const myCandidacy = {
+      id: 'c1', electionId: 'election-1', playerId: 'me', isWithdrawn: false, registeredAt: '2026-05-01T00:00:00.000Z',
+      player: { id: 'me', characterName: 'Ada Vance', discordUsername: 'me' },
+    };
+
+    const renderWith = (election: Record<string, unknown>) => {
+      vi.mocked(useAuth).mockReturnValue({
+        user: me, isStaff: false, permissions: [], hasPermission: () => false, logout: vi.fn(), isLoading: false,
+      } as any);
+      vi.mocked(useElection).mockReturnValue({ data: { ...baseElection, ...election }, isLoading: false, isError: false } as any);
+      vi.mocked(useElectionResults).mockReturnValue({ data: undefined } as any);
+      render(<ElectionDetail />);
+    };
+
+    it('offers to stand while nominations are open', () => {
+      renderWith({ status: 'nominations_open', candidates: [] });
+      expect(screen.getByRole('button', { name: 'Stand as a candidate' })).toBeTruthy();
+      expect(screen.getByText('No one has stood yet.')).toBeTruthy();
+    });
+
+    it('lets a candidate withdraw themselves instead of standing again', () => {
+      renderWith({ status: 'nominations_open', candidates: [myCandidacy] });
+      expect(screen.queryByRole('button', { name: 'Stand as a candidate' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Withdraw my candidacy' })).toBeTruthy();
+    });
+
+    it('hides withdrawal once the count has begun', () => {
+      renderWith({ status: 'tallied', candidates: [myCandidacy] });
+      expect(screen.queryByRole('button', { name: 'Withdraw my candidacy' })).toBeNull();
+    });
+
+    it('does not offer candidacy on a yea/nay motion', () => {
+      renderWith({ status: 'nominations_open', method: 'yea_nay_abstain', candidates: [] });
+      expect(screen.queryByRole('button', { name: 'Stand as a candidate' })).toBeNull();
+    });
+  });
 });

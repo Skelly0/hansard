@@ -136,8 +136,9 @@ function ControlsCard() {
         <h2 className="text-heading-2 mb-4">Advance Time</h2>
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="text-label-ui text-text-tertiary block mb-1">Ticks</label>
+            <label htmlFor="advance-ticks" className="text-label-ui text-text-tertiary block mb-1">Ticks</label>
             <input
+              id="advance-ticks"
               type="number"
               min={1}
               max={100}
@@ -147,8 +148,9 @@ function ControlsCard() {
             />
           </div>
           <div className="flex-1 min-w-[200px]">
-            <label className="text-label-ui text-text-tertiary block mb-1">Notes</label>
+            <label htmlFor="advance-notes" className="text-label-ui text-text-tertiary block mb-1">Notes</label>
             <input
+              id="advance-notes"
               type="text"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -654,7 +656,7 @@ function PlayerHealthControls() {
             <button
               onClick={() => setKillOpen(true)}
               disabled={!dossier?.isAlive}
-              className="px-4 py-1.5 rounded-card font-medium bg-status-rejected hover:bg-status-rejected/90 text-text-inverse text-sm transition-colors duration-150 disabled:opacity-40"
+              className="px-4 py-1.5 rounded-card font-medium bg-ink-rejected hover:bg-ink-rejected/90 text-text-inverse text-sm transition-colors duration-150 disabled:opacity-40"
             >
               Kill Character
             </button>
@@ -831,7 +833,7 @@ function KillModal({
           <button
             onClick={submit}
             disabled={kill.isPending || !confirmed}
-            className="px-4 py-1.5 rounded-card font-medium bg-status-rejected hover:bg-status-rejected/90 text-text-inverse disabled:opacity-50 transition-colors duration-150"
+            className="px-4 py-1.5 rounded-card font-medium bg-ink-rejected hover:bg-ink-rejected/90 text-text-inverse disabled:opacity-50 transition-colors duration-150"
           >
             {kill.isPending ? 'Recording…' : 'Confirm Death'}
           </button>

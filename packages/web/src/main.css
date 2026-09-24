@@ -16,7 +16,7 @@
 
   --text-primary: #141413;
   --text-secondary: #524F48;
-  --text-tertiary: #7A7770;
+  --text-tertiary: #6B6963; /* 4.6:1 on inset; was #7A7770 (4.2:1) */
   --text-inverse: #FAF9F5;
 
   --border-subtle: #E8E6DC;
@@ -49,6 +49,33 @@
   --health-major: #D97757;
   --health-critical: #C25B4E;
 
+  /* Text ("ink") variants of the accents. The fills above are pastel by
+     design and fail WCAG AA as small text on parchment; Tailwind's text-*
+     utilities for accent/status/health resolve to these instead (see
+     tailwind.config.ts textColor). Each clears 4.6:1 on page, card, inset,
+     and its own 10% tag tint. */
+  --accent-primary-ink: #B14A28;
+  --c-bills-ink: #8D612A;
+  --c-voting-ink: #386EA4;
+  --c-players-ink: #5F6F4A;
+  --c-offices-ink: #8059A5;
+  --c-favours-ink: #8D612A;
+  --c-tickets-ink: #5A6B89;
+  --c-moderation-ink: #AE493C;
+  --c-graveyard-ink: #6F6B63;
+  --c-simulation-ink: #4B7063;
+  --status-open-ink: #386EA4;
+  --status-active-ink: #5F6F4A;
+  --status-pending-ink: #8D612A;
+  --status-closed-ink: #6F6B63;
+  --status-rejected-ink: #AE493C;
+  --status-passed-ink: #5F6F4A;
+  --status-deceased-ink: #6E6B60;
+  --health-healthy-ink: #5F6F4A;
+  --health-minor-ink: #8D612A;
+  --health-major-ink: #B14A28;
+  --health-critical-ink: #AE493C;
+
   --shadow-modal: 0 4px 12px rgba(20, 20, 19, 0.08);
   --shadow-modal-warm: 0 8px 32px rgba(120, 90, 60, 0.18);
 
@@ -71,7 +98,7 @@
 
   --text-primary: #F4EFE2;
   --text-secondary: #BDB39E;
-  --text-tertiary: #837A66;
+  --text-tertiary: #968D79; /* 4.6:1 on hover; was #837A66 (3.6:1) */
   --text-inverse: #14110B;
 
   --border-subtle: #2A2519;
@@ -103,6 +130,30 @@
   --health-minor: #DDA559;
   --health-major: #E89478;
   --health-critical: #E08077;
+
+  /* Dark accents are already lifted past 4.6:1, so ink = fill except the
+     deceased grey. */
+  --accent-primary-ink: var(--accent-primary);
+  --c-bills-ink: var(--c-bills);
+  --c-voting-ink: var(--c-voting);
+  --c-players-ink: var(--c-players);
+  --c-offices-ink: var(--c-offices);
+  --c-favours-ink: var(--c-favours);
+  --c-tickets-ink: var(--c-tickets);
+  --c-moderation-ink: var(--c-moderation);
+  --c-graveyard-ink: var(--c-graveyard);
+  --c-simulation-ink: var(--c-simulation);
+  --status-open-ink: var(--status-open);
+  --status-active-ink: var(--status-active);
+  --status-pending-ink: var(--status-pending);
+  --status-closed-ink: var(--status-closed);
+  --status-rejected-ink: var(--status-rejected);
+  --status-passed-ink: var(--status-passed);
+  --status-deceased-ink: #968D79;
+  --health-healthy-ink: var(--health-healthy);
+  --health-minor-ink: var(--health-minor);
+  --health-major-ink: var(--health-major);
+  --health-critical-ink: var(--health-critical);
 
   --shadow-modal: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(232, 148, 120, 0.04);
   --shadow-modal-warm: 0 8px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(232, 148, 120, 0.05);
@@ -199,14 +250,16 @@
   }
 
   .tag {
-    @apply font-body text-xs font-medium uppercase tracking-wide;
+    @apply font-body text-xs font-medium uppercase tracking-wide whitespace-nowrap;
     padding: 3px 10px;
     border-radius: 99px;
     letter-spacing: 0.03em;
   }
 
   .btn-primary {
-    @apply bg-accent-primary text-text-inverse font-display text-sm font-medium;
+    @apply text-text-inverse font-display text-sm font-medium;
+    /* Ink, not the pastel fill: cream on #D97757 is only 3:1. */
+    background-color: var(--accent-primary-ink);
     padding: 10px 20px;
     border-radius: 6px;
     border: none;
@@ -229,7 +282,8 @@
   }
 
   .btn-danger {
-    @apply bg-status-rejected text-text-inverse font-display text-sm font-medium;
+    @apply text-text-inverse font-display text-sm font-medium;
+    background-color: var(--status-rejected-ink);
     padding: 10px 20px;
     border-radius: 6px;
     transition: opacity 150ms;
@@ -363,4 +417,62 @@
 
 [data-theme='dark'] .card {
   background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.012), transparent 40%);
+}
+
+/* ------------------------------------------------------------------
+   Print: the record on paper. Chrome (nav, toasts, action buttons) is
+   dropped, the palette is forced light by ThemeProvider's beforeprint
+   hook, and cards stop splitting across pages.
+   ------------------------------------------------------------------ */
+@media print {
+  @page {
+    margin: 16mm 14mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+  }
+
+  /* The beforeprint theme swap and the dropped sidebar padding must land
+     before the page is rasterised, not ease in over 150-200ms. */
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .page {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .skip-link,
+  [data-print='hide'] {
+    display: none !important;
+  }
+
+  .card {
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+
+  /* Printed pages can't be clicked: spell out where external links go. */
+  #main a[href^='http']::after {
+    content: ' (' attr(href) ')';
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75em;
+    word-break: break-all;
+    color: #6b6963;
+  }
 }

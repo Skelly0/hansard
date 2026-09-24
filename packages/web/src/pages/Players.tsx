@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { Link } from '@tanstack/react-router';
 import { usePlayers } from '../api/hooks/usePlayers';
 import { useParties } from '../api/hooks/useParties';
-import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useUrlState, useUrlText } from '../hooks/useUrlState';
 import { Tag } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
@@ -28,12 +28,11 @@ const HEALTH_LABEL: Record<string, string> = {
 };
 
 export function Players() {
-  const [search, setSearch] = useState('');
-  const [factionFilter, setFactionFilter] = useState('');
-  const [partyFilter, setPartyFilter] = useState('');
-  const [aliveFilter, setAliveFilter] = useState<boolean | undefined>(true);
-  const [page, setPage] = useState(1);
-  const debouncedSearch = useDebouncedValue(search.trim(), 250);
+  const [url, setUrl] = useUrlState({ q: '', faction: '', party: '', status: 'alive', page: 1 });
+  const { q: debouncedSearch, faction: factionFilter, party: partyFilter, page } = url;
+  const aliveFilter = url.status === 'all' ? undefined : url.status !== 'deceased';
+  const [search, setSearch] = useUrlText(debouncedSearch, (q) => setUrl({ q, page: 1 }));
+  const setPage = (p: number) => setUrl({ page: p });
   const limit = 24;
 
   const { data, isLoading, isError, error, isPlaceholderData } = usePlayers({
@@ -92,7 +91,7 @@ export function Players() {
       <FilterBar>
         <SearchInput
           value={search}
-          onChange={(v) => { setSearch(v); setPage(1); }}
+          onChange={setSearch}
           placeholder="Search by name…"
           label="Search characters"
         />
@@ -101,7 +100,7 @@ export function Players() {
           <FilterField label="Faction">
             <select
               value={factionFilter}
-              onChange={(e) => { setFactionFilter(e.target.value); setPage(1); }}
+              onChange={(e) => setUrl({ faction: e.target.value, page: 1 })}
               className="field"
             >
               <option value="">All factions</option>
@@ -116,7 +115,7 @@ export function Players() {
           <FilterField label="Party">
             <select
               value={partyFilter}
-              onChange={(e) => { setPartyFilter(e.target.value); setPage(1); }}
+              onChange={(e) => setUrl({ party: e.target.value, page: 1 })}
               className="field"
             >
               <option value="">All parties</option>
@@ -129,12 +128,8 @@ export function Players() {
 
         <FilterField label="Status">
           <select
-            value={aliveFilter === undefined ? 'all' : aliveFilter ? 'alive' : 'deceased'}
-            onChange={(e) => {
-              const v = e.target.value;
-              setAliveFilter(v === 'all' ? undefined : v === 'alive');
-              setPage(1);
-            }}
+            value={url.status}
+            onChange={(e) => setUrl({ status: e.target.value, page: 1 })}
             className="field"
           >
             <option value="all">All</option>

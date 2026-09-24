@@ -112,6 +112,7 @@ export function useAllFavourHistory(categoryId?: string) {
 export function useGrantFavours() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Favours granted' },
     mutationFn: (body: { playerId: string; categoryId: string; amount: number; reason?: string }) =>
       api.post<FavourAdjustmentResponse>('/favours/grant', body),
     onSuccess: (_d, vars) => {
@@ -124,6 +125,7 @@ export function useGrantFavours() {
 export function useSpendFavours() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Favours spent' },
     mutationFn: (body: { playerId: string; categoryId: string; amount: number; reason?: string }) =>
       api.post<FavourAdjustmentResponse>('/favours/spend', body),
     onSuccess: (_d, vars) => {
@@ -136,6 +138,7 @@ export function useSpendFavours() {
 export function useRemoveFavours() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Favours removed' },
     mutationFn: (body: { playerId: string; categoryId: string; amount: number; reason?: string }) =>
       api.post<FavourAdjustmentResponse>('/favours/remove', body),
     onSuccess: (_d, vars) => {
@@ -148,6 +151,7 @@ export function useRemoveFavours() {
 export function useCreateFavourCategory() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Category created' },
     mutationFn: (body: { name: string; shortName?: string; description?: string; emoji?: string; colour?: string; spendableOn?: string[]; sortOrder?: number }) =>
       api.post<FavourCategory>('/favours/categories', body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['favour-categories'] }); },
@@ -165,6 +169,7 @@ export function useAllFavourCategories() {
 export function useUpdateFavourCategory() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Category saved' },
     mutationFn: ({ id, ...body }: {
       id: string;
       name?: string;
@@ -183,6 +188,7 @@ export function useUpdateFavourCategory() {
 export function useDeleteFavourCategory() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Category deactivated' },
     mutationFn: (id: string) => api.delete<FavourCategory>(`/favours/categories/${id}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['favour-categories'] }); },
   });

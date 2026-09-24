@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTickets, useTicketCategories, useTicketMetrics } from '../api/hooks/useTickets';
 import { DataTable, type Column } from '../components/shared/DataTable';
@@ -10,6 +9,7 @@ import { QueryErrorState } from '../components/shared/QueryErrorState';
 import { PageHeader } from '../components/shared/PageHeader';
 import { FilterBar, FilterField } from '../components/shared/FilterBar';
 import { formatDate, humanizeToken, plural, recordNumber } from '../lib/format';
+import { useUrlState } from '../hooks/useUrlState';
 import type { Ticket } from '../api/hooks/useTickets';
 
 const STATUSES = ['all', 'open', 'in_progress', 'waiting', 'resolved', 'closed'];
@@ -25,11 +25,11 @@ const priorityLabel: Record<string, string> = {
 type TabKey = 'list' | 'metrics';
 
 export function Tickets() {
-  const [tab, setTab] = useState<TabKey>('list');
-  const [status, setStatus] = useState('all');
-  const [category, setCategory] = useState('all');
-  const [priority, setPriority] = useState('all');
-  const [page, setPage] = useState(1);
+  const [url, setUrl] = useUrlState({ tab: 'list', status: 'all', category: 'all', priority: 'all', page: 1 });
+  const tab: TabKey = url.tab === 'metrics' ? 'metrics' : 'list';
+  const { status, category, priority, page } = url;
+  const setTab = (next: TabKey) => setUrl({ tab: next });
+  const setPage = (p: number) => setUrl({ page: p });
   const limit = 20;
 
   const { data: categories } = useTicketCategories();
@@ -179,7 +179,7 @@ export function Tickets() {
         <FilterField label="Status">
           <select
             value={status}
-            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+            onChange={(e) => setUrl({ status: e.target.value, page: 1 })}
             className="field"
           >
             {STATUSES.map((s) => (
@@ -190,7 +190,7 @@ export function Tickets() {
         <FilterField label="Category">
           <select
             value={category}
-            onChange={(e) => { setCategory(e.target.value); setPage(1); }}
+            onChange={(e) => setUrl({ category: e.target.value, page: 1 })}
             className="field"
           >
             <option value="all">All</option>
@@ -202,7 +202,7 @@ export function Tickets() {
         <FilterField label="Priority">
           <select
             value={priority}
-            onChange={(e) => { setPriority(e.target.value); setPage(1); }}
+            onChange={(e) => setUrl({ priority: e.target.value, page: 1 })}
             className="field"
           >
             {PRIORITIES.map((p) => (

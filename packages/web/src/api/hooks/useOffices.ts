@@ -62,6 +62,7 @@ export function useOffice(id?: string) {
 export function useCreateOffice() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Office established', errorMessage: 'Could not create the office' },
     mutationFn: (body: { name: string; tier: string; factionId?: string; maxHolders?: number; filledBy?: string; permissions?: string[] }) =>
       api.post<Office>('/offices', body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['offices'] }); },
@@ -71,6 +72,7 @@ export function useCreateOffice() {
 export function useUpdateOffice() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Office updated', errorMessage: 'Could not update the office' },
     mutationFn: ({ id, ...body }: { id: string; name?: string; tier?: string; permissions?: string[]; isActive?: boolean }) =>
       api.patch<Office>(`/offices/${id}`, body),
     onSuccess: (_d, vars) => {
@@ -83,6 +85,7 @@ export function useUpdateOffice() {
 export function useAppointToOffice() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Appointment made', errorMessage: 'Could not make the appointment' },
     mutationFn: ({ officeId, playerId }: { officeId: string; playerId: string }) =>
       api.post(`/offices/${officeId}/appoint`, { playerId }),
     onSuccess: (_d, vars) => {
@@ -95,6 +98,7 @@ export function useAppointToOffice() {
 export function useRemoveFromOffice() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Removed from office', errorMessage: 'Could not remove from office' },
     mutationFn: ({ officeId, reason }: { officeId: string; reason?: string }) =>
       api.post(`/offices/${officeId}/remove`, { reason }),
     onSuccess: (_d, vars) => {

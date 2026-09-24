@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { Link } from '@tanstack/react-router';
 import {
+  useParty,
   useParties,
   useCreateParty,
   useUpdateParty,
@@ -14,12 +16,16 @@ import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
 import { Modal } from '../components/shared/Modal';
 import { PageHeader, EmptyState } from '../components/shared/PageHeader';
-import { formatDate } from '../lib/format';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { Skeleton } from '../components/shared/SkeletonLoader';
+import { useUrlState } from '../hooks/useUrlState';
+import { formatDate, plural } from '../lib/format';
 
 function ColourSwatch({ hex }: { hex: string | null }) {
   if (!hex) return null;
   return (
     <span
+      role="img"
       aria-label={`Party colour ${hex}`}
       className="inline-block w-3.5 h-3.5 rounded-full border border-border-subtle align-middle"
       style={{ backgroundColor: hex }}
@@ -260,9 +266,115 @@ function DissolveModal({
   );
 }
 
+/** Party roster and particulars; opened via `?party=<id>` so it can be linked. */
+function PartyDetailModal({ partyId, onClose }: { partyId: string; onClose: () => void }) {
+  const { data: party, isLoading, isError } = useParty(partyId);
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={
+        party ? (
+          <span className="inline-flex items-center gap-2">
+            <ColourSwatch hex={party.colour} />
+            {party.name}
+          </span>
+        ) : 'Party'
+      }
+      eyebrow={party?.shortName ?? undefined}
+      railClass="bg-accent-offices"
+      maxWidth="max-w-lg"
+      footer={<button onClick={onClose} className="btn-secondary">Close</button>}
+    >
+      {isLoading ? (
+        <div className="space-y-2">
+          <Skeleton height="h-5" />
+          <Skeleton height="h-24" />
+        </div>
+      ) : isError || !party ? (
+        <p className="text-body-sm text-text-secondary">This party could not be loaded.</p>
+      ) : (
+        <div className="space-y-5">
+          <div className="flex flex-wrap gap-2">
+            <Tag color={party.isActive ? 'active' : 'closed'}>{party.isActive ? 'Active' : 'Dissolved'}</Tag>
+            {party.isInviteOnly && <Tag color="pending">Invite-only</Tag>}
+          </div>
+
+          {party.ideology && (
+            <p className="text-body italic text-text-secondary whitespace-pre-line">{party.ideology}</p>
+          )}
+
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-body-sm">
+            <dt className="text-text-tertiary">Leader</dt>
+            <dd className="text-text-primary">
+              {party.leaderId && party.leaderName ? (
+                <Link to="/players/$id" params={{ id: party.leaderId }} className="hover:text-accent-primary">
+                  {party.leaderName}
+                </Link>
+              ) : (
+                <span className="italic text-text-tertiary">None named</span>
+              )}
+            </dd>
+            {party.factionName && (
+              <>
+                <dt className="text-text-tertiary">Faction</dt>
+                <dd className="text-text-primary">{party.factionName}</dd>
+              </>
+            )}
+            <dt className="text-text-tertiary">Founded</dt>
+            <dd className="font-mono text-xs text-text-secondary self-center">{formatDate(party.foundedAt)}</dd>
+            {!party.isActive && party.dissolvedAt && (
+              <>
+                <dt className="text-text-tertiary">Dissolved</dt>
+                <dd className="font-mono text-xs text-text-secondary self-center">{formatDate(party.dissolvedAt)}</dd>
+              </>
+            )}
+          </dl>
+
+          <section aria-labelledby="party-members-heading">
+            <h3 id="party-members-heading" className="text-label-ui text-text-tertiary mb-2">
+              {plural(party.members.length, 'member')}
+            </h3>
+            {party.members.length === 0 ? (
+              <p className="text-body-sm italic text-text-tertiary">The benches are empty.</p>
+            ) : (
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                {party.members.map((m) => (
+                  <li key={m.id}>
+                    <Link
+                      to="/players/$id"
+                      params={{ id: m.id }}
+                      className="flex items-center gap-2 rounded-card px-2 py-1.5 hover:bg-hover text-body-sm text-text-primary"
+                    >
+                      <PlayerAvatar player={m} size="sm" />
+                      <span className="truncate">{m.characterName ?? m.discordUsername}</span>
+                      {m.id === party.leaderId && <span className="ml-auto text-xs text-text-tertiary">leader</span>}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {party.isActive && (
+            <p className="text-xs text-text-tertiary border-t border-border-subtle pt-3">
+              {party.isInviteOnly
+                ? 'Membership is by invitation; staff assign new members.'
+                : <>Join from Discord with <code className="font-mono">/party join</code>, which also grants the party role.</>}
+            </p>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export function Parties() {
   const { isStaff } = useAuth();
-  const [showInactive, setShowInactive] = useState(false);
+  const [url, setUrl] = useUrlState({ party: '', dissolved: '' });
+  const showInactive = url.dissolved === '1';
+  const setShowInactive = (on: boolean) => setUrl({ dissolved: on ? '1' : '' });
   const { data: parties, isLoading, isError, error: loadError } = useParties(showInactive);
 
   const [creating, setCreating] = useState(false);
@@ -373,15 +485,21 @@ export function Parties() {
           {list.map((p) => (
             <div
               key={p.id}
-              className={`card border-l-accent-offices ${p.isActive ? '' : 'opacity-60'}`}
+              className={`card border-l-accent-offices ${p.isActive ? '' : 'bg-page border-dashed'}`}
               style={p.colour ? { borderLeftColor: p.colour } : undefined}
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="min-w-0">
-                  <h3 className="font-display font-semibold text-text-primary flex items-center gap-2">
-                    <ColourSwatch hex={p.colour} />
-                    <span className="truncate">{p.name}</span>
-                  </h3>
+                  <h2 className="font-display font-semibold text-text-primary">
+                    <button
+                      type="button"
+                      onClick={() => setUrl({ party: p.id })}
+                      className="flex items-center gap-2 max-w-full text-left hover:text-accent-primary transition-colors"
+                    >
+                      <ColourSwatch hex={p.colour} />
+                      <span className="truncate">{p.name}</span>
+                    </button>
+                  </h2>
                   {p.shortName && (
                     <span className="text-mono text-xs text-text-tertiary">{p.shortName}</span>
                   )}
@@ -406,7 +524,16 @@ export function Parties() {
               <dl className="space-y-1 text-body-sm mb-3">
                 <div className="flex justify-between">
                   <dt className="text-text-tertiary">Members</dt>
-                  <dd className="font-mono text-text-primary">{p.memberCount}</dd>
+                  <dd>
+                    <button
+                      type="button"
+                      onClick={() => setUrl({ party: p.id })}
+                      className="font-mono text-text-primary hover:text-accent-primary underline decoration-dotted underline-offset-2"
+                      aria-label={`View the ${plural(p.memberCount, 'member')} of ${p.name}`}
+                    >
+                      {p.memberCount}
+                    </button>
+                  </dd>
                 </div>
                 {p.factionName && (
                   <div className="flex justify-between">
@@ -455,6 +582,7 @@ export function Parties() {
         </div>
       )}
 
+      {url.party && <PartyDetailModal partyId={url.party} onClose={() => setUrl({ party: '' })} />}
       {creating && (
         <PartyFormModal
           initial={emptyForm()}

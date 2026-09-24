@@ -28,7 +28,8 @@ export function StatusTimeline({
 }: StatusTimelineProps) {
   if (horizontal) {
     return (
-      <ol className={`flex items-start gap-0 overflow-x-auto pb-1 ${className}`} aria-label="Progress">
+      // Focusable so keyboard users can scroll it when it overflows on phones.
+      <ol tabIndex={0} className={`flex items-start gap-0 overflow-x-auto pb-1 rounded-card ${className}`} aria-label="Progress">
         {stages.map((stage, i) => {
           const isPast = i < currentIndex;
           const isCurrent = i === currentIndex;
@@ -56,15 +57,15 @@ export function StatusTimeline({
                     isCurrent
                       ? 'text-text-primary'
                       : isPast
-                      ? 'text-text-tertiary'
-                      : 'text-text-tertiary opacity-70'
+                      ? 'text-text-secondary'
+                      : 'text-text-tertiary'
                   }`}
                 >
                   {stage.label}
                 </span>
                 {stage.detail && (
                   <span className={`font-mono text-xs mt-0.5 text-center ${
-                    isFuture ? 'text-text-tertiary opacity-70' : 'text-text-tertiary'
+                    'text-text-tertiary'
                   }`}>
                     {stage.detail}
                   </span>
@@ -121,15 +122,15 @@ export function StatusTimeline({
                   isCurrent
                     ? 'text-text-primary'
                     : isPast
-                    ? 'text-text-tertiary'
-                    : 'text-text-tertiary opacity-70'
+                    ? 'text-text-secondary'
+                    : 'text-text-tertiary'
                 }`}
               >
                 {stage.label}
               </span>
               {stage.detail && (
                 <span className={`block font-mono text-xs ${
-                  isFuture ? 'text-text-tertiary opacity-70' : 'text-text-tertiary'
+                  'text-text-tertiary'
                 }`}>
                   {stage.detail}
                 </span>

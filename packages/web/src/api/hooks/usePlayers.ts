@@ -143,11 +143,30 @@ export function usePlayerHealth(id?: string) {
   });
 }
 
+export interface UpdatePlayerInput {
+  id: string;
+  characterName?: string;
+  characterBio?: string;
+  /** Empty string or null clears the portrait. */
+  characterPortraitUrl?: string | null;
+}
+
+export interface UpdatePlayerResponse {
+  player: Player;
+  nameChangeflagged: boolean;
+  message: string;
+}
+
+/** Limits enforced by PATCH /api/players/:id (same as the bot's /character edit). */
+export const CHARACTER_BIO_MAX = 2000;
+export const CHARACTER_PORTRAIT_URL_MAX = 512;
+
 export function useUpdatePlayer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...body }: { id: string; characterBio?: string; characterPortraitUrl?: string }) =>
-      api.patch<Player>(`/players/${id}`, body),
+    meta: { successMessage: (data: UpdatePlayerResponse) => data?.message || 'Character updated' },
+    mutationFn: ({ id, ...body }: UpdatePlayerInput) =>
+      api.patch<UpdatePlayerResponse>(`/players/${id}`, body),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['players'] });
       qc.invalidateQueries({ queryKey: ['players', vars.id] });
@@ -158,6 +177,7 @@ export function useUpdatePlayer() {
 export function useChangeParty() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Party membership updated' },
     mutationFn: ({ id, partyId }: { id: string; partyId: string | null }) =>
       api.post(`/players/${id}/party`, { partyId }),
     onSuccess: (_d, vars) => {

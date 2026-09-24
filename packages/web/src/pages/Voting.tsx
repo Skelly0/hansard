@@ -1,6 +1,7 @@
-import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useElections } from '../api/hooks/useVoting';
+import { useAwaitingBallots, useElections } from '../api/hooks/useVoting';
+import { Countdown } from '../components/shared/Countdown';
+import { useUrlState } from '../hooks/useUrlState';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
@@ -81,12 +82,14 @@ function describeOutcome(row: Election): string {
 }
 
 export function Voting() {
-  const [scope, setScope] = useState<ScopeTab>('all');
-  const [status, setStatus] = useState('all');
-  const [type, setType] = useState('all');
-  const [page, setPage] = useState(1);
+  const [url, setUrl] = useUrlState({ scope: 'all', status: 'all', type: 'all', page: 1 });
+  const scope = (SCOPE_TABS.some((t) => t.key === url.scope) ? url.scope : 'all') as ScopeTab;
+  const { status, type, page } = url;
+  const setPage = (p: number) => setUrl({ page: p });
   const limit = 20;
 
+  const { data: awaiting } = useAwaitingBallots();
+  const awaitingIds = new Set((awaiting?.data ?? []).map((v) => v.id));
   const { data, isLoading, isError, error, isPlaceholderData } = useElections({
     // Explicit status wins over scope on the server, so only send one.
     status: status !== 'all' ? status : undefined,
@@ -115,15 +118,19 @@ export function Voting() {
       header: 'Title',
       primary: true,
       render: (row) => (
-        <Link
-          to="/voting/$id"
-          params={{ id: row.id }}
-          className="font-display font-medium text-text-primary hover:text-accent-primary transition-colors"
-        >
-          {row.title}
-        </Link>
+        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Link
+            to="/voting/$id"
+            params={{ id: row.id }}
+            className="font-display font-medium text-text-primary hover:text-accent-primary transition-colors"
+          >
+            {row.title}
+          </Link>
+          {awaitingIds.has(row.id) && <Tag color="primary">Your ballot</Tag>}
+        </span>
       ),
     },
+
     {
       key: 'type',
       header: 'Type',
@@ -208,7 +215,9 @@ export function Voting() {
       minWidth: '100px',
       render: (row) => (
         <span title={new Date(row.votingClosesAt).toLocaleString('en-GB')}>
-          {row.status === 'voting_open' ? relativeTime(row.votingClosesAt) : formatDate(row.votingClosesAt, { withYear: false })}
+          {row.status === 'voting_open'
+            ? <Countdown to={row.votingClosesAt} prefix="in" />
+            : formatDate(row.votingClosesAt, { withYear: false })}
         </span>
       ),
     },
@@ -241,11 +250,7 @@ export function Voting() {
               key={tab.key}
               role="tab"
               aria-selected={isActive}
-              onClick={() => {
-                setScope(tab.key);
-                setStatus('all');
-                setPage(1);
-              }}
+              onClick={() => setUrl({ scope: tab.key, status: 'all', page: 1 })}
               className={`px-3 py-2 -mb-px border-b-2 text-body-sm transition-colors ${
                 isActive
                   ? 'border-accent-primary text-text-primary'
@@ -263,7 +268,7 @@ export function Voting() {
         <FilterField label="Status">
           <select
             value={status}
-            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+            onChange={(e) => setUrl({ status: e.target.value, page: 1 })}
             className="field"
           >
             {ELECTION_STATUSES.map((s) => (
@@ -276,7 +281,7 @@ export function Voting() {
         <FilterField label="Type">
           <select
             value={type}
-            onChange={(e) => { setType(e.target.value); setPage(1); }}
+            onChange={(e) => setUrl({ type: e.target.value, page: 1 })}
             className="field"
           >
             {ELECTION_TYPES.map((t) => (

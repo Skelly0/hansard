@@ -9,7 +9,7 @@ export function NotFound() {
   useDocumentTitle('Not found');
   return (
     <div className="bg-parchment min-h-screen flex items-center justify-center p-6">
-      <div className="parchment-frame w-full max-w-md py-16 px-8 sm:px-12 text-center">
+      <main className="parchment-frame w-full max-w-md py-16 px-8 sm:px-12 text-center">
         <div className="text-mono text-text-tertiary text-xs tracking-[0.15em] uppercase mb-6">
           — Error 404 —
         </div>
@@ -27,7 +27,7 @@ export function NotFound() {
         <Link to="/" className="btn-primary inline-block">
           Return to the chamber
         </Link>
-      </div>
+      </main>
     </div>
   );
 }

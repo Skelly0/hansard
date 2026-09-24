@@ -33,6 +33,23 @@ export default {
           graveyard: token('--c-graveyard'),
           simulation: token('--c-simulation'),
         },
+        // Deep "ink" tones for fills that carry cream text (buttons, avatars,
+        // active pagination). In dark mode they equal the lifted accents and
+        // pair with the dark `text-inverse`.
+        ink: {
+          primary: token('--accent-primary-ink'),
+          bills: token('--c-bills-ink'),
+          voting: token('--c-voting-ink'),
+          players: token('--c-players-ink'),
+          offices: token('--c-offices-ink'),
+          tickets: token('--c-tickets-ink'),
+          moderation: token('--c-moderation-ink'),
+          graveyard: token('--c-graveyard-ink'),
+          simulation: token('--c-simulation-ink'),
+          pending: token('--status-pending-ink'),
+          rejected: token('--status-rejected-ink'),
+          passed: token('--status-passed-ink'),
+        },
         text: {
           primary: token('--text-primary'),
           secondary: token('--text-secondary'),
@@ -76,6 +93,38 @@ export default {
         'body-sm': ['0.875rem', { lineHeight: '1.6' }],
         label: ['0.75rem', { lineHeight: '1.4', fontWeight: '500', letterSpacing: '0.03em' }],
       },
+      // Text utilities for accent/status/health use the darker "ink"
+      // variants so small text meets WCAG AA; fills, borders, and bars keep
+      // the pastel palette above.
+      textColor: {
+        accent: {
+          primary: token('--accent-primary-ink'),
+          bills: token('--c-bills-ink'),
+          voting: token('--c-voting-ink'),
+          players: token('--c-players-ink'),
+          offices: token('--c-offices-ink'),
+          favours: token('--c-favours-ink'),
+          tickets: token('--c-tickets-ink'),
+          moderation: token('--c-moderation-ink'),
+          graveyard: token('--c-graveyard-ink'),
+          simulation: token('--c-simulation-ink'),
+        },
+        status: {
+          open: token('--status-open-ink'),
+          active: token('--status-active-ink'),
+          pending: token('--status-pending-ink'),
+          closed: token('--status-closed-ink'),
+          rejected: token('--status-rejected-ink'),
+          passed: token('--status-passed-ink'),
+          deceased: token('--status-deceased-ink'),
+        },
+        health: {
+          healthy: token('--health-healthy-ink'),
+          minor: token('--health-minor-ink'),
+          major: token('--health-major-ink'),
+          critical: token('--health-critical-ink'),
+        },
+      },
       // Bare `border` (no colour class) should use the warm hairline, not
       // Tailwind's default cool grey, which glares on the dark palette.
       borderColor: {
@@ -96,7 +145,10 @@ export default {
       },
       animation: {
         'pulse-subtle': 'pulse-subtle 2.4s ease-in-out infinite',
-        'fade-in': 'fade-in 160ms ease-out both',
+        // `backwards`, not `both`: a finished animation that keeps holding
+        // `transform` makes the element a containing block for `fixed`
+        // descendants, which clips overlays rendered inside the page.
+        'fade-in': 'fade-in 160ms ease-out backwards',
       },
       boxShadow: {
         modal: 'var(--shadow-modal)',

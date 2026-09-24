@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
+import { EditCharacterModal } from '../components/players/EditCharacterModal';
+import { useUrlState } from '../hooks/useUrlState';
 import {
   usePlayer,
   usePlayerEvents,
@@ -59,7 +61,10 @@ export function CharacterDossier() {
   const { id } = useParams({ strict: false }) as { id: string };
   const { data: player, isLoading, isError } = usePlayer(id);
   const { user, isStaff } = useAuth();
-  const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const [url, setUrl] = useUrlState({ tab: 'overview' });
+  const activeTab = (TABS.some((t) => t.key === url.tab) ? url.tab : 'overview') as Tab;
+  const setActiveTab = (tab: Tab) => setUrl({ tab });
+  const [editing, setEditing] = useState(false);
   useDocumentTitle(player ? player.characterName || player.discordUsername : null);
 
   if (isLoading) return <PageSkeleton />;
@@ -79,7 +84,10 @@ export function CharacterDossier() {
 
   const displayName = player.characterName || player.discordUsername;
   const isDeceased = !player.isAlive;
-  const canViewFavours = isStaff || user?.id === player.id;
+  const isSelf = user?.id === player.id;
+  const canViewFavours = isStaff || isSelf;
+  // Placeholder login rows have no character to edit yet.
+  const canEdit = (isStaff || isSelf) && !!player.characterName;
   const visibleTabs = canViewFavours ? TABS : TABS.filter((tab) => tab.key !== 'favours');
   const currentTab = activeTab === 'favours' && !canViewFavours ? 'overview' : activeTab;
 
@@ -112,7 +120,7 @@ export function CharacterDossier() {
         <div className="flex-1 min-w-0">
           {/* Name row */}
           <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-display break-words">{displayName}</h1>
+            <h1 className="text-display break-words min-w-0">{displayName}</h1>
             {(isDeceased || player.healthStatus) && (
               <span
                 className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
@@ -128,7 +136,14 @@ export function CharacterDossier() {
           {/* Tags row */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
             {player.party && (
-              <Tag color="players">{player.party.shortName || player.party.name}</Tag>
+              <Link
+                to="/parties"
+                search={{ party: player.party.id } as never}
+                className="rounded-tag hover:opacity-80"
+                title={`${player.party.name}: view party`}
+              >
+                <Tag color="players">{player.party.shortName || player.party.name}</Tag>
+              </Link>
             )}
             {player.faction && (
               <Tag color="primary">{player.faction.shortName || player.faction.name}</Tag>
@@ -162,6 +177,12 @@ export function CharacterDossier() {
             </span>
           </div>
 
+          {canEdit && (
+            <button type="button" onClick={() => setEditing(true)} className="btn-secondary text-body-sm mb-3">
+              {isSelf ? 'Edit your character' : 'Edit character'}
+            </button>
+          )}
+
           {/* Epigraph */}
           {epigraph && currentTab !== 'overview' && (
             <p className="text-body italic text-text-secondary">{epigraph}</p>
@@ -171,12 +192,27 @@ export function CharacterDossier() {
 
       {/* ── Tabs ── */}
       <div className="border-b border-border-subtle mb-6 -mx-4 px-4 sm:mx-0 sm:px-0 overflow-x-auto">
-        <div className="flex gap-0 -mb-px" role="tablist" aria-label="Dossier sections">
+        <div
+          className="flex gap-0 -mb-px"
+          role="tablist"
+          aria-label="Dossier sections"
+          onKeyDown={(e) => {
+            // Arrow keys move between tabs, per the WAI-ARIA tabs pattern.
+            if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+            const i = visibleTabs.findIndex((t) => t.key === currentTab);
+            const next = visibleTabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + visibleTabs.length) % visibleTabs.length];
+            setActiveTab(next.key);
+            document.getElementById(`dossier-tab-${next.key}`)?.focus();
+          }}
+        >
           {visibleTabs.map((tab) => (
             <button
               key={tab.key}
+              id={`dossier-tab-${tab.key}`}
               role="tab"
               aria-selected={currentTab === tab.key}
+              aria-controls="dossier-panel"
+              tabIndex={currentTab === tab.key ? 0 : -1}
               onClick={() => setActiveTab(tab.key)}
               className={`text-label-ui px-4 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
                 currentTab === tab.key
@@ -191,12 +227,18 @@ export function CharacterDossier() {
       </div>
 
       {/* ── Tab content ── */}
-      {currentTab === 'overview' && <OverviewTab player={player} />}
-      {currentTab === 'offices' && <OfficesTab playerId={player.id} inlineOffices={player.offices} />}
-      {currentTab === 'legislation' && <LegislationTab playerId={player.id} inlineBills={player.bills} />}
-      {currentTab === 'votes' && <VotesTab playerId={player.id} inlineVotes={player.votes} />}
-      {currentTab === 'favours' && canViewFavours && <FavoursTab player={player} />}
-      {currentTab === 'history' && <HistoryTab playerId={player.id} inlineEvents={player.events} />}
+      <div id="dossier-panel" role="tabpanel" aria-labelledby={`dossier-tab-${currentTab}`}>
+        {currentTab === 'overview' && <OverviewTab player={player} onEdit={isSelf && canEdit ? () => setEditing(true) : undefined} />}
+        {currentTab === 'offices' && <OfficesTab playerId={player.id} inlineOffices={player.offices} />}
+        {currentTab === 'legislation' && <LegislationTab playerId={player.id} inlineBills={player.bills} />}
+        {currentTab === 'votes' && <VotesTab playerId={player.id} inlineVotes={player.votes} />}
+        {currentTab === 'favours' && canViewFavours && <FavoursTab player={player} />}
+        {currentTab === 'history' && <HistoryTab playerId={player.id} inlineEvents={player.events} />}
+      </div>
+
+      {editing && (
+        <EditCharacterModal character={player} canRename={isStaff} onClose={() => setEditing(false)} />
+      )}
     </div>
   );
 }
@@ -205,9 +247,18 @@ export function CharacterDossier() {
 // Tab: Overview
 // ---------------------------------------------------------------------------
 
-function OverviewTab({ player }: { player: PlayerDossier }) {
+function OverviewTab({ player, onEdit }: { player: PlayerDossier; onEdit?: () => void }) {
   return (
     <div className="space-y-6">
+      {!player.characterBio && onEdit && (
+        <div className="card border-dashed bg-page flex flex-wrap items-center justify-between gap-3">
+          <p className="text-body-sm italic text-text-secondary">
+            Your dossier has no biography yet. Other players see this page.
+          </p>
+          <button type="button" onClick={onEdit} className="btn-secondary text-body-sm">Write one</button>
+        </div>
+      )}
+
       {/* Full bio */}
       {player.characterBio && (
         <div>

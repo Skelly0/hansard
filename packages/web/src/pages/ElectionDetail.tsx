@@ -28,7 +28,13 @@ import { Modal, ConfirmModal } from '../components/shared/Modal';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { PageHeader, Breadcrumbs } from '../components/shared/PageHeader';
 import { BallotPanel } from '../components/voting/BallotPanel';
+import { Countdown } from '../components/shared/Countdown';
 import { formatDate, formatDateTime, humanizeToken, relativeTime } from '../lib/format';
+
+/** Mirrors the API: after these statuses only staff may change who stood. */
+const CANDIDATE_LIST_LOCKED = new Set(['voting_closed', 'tallied', 'npc_pending', 'certified', 'cancelled']);
+/** Mirrors CANDIDATE_STATEMENT_MAX in the API (fits a Discord embed field). */
+const CANDIDATE_STATEMENT_MAX = 1000;
 
 const ELECTION_STAGES = [
   { key: 'draft', label: 'Draft' },
@@ -88,11 +94,12 @@ const methodLabel: Record<string, string> = {
 
 export function ElectionDetail() {
   const { id } = useParams({ strict: false }) as { id: string };
-  const { isStaff } = useAuth();
+  const { user, isStaff } = useAuth();
   const { data: election, isLoading, isError } = useElection(id);
-  const { data: results } = useElectionResults(id);
+  const isLive = election?.status === 'voting_open';
+  const { data: results } = useElectionResults(id, isLive);
   const { data: rounds } = useElectionRounds(id);
-  const { data: turnout } = useElectionTurnout(id);
+  const { data: turnout } = useElectionTurnout(id, isLive);
 
   if (isLoading) return <PageSkeleton />;
   if (isError || !election) {
@@ -125,6 +132,16 @@ export function ElectionDetail() {
   });
 
   const isOpen = election.status === 'voting_open';
+
+  // Candidacy rules mirror DELETE/POST /api/elections/:id/candidates.
+  const candidateBased = election.method !== 'yea_nay_abstain';
+  const candidates = election.candidates ?? [];
+  const myCandidacy = user ? candidates.find((c) => c.playerId === user.id) : undefined;
+  const acceptsNominations = election.status === 'nominations_open' || election.status === 'draft';
+  const beforeVoting = acceptsNominations || election.status === 'nominations_closed';
+  const listLocked = CANDIDATE_LIST_LOCKED.has(election.status);
+  const canWithdraw = (playerId: string) =>
+    isStaff || (!listLocked && (playerId === user?.id || (election.createdById === user?.id && beforeVoting)));
 
   return (
     <div className="page">
@@ -162,7 +179,7 @@ export function ElectionDetail() {
           <dt className="text-label-ui text-text-tertiary">Closes</dt>
           <dd className="font-mono text-xs">
             {formatDateTime(election.votingClosesAt)}
-            {isOpen && <span className="text-accent-voting"> · {relativeTime(election.votingClosesAt)}</span>}
+            {isOpen && <> · <Countdown to={election.votingClosesAt} className="text-accent-voting" /></>}
           </dd>
         </div>
         {election.createdBy && (
@@ -193,8 +210,8 @@ export function ElectionDetail() {
       {/* Staff controls */}
       {isStaff && <StaffControls electionId={election.id} status={election.status} method={election.method} />}
 
-      {/* Metrics row */}
-      {turnout && (
+      {/* Metrics row: turnout only means something once ballots can be cast. */}
+      {turnout && !beforeVoting && (
         <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-8">
           <MetricCard
             label="Eligible Voters"
@@ -221,6 +238,17 @@ export function ElectionDetail() {
         {/* Results area */}
         <div className="lg:col-span-2 min-w-0">
           <BallotPanel election={election} />
+
+          {beforeVoting && (
+            <div className="card border-l-accent-voting mb-4">
+              <p className="text-label-ui text-text-tertiary mb-1">Voting has not opened</p>
+              <p className="text-body-sm text-text-secondary">
+                Ballots open {formatDateTime(election.votingOpensAt)}
+                {' '}(<Countdown to={election.votingOpensAt} prefix="in" endedLabel="once staff open it" />).
+                {candidateBased && election.status !== 'draft' && ' The candidate list is settled before then.'}
+              </p>
+            </div>
+          )}
 
           {/* Cancelled note even if no results were ever tallied */}
           {!tally && election.status === 'cancelled' && (
@@ -391,22 +419,28 @@ export function ElectionDetail() {
         {/* Sidebar: Candidates & NPC confirmation */}
         <div className="space-y-6">
           {/* Candidates */}
-          {election.candidates && election.candidates.length > 0 && (
+          {candidateBased && (candidates.length > 0 || acceptsNominations) && (
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-heading-2 text-text-secondary">
-                  Candidates ({election.candidates.length})
-                </h3>
-                {isStaff && (
+                <h2 className="text-heading-2 text-text-secondary">
+                  Candidates ({candidates.filter((c) => !c.isWithdrawn).length})
+                </h2>
+                {isStaff && acceptsNominations && (
                   <AddCandidateButton electionId={election.id} />
                 )}
               </div>
+              {user && !myCandidacy && election.status === 'nominations_open' && (
+                <StandForElection electionId={election.id} closesAt={election.nominationsCloseAt} />
+              )}
+              {candidates.length === 0 && (
+                <p className="text-body-sm italic text-text-tertiary">No one has stood yet.</p>
+              )}
               <div className="space-y-2">
-                {election.candidates.map((candidate) => (
+                {candidates.map((candidate) => (
                   <div
                     key={candidate.id}
                     className={`card border-l-accent-players ${
-                      candidate.isWithdrawn ? 'opacity-50' : ''
+                      candidate.isWithdrawn ? 'bg-page border-dashed' : ''
                     }`}
                   >
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -426,19 +460,19 @@ export function ElectionDetail() {
                       {candidate.isWithdrawn && (
                         <Tag color="closed">Withdrawn</Tag>
                       )}
-                      {isStaff && !candidate.isWithdrawn && (
+                      {candidate.playerId === user?.id && !candidate.isWithdrawn && (
+                        <Tag color="primary">You</Tag>
+                      )}
+                      {!candidate.isWithdrawn && canWithdraw(candidate.playerId) && (
                         <WithdrawCandidateButton
                           electionId={election.id}
                           playerId={candidate.playerId}
                           name={candidate.player?.characterName ?? 'Unknown'}
+                          self={candidate.playerId === user?.id}
                         />
                       )}
                     </div>
-                    {candidate.statement && (
-                      <p className="text-body-sm text-text-secondary line-clamp-3 italic">
-                        {candidate.statement}
-                      </p>
-                    )}
+                    {candidate.statement && <CandidateStatement text={candidate.statement} />}
                     {tally?.finalTallies && tally.finalTallies[candidate.playerId] !== undefined && (
                       <div className="mt-2 font-mono text-sm text-text-primary">
                         {tally.finalTallies[candidate.playerId]} votes
@@ -456,7 +490,7 @@ export function ElectionDetail() {
           {/* NPC Confirmation */}
           {election.npcConfirmation && (
             <div>
-              <h3 className="text-heading-2 text-text-secondary mb-3">NPC Confirmation</h3>
+              <h2 className="text-heading-2 text-text-secondary mb-3">NPC Confirmation</h2>
               <div className="card border-l-accent-voting">
                 <Tag color={
                   election.npcConfirmation.status === 'confirmed' ? 'passed' :
@@ -483,7 +517,7 @@ export function ElectionDetail() {
 
           {election.relatedBillId && (
             <div>
-              <h3 className="text-heading-2 text-text-secondary mb-3">Related Bill</h3>
+              <h2 className="text-heading-2 text-text-secondary mb-3">Related Bill</h2>
               <div className="card border-l-accent-bills">
                 {election.relatedBillSlug ? (
                   <Link
@@ -717,35 +751,143 @@ function WithdrawCandidateButton({
   electionId,
   playerId,
   name,
+  self = false,
 }: {
   electionId: string;
   playerId: string;
   name: string;
+  self?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const withdraw = useWithdrawCandidate();
   return (
     <>
       <button
-        onClick={() => setOpen(true)}
+        onClick={() => { setError(null); setOpen(true); }}
         className="text-body-sm text-status-rejected hover:underline ml-auto"
       >
-        Withdraw
+        {self ? 'Withdraw my candidacy' : 'Withdraw'}
       </button>
       <ConfirmModal
         open={open}
         onClose={() => setOpen(false)}
         onConfirm={async () => {
-          await withdraw.mutateAsync({ electionId, playerId });
-          setOpen(false);
+          try {
+            await withdraw.mutateAsync({ electionId, playerId });
+            setOpen(false);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : 'Could not withdraw the candidate.');
+          }
         }}
         variant="danger"
-        title={`Withdraw ${name}?`}
-        message="This marks the candidate as withdrawn. They will no longer appear on the ballot."
+        title={self ? 'Withdraw from this contest?' : `Withdraw ${name}?`}
+        message={
+          <>
+            {self
+              ? 'You will be marked as withdrawn and taken off the ballot. You cannot stand again in this election.'
+              : 'This marks the candidate as withdrawn. They will no longer appear on the ballot.'}
+            {error && <span role="alert" className="block mt-2 text-status-rejected">{error}</span>}
+          </>
+        }
         confirmLabel="Withdraw"
         pending={withdraw.isPending}
       />
     </>
+  );
+}
+
+/** A manifesto clamped to three lines, with a toggle when it runs longer. */
+function CandidateStatement({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = text.length > 180 || text.split('\n').length > 3;
+  return (
+    <div>
+      <p className={`text-body-sm text-text-secondary italic whitespace-pre-line ${expanded ? '' : 'line-clamp-3'}`}>
+        {text}
+      </p>
+      {long && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="text-xs text-text-tertiary hover:text-accent-primary mt-1"
+        >
+          {expanded ? 'Show less' : 'Read the full statement'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Self-nomination during the nominations window. */
+function StandForElection({ electionId, closesAt }: { electionId: string; closesAt?: string }) {
+  const [open, setOpen] = useState(false);
+  const [statement, setStatement] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const register = useRegisterCandidate();
+  const tooLong = statement.trim().length > CANDIDATE_STATEMENT_MAX;
+
+  const submit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setError(null);
+    if (tooLong) return;
+    try {
+      // No playerId/partyId: the API stands you under your own current party.
+      await register.mutateAsync({ electionId, statement: statement.trim() || undefined });
+      setOpen(false);
+      setStatement('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not register your candidacy.');
+    }
+  };
+
+  return (
+    <div className="card border-l-accent-voting mb-3">
+      <p className="text-body-sm text-text-primary font-medium">Nominations are open.</p>
+      <p className="text-xs text-text-tertiary mt-0.5 mb-3">
+        {closesAt ? <>Closes <Countdown to={closesAt} prefix="in" />. </> : null}
+        You stand under your current party banner.
+      </p>
+      <button type="button" onClick={() => { setError(null); setOpen(true); }} className="btn-primary text-body-sm">
+        Stand as a candidate
+      </button>
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Stand as a candidate"
+        railClass="bg-accent-voting"
+        footer={
+          <>
+            <button type="button" onClick={() => setOpen(false)} className="btn-secondary">Cancel</button>
+            <button type="submit" form="stand-form" disabled={register.isPending || tooLong} className="btn-primary disabled:opacity-50">
+              {register.isPending ? 'Registering…' : 'Register candidacy'}
+            </button>
+          </>
+        }
+      >
+        <form id="stand-form" onSubmit={submit} className="space-y-3">
+          <label className="block">
+            <span className="flex items-baseline justify-between mb-1">
+              <span className="text-label-ui text-text-tertiary">Statement (optional)</span>
+              <span className={`font-mono text-xs ${tooLong ? 'text-status-rejected' : 'text-text-tertiary'}`}>
+                {statement.trim().length} / {CANDIDATE_STATEMENT_MAX}
+              </span>
+            </span>
+            <textarea
+              value={statement}
+              onChange={(e) => setStatement(e.target.value)}
+              rows={5}
+              autoFocus
+              placeholder="Why should they vote for you?"
+              className="field w-full font-body resize-y"
+              aria-invalid={tooLong}
+            />
+          </label>
+          {error && <p role="alert" className="text-body-sm text-status-rejected">{error}</p>}
+        </form>
+      </Modal>
+    </div>
   );
 }
 
@@ -834,6 +976,7 @@ function AddCandidateButton({ electionId }: { electionId: string }) {
               value={statement}
               onChange={(e) => setStatement(e.target.value)}
               rows={3}
+              maxLength={CANDIDATE_STATEMENT_MAX}
               className="field w-full resize-y"
             />
           </label>

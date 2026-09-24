@@ -110,6 +110,7 @@ export function useSearchDocuments(query?: string) {
 export function useCreateDocument() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Document created' },
     mutationFn: (body: { collectionId: string; title: string; content?: string; googleDocUrl?: string; tags?: string[] }) =>
       api.post<Document>('/documents', body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['documents'] }); },
@@ -119,6 +120,7 @@ export function useCreateDocument() {
 export function useUpdateDocument() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Document saved' },
     mutationFn: ({ slug, ...body }: { slug: string; content?: string; changeDescription?: string; tags?: string[] }) =>
       api.patch<Document>(`/documents/${slug}`, body),
     onSuccess: (_d, vars) => {
@@ -159,6 +161,7 @@ export function useDocumentDiff(slug?: string, from?: number, to?: number) {
 export function useRollbackDocument() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: (_d: unknown, vars: { toVersion?: number }) => (vars?.toVersion ? `Rolled back to version ${vars.toVersion}` : 'Document rolled back'), errorMessage: 'Rollback failed' },
     mutationFn: ({ slug, toVersion }: { slug: string; toVersion: number }) =>
       api.post(`/documents/${slug}/rollback`, { toVersion }),
     onSuccess: (_d, vars) => {

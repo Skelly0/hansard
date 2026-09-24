@@ -62,6 +62,24 @@ server {
         proxy_buffering off;
     }
 
+    # Vite fingerprints everything under /assets/, so it can be cached for
+    # good. A missing chunk 404s rather than falling back to index.html.
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # The SPA shell must revalidate on every load, or a browser holding a
+    # stale index.html requests asset hashes the new deploy no longer has.
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    # Not in every nginx mime.types; default_type only applies when unmapped.
+    location = /manifest.webmanifest {
+        default_type application/manifest+json;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }

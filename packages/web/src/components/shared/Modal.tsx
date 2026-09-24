@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
 
 const FOCUSABLE =
@@ -94,7 +95,10 @@ function DialogFrame({
   const titleId = useId();
   useDialogBehaviour(true, onClose, panelRef);
 
-  return (
+  // Portalled to <body>: an ancestor with a transform (e.g. the route
+  // fade-in) would otherwise become the containing block for `fixed` and
+  // clip the backdrop to the page content.
+  return createPortal(
     <div
       className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4 animate-fade-in"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
@@ -131,7 +135,8 @@ function DialogFrame({
           {footer && <div className="mt-5 flex flex-wrap justify-end gap-2">{footer}</div>}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

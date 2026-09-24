@@ -20,7 +20,7 @@ import { PageHeader } from '../components/shared/PageHeader';
 import { FilterBar, FilterField, SearchInput } from '../components/shared/FilterBar';
 import { Modal } from '../components/shared/Modal';
 import { Icon } from '../components/shared/Icon';
-import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useUrlState, useUrlText } from '../hooks/useUrlState';
 import { renderMarkdown } from '../lib/markdown';
 import { isGoogleDocsHttpUrl } from '../lib/url';
 import { formatDate, formatDateTime, plural } from '../lib/format';
@@ -273,11 +273,14 @@ function DocumentReader({ slug, onClose }: { slug: string; onClose: () => void }
 // ---- Main Documents Page ----
 
 export function Documents() {
-  const [collection, setCollection] = useState('all');
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [openSlug, setOpenSlug] = useState<string | null>(null);
-  const debouncedSearch = useDebouncedValue(search.trim(), 250);
+  const [url, setUrl] = useUrlState({ collection: 'all', q: '', page: 1, doc: '' });
+  const { collection, q: debouncedSearch, page } = url;
+  // `?doc=<slug>` opens the reader, so documents are linkable (and the
+  // command palette can jump straight to one).
+  const openSlug = url.doc || null;
+  const setOpenSlug = (slug: string | null) => setUrl({ doc: slug ?? '' });
+  const [search, setSearch] = useUrlText(debouncedSearch, (q) => setUrl({ q, page: 1 }));
+  const setPage = (p: number) => setUrl({ page: p });
   const limit = 20;
 
   const { data: collections } = useDocumentCollections();
@@ -393,14 +396,14 @@ export function Documents() {
       <FilterBar>
         <SearchInput
           value={search}
-          onChange={(v) => { setSearch(v); setPage(1); }}
+          onChange={setSearch}
           placeholder="Search titles and text…"
           label="Search documents"
         />
         <FilterField label="Collection">
           <select
             value={collection}
-            onChange={(e) => { setCollection(e.target.value); setPage(1); }}
+            onChange={(e) => setUrl({ collection: e.target.value, page: 1 })}
             className="field"
           >
             <option value="all">All collections</option>
@@ -417,7 +420,7 @@ export function Documents() {
           {collections.map((col) => (
             <button
               key={col.id}
-              onClick={() => { setCollection(col.id); setPage(1); }}
+              onClick={() => setUrl({ collection: col.id, page: 1 })}
               className="card border-l-accent-bills text-left hover:bg-hover/40"
             >
               <h2 className="text-heading-2 text-text-primary mb-1">{col.name}</h2>

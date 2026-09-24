@@ -86,6 +86,7 @@ export function useModStats() {
 export function useCreateModAction() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Moderation action recorded' },
     mutationFn: (body: {
       targetPlayerId: string;
       type: string;
@@ -147,6 +148,7 @@ export function useCreateModAction() {
 export function useUpdateModAction() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Moderation action updated', errorMessage: 'Could not update the action' },
     mutationFn: ({ id, ...body }: { id: string; isActive?: boolean; appealStatus?: string; appealReason?: string }) =>
       api.patch<ModAction>(`/moderation/actions/${id}`, body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['moderation'] }); },
@@ -156,6 +158,7 @@ export function useUpdateModAction() {
 export function useAddModNote() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Note added', errorMessage: 'Could not add the note' },
     mutationFn: (body: { targetPlayerId: string; content: string }) =>
       api.post<ModNote>('/moderation/notes', body),
     onSuccess: (_d, vars) => {

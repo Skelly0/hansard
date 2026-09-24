@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { useDashboardOverview, useDashboardActivity } from '../api/hooks/useDashboard';
-import { useElections } from '../api/hooks/useVoting';
+import { useAwaitingBallots, useElections } from '../api/hooks/useVoting';
+import { Countdown } from '../components/shared/Countdown';
 import { useBills } from '../api/hooks/useBills';
 import { useSimulationClock } from '../api/hooks/useSimulation';
 import { useAuth } from '../api/hooks/useAuth';
@@ -120,6 +121,8 @@ export function Dashboard() {
         className="mb-6 sm:mb-8"
       />
 
+      <AwaitingBallotCallout />
+
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4 mb-8 sm:mb-10">
         {metrics.map((m) => {
           const trend = formatTrendDelta(m.current, m.prev);
@@ -163,8 +166,44 @@ function PanelSkeleton() {
   );
 }
 
+/** Prominent call to action when votes are waiting on this player. */
+function AwaitingBallotCallout() {
+  const { data } = useAwaitingBallots();
+  const awaiting = data?.data ?? [];
+  if (awaiting.length === 0) return null;
+  return (
+    <section
+      aria-labelledby="awaiting-heading"
+      className="mb-6 sm:mb-8 rounded-card border border-accent-primary/40 bg-accent-primary/[0.06] px-4 py-3 sm:px-5 sm:py-4"
+    >
+      <h2 id="awaiting-heading" className="text-heading-2 text-text-primary mb-2">
+        {awaiting.length === 1 ? 'A vote is waiting for your ballot' : `${awaiting.length} votes are waiting for your ballot`}
+      </h2>
+      <ul className="space-y-1.5">
+        {awaiting.slice(0, 4).map((vote) => (
+          <li key={vote.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+            <Link
+              to="/voting/$id"
+              params={{ id: vote.id }}
+              className="text-body-sm font-medium text-accent-primary hover:underline"
+            >
+              {vote.title}
+            </Link>
+            <span className="font-mono text-xs text-text-tertiary">
+              <Countdown to={vote.votingClosesAt} />
+              {vote.useReactions && ' · react in Discord'}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function OpenVotesPanel() {
   const { data, isLoading } = useElections({ status: 'voting_open', limit: 5 });
+  const { data: awaiting } = useAwaitingBallots();
+  const awaitingIds = new Set((awaiting?.data ?? []).map((v) => v.id));
   const votes = data?.data ?? [];
   return (
     <section aria-labelledby="open-votes-heading">
@@ -181,8 +220,6 @@ function OpenVotesPanel() {
       ) : (
         <ul className="space-y-2">
           {votes.map((vote) => {
-            const closes = new Date(vote.votingClosesAt).getTime();
-            const closingSoon = closes - Date.now() < 6 * 60 * 60 * 1000;
             return (
               <li key={vote.id}>
                 <Link
@@ -191,8 +228,9 @@ function OpenVotesPanel() {
                   className="card border-l-accent-voting block hover:bg-hover/50"
                 >
                   <p className="text-body-sm text-text-primary font-medium leading-snug">{vote.title}</p>
-                  <p className={`text-mono text-xs mt-1 ${closingSoon ? 'text-status-pending' : 'text-text-tertiary'}`}>
-                    closes {relativeTime(vote.votingClosesAt)}
+                  <p className="text-mono text-xs mt-1 text-text-tertiary flex flex-wrap items-center gap-2">
+                    <Countdown to={vote.votingClosesAt} />
+                    {awaitingIds.has(vote.id) && <Tag color="primary">Your ballot</Tag>}
                   </p>
                 </Link>
               </li>

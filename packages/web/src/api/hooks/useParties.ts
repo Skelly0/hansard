@@ -25,7 +25,7 @@ export interface PartyWithStats extends Party {
 }
 
 export interface PartyDetail extends PartyWithStats {
-  members: { id: string; characterName: string | null; discordUsername: string }[];
+  members: { id: string; characterName: string | null; discordUsername: string; characterPortraitUrl?: string | null }[];
 }
 
 export interface CreatePartyBody {
@@ -63,6 +63,7 @@ export function useParty(id?: string) {
 export function useCreateParty() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Party founded' },
     mutationFn: (body: CreatePartyBody) => api.post<Party>('/parties', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['parties'] });
@@ -73,6 +74,7 @@ export function useCreateParty() {
 export function useUpdateParty() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Party updated' },
     mutationFn: ({ id, body }: { id: string; body: UpdatePartyBody }) =>
       api.patch<Party>(`/parties/${id}`, body),
     onSuccess: (_d, vars) => {
@@ -85,6 +87,7 @@ export function useUpdateParty() {
 export function useDissolveParty() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Party dissolved' },
     mutationFn: (id: string) => api.delete<{ party: Party; unassigned: number }>(`/parties/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['parties'] });

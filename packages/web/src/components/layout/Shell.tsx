@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { Sidebar } from './Sidebar';
+import { CommandPalette, useCommandPaletteShortcut } from './CommandPalette';
 import { Icon } from '../shared/Icon';
 
 interface ShellProps {
@@ -20,6 +21,12 @@ function readCollapsed(): boolean {
 export function Shell({ children }: ShellProps) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const openPalette = useCallback(() => {
+    setDrawerOpen(false);
+    setPaletteOpen(true);
+  }, []);
+  useCommandPaletteShortcut(openPalette);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   const toggleCollapsed = useCallback(() => {
@@ -60,7 +67,7 @@ export function Shell({ children }: ShellProps) {
       <a href="#main" className="skip-link">Skip to content</a>
 
       {/* Mobile top bar */}
-      <header className="lg:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-page/95 backdrop-blur border-b border-border-subtle">
+      <header className="lg:hidden print:hidden sticky top-0 z-30 flex items-center gap-2 h-14 px-3 bg-page/95 backdrop-blur border-b border-border-subtle">
         <button
           onClick={() => setDrawerOpen(true)}
           className="p-2 -ml-1 rounded-card text-text-secondary hover:text-text-primary hover:bg-hover transition-colors"
@@ -72,6 +79,13 @@ export function Shell({ children }: ShellProps) {
         <Link to="/" className="font-display italic text-[1.35rem] leading-none text-text-primary">
           Hansard
         </Link>
+        <button
+          onClick={openPalette}
+          className="ml-auto p-2 -mr-1 rounded-card text-text-secondary hover:text-text-primary hover:bg-hover transition-colors"
+          aria-label="Search"
+        >
+          <Icon name="search" size={20} />
+        </button>
       </header>
 
       <Sidebar
@@ -79,12 +93,15 @@ export function Shell({ children }: ShellProps) {
         onToggle={toggleCollapsed}
         mobileOpen={drawerOpen}
         onMobileClose={() => setDrawerOpen(false)}
+        onOpenSearch={openPalette}
       />
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
 
       <main
         id="main"
         tabIndex={-1}
-        className={`min-w-0 focus:outline-none transition-[padding] duration-200 ${collapsed ? 'lg:pl-16' : 'lg:pl-60'}`}
+        className={`min-w-0 focus:outline-none transition-[padding] duration-200 print:!pl-0 ${collapsed ? 'lg:pl-16' : 'lg:pl-60'}`}
       >
         <div key={pathname} className="animate-fade-in">
           {children}

@@ -48,7 +48,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export const CANDIDATE_STATEMENT_MAX = 1000;
 
 /** Statuses after which non-staff can no longer change who stood. */
-const CANDIDATE_LIST_LOCKED_STATUSES = new Set(['voting_closed', 'tallied', 'npc_pending', 'certified', 'cancelled']);
+const CANDIDATE_LIST_LOCKED_STATUSES = new Set([
+  'voting_closed',
+  'tallied',
+  // A runoff round is built from the remaining candidates, so striking one
+  // off here would silently drop them from the next round.
+  'runoff_needed',
+  'npc_pending',
+  'certified',
+  'cancelled',
+]);
 
 export function sanitizeElectionUpdate(
   body: unknown,
@@ -112,8 +121,8 @@ export default async function votingRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth] },
     async (request) => {
       const service = getService();
-      const data = await service.listAwaitingBallot(getViewer(request));
-      return { data, total: data.length };
+      const { items, total } = await service.listAwaitingBallot(getViewer(request));
+      return { data: items, total };
     },
   );
 
@@ -332,9 +341,9 @@ export default async function votingRoutes(fastify: FastifyInstance) {
         const candidate = await service.registerCandidate({
           electionId: id,
           playerId: targetPlayerId,
-          // Players stand under their own current party; only staff may set
-          // a different banner (e.g. when nominating someone else).
-          partyId: request.player?.isStaff ? body.partyId : (request.player?.partyId ?? undefined),
+          // Candidates stand under their own current party (the service
+          // defaults to it); only staff may name a different banner.
+          partyId: request.player?.isStaff ? body.partyId : undefined,
           statement: statement || undefined,
           // Always derive from session — never trust the client.
           nominatedById: user.id,

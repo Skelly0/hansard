@@ -15,6 +15,7 @@ import {
   useRegisterCandidate,
   hasTalliedResults,
   isSealedOpenResults,
+  type Election,
 } from '../api/hooks/useVoting';
 import { useAuth } from '../api/hooks/useAuth';
 import { useSearchPlayers } from '../api/hooks/usePlayers';
@@ -32,7 +33,7 @@ import { Countdown } from '../components/shared/Countdown';
 import { formatDate, formatDateTime, humanizeToken, relativeTime } from '../lib/format';
 
 /** Mirrors the API: after these statuses only staff may change who stood. */
-const CANDIDATE_LIST_LOCKED = new Set(['voting_closed', 'tallied', 'npc_pending', 'certified', 'cancelled']);
+const CANDIDATE_LIST_LOCKED = new Set(['voting_closed', 'tallied', 'runoff_needed', 'npc_pending', 'certified', 'cancelled']);
 /** Mirrors CANDIDATE_STATEMENT_MAX in the API (fits a Discord embed field). */
 const CANDIDATE_STATEMENT_MAX = 1000;
 
@@ -211,7 +212,7 @@ export function ElectionDetail() {
       </section>
 
       {/* Staff controls */}
-      {isStaff && <StaffControls electionId={election.id} status={election.status} method={election.method} />}
+      {isStaff && <StaffControls election={election} />}
 
       {/* Metrics row: turnout only means something once ballots can be cast. */}
       {turnout && !beforeVoting && (
@@ -541,15 +542,8 @@ export function ElectionDetail() {
 // Staff control panel
 // ============================================================
 
-function StaffControls({
-  electionId,
-  status,
-  method,
-}: {
-  electionId: string;
-  status: string;
-  method: string;
-}) {
+function StaffControls({ election }: { election: Election }) {
+  const { id: electionId, status, type } = election;
   const openVoting = useOpenVoting();
   const closeVoting = useCloseVoting();
   const tally = useTallyVotes();
@@ -574,13 +568,19 @@ function StaffControls({
     }
   };
 
+  // Mirror VoteService's guards exactly, so every offered action can succeed:
+  // tally needs a closed vote; NPC confirmation is only for position and
+  // appointment votes that require it; certification waits for the NPC
+  // house to decide when one is required.
+  const requiresNpc = !!election.config?.requiresNpcConfirmation;
+  const npcDecided = !!election.npcConfirmation && election.npcConfirmation.status !== 'pending';
   const canOpen = ['draft', 'nominations_closed', 'nominations_open'].includes(status);
   const canClose = status === 'voting_open';
-  const canTally = ['voting_open', 'voting_closed'].includes(status);
-  const canCertify = ['tallied', 'npc_pending'].includes(status);
+  const canTally = status === 'voting_closed';
+  const canCertify = status === 'tallied' || (status === 'npc_pending' && (!requiresNpc || npcDecided));
   const canRunoff = status === 'runoff_needed';
-  const canNpc = ['tallied', 'npc_pending'].includes(status);
-  const isYeaNay = method === 'yea_nay_abstain';
+  const canNpc =
+    status === 'npc_pending' && requiresNpc && ['position_election', 'appointment_confirmation'].includes(type);
 
   // Only what can be done now; the natural next step is the primary button.
   const actions: { key: string; label: string; primary: boolean; onClick: () => void }[] = [

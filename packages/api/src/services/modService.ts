@@ -6,6 +6,7 @@ import {
   type Database,
 } from '@hansard/db';
 import type { ModAction, ModNote } from '@hansard/shared';
+import { lookupPlayerSummaries, type PlayerSummary } from './playerSummaries.js';
 import type { ModActionType, AppealStatus } from '@hansard/shared';
 
 // ============================================================
@@ -227,7 +228,6 @@ export async function countActions(
 /**
  * Get moderation activity stats — counts by type, active actions total.
  */
-type PlayerSummary = { id: string; characterName: string | null; discordUsername: string };
 
 /**
  * Attach `targetPlayer` / `moderator` display summaries so staff views show
@@ -237,14 +237,7 @@ export async function attachModActionPeople<T extends { targetPlayerId: string; 
   db: Database,
   actions: T[],
 ): Promise<(T & { targetPlayer: PlayerSummary | null; moderator: PlayerSummary | null })[]> {
-  const ids = [...new Set(actions.flatMap((a) => [a.targetPlayerId, a.moderatorId]))];
-  const rows = ids.length
-    ? await db
-        .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
-        .from(players)
-        .where(inArray(players.id, ids))
-    : [];
-  const byId = new Map(rows.map((row) => [row.id, row]));
+  const byId = await lookupPlayerSummaries(db, actions.flatMap((a) => [a.targetPlayerId, a.moderatorId]));
   return actions.map((action) => ({
     ...action,
     targetPlayer: byId.get(action.targetPlayerId) ?? null,

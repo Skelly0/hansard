@@ -226,4 +226,53 @@ describe('ElectionDetail', () => {
       expect(screen.queryByRole('button', { name: 'Stand as a candidate' })).toBeNull();
     });
   });
+
+  describe('staff desk', () => {
+    const renderAs = (election: Record<string, unknown>) => {
+      vi.mocked(useAuth).mockReturnValue({
+        user: { id: 'staff', username: 'staff', isStaff: true, permissions: [] },
+        isStaff: true, permissions: [], hasPermission: () => true, logout: vi.fn(), isLoading: false,
+      } as any);
+      vi.mocked(useElection).mockReturnValue({
+        data: {
+          id: 'election-1', title: 'Desk', type: 'referendum', method: 'yea_nay_abstain', config: {},
+          roundNumber: 1, votingOpensAt: '2026-05-01T00:00:00.000Z', votingClosesAt: '2026-05-08T00:00:00.000Z',
+          createdById: 'x', candidates: [], createdAt: '2026-05-01T00:00:00.000Z', updatedAt: '2026-05-01T00:00:00.000Z',
+          ...election,
+        },
+        isLoading: false, isError: false,
+      } as any);
+      vi.mocked(useElectionResults).mockReturnValue({ data: undefined } as any);
+      render(<ElectionDetail />);
+    };
+    const actionNames = () =>
+      ['Open voting', 'Close voting', 'Tally votes', 'Create runoff', 'Enter NPC confirmation', 'Certify results']
+        .filter((name) => screen.queryByRole('button', { name }));
+
+    it('offers only closing while a vote is open (tally needs a closed vote)', () => {
+      renderAs({ status: 'voting_open' });
+      expect(actionNames()).toEqual(['Close voting']);
+    });
+
+    it('offers the tally once voting has closed', () => {
+      renderAs({ status: 'voting_closed' });
+      expect(actionNames()).toEqual(['Tally votes']);
+    });
+
+    it('offers certification, not NPC entry, for a tallied referendum', () => {
+      renderAs({ status: 'tallied' });
+      expect(actionNames()).toEqual(['Certify results']);
+    });
+
+    it('waits for the NPC house before certifying a position election that needs it', () => {
+      renderAs({ status: 'npc_pending', type: 'position_election', method: 'fptp', config: { requiresNpcConfirmation: true } });
+      expect(actionNames()).toEqual(['Enter NPC confirmation']);
+    });
+
+    it('says there is nothing left to do once certified', () => {
+      renderAs({ status: 'certified' });
+      expect(actionNames()).toEqual([]);
+      expect(screen.getByText('Nothing left to do')).toBeTruthy();
+    });
+  });
 });

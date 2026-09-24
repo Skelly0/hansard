@@ -933,7 +933,9 @@ export async function manualAilment(
     playerId,
     eventType: 'ailment_acquired',
     description: `Staff assigned ${severity} ailment: ${condition}${newAilment.healsAtDate ? `; expected recovery ${newAilment.healsAtDate}` : ''}`,
-    newValue: newAilment,
+    // Staff notes stay on the ailment (redacted for players on read), not
+    // in the event history.
+    newValue: { ...newAilment, notes: undefined },
     simTick: currentTick,
     simDate: currentDate,
     triggeredById: triggeredById ?? null,

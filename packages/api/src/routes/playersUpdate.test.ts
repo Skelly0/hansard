@@ -52,6 +52,12 @@ describe('PATCH /api/players/:id', () => {
     expect(mocks.updateCharacter).not.toHaveBeenCalled();
   });
 
+  it('rejects plain-http portraits, which the https site would load as mixed content', async () => {
+    const res = await patch({ characterPortraitUrl: 'http://example.org/ada.png' });
+    expect(res.statusCode).toBe(400);
+    expect(mocks.updateCharacter).not.toHaveBeenCalled();
+  });
+
   it('rejects a bio longer than the Discord modal allows', async () => {
     const res = await patch({ characterBio: 'x'.repeat(2001) });
     expect(res.statusCode).toBe(400);

@@ -1,6 +1,5 @@
 import { Link } from '@tanstack/react-router';
 import { useOffice, useOffices } from '../api/hooks/useOffices';
-import { useAuth } from '../api/hooks/useAuth';
 import { useUrlState } from '../hooks/useUrlState';
 import { Modal } from '../components/shared/Modal';
 import { Skeleton } from '../components/shared/SkeletonLoader';
@@ -30,7 +29,6 @@ const filledByLabel: Record<string, string> = {
 /** Everyone who has held an office, newest first; opened via `?office=<id>`. */
 function OfficeHistoryModal({ officeId, onClose }: { officeId: string; onClose: () => void }) {
   const { data: office, isLoading, isError } = useOffice(officeId);
-  const { isStaff } = useAuth();
   const history = office?.holderHistory ?? [];
 
   return (
@@ -61,7 +59,7 @@ function OfficeHistoryModal({ officeId, onClose }: { officeId: string; onClose: 
               <li key={h.id} className="pl-5 relative">
                 <span
                   aria-hidden="true"
-                  className={`absolute -left-[5px] top-2 w-2.5 h-2.5 rounded-full ${current ? 'bg-accent-offices' : 'bg-border-default'}`}
+                  className={`absolute -left-[5px] top-2 w-2.5 h-2.5 rounded-full ${current ? 'bg-accent-offices' : 'bg-border-strong'}`}
                 />
                 <div className="flex flex-wrap items-center gap-2">
                   <PlayerAvatar player={{ id: h.playerId, characterName: h.playerName, discordUsername: h.discordUsername ?? '?' }} size="sm" />
@@ -85,8 +83,9 @@ function OfficeHistoryModal({ officeId, onClose }: { officeId: string; onClose: 
                     </>
                   )}
                 </p>
-                {isStaff && h.removalReason && (
-                  <p className="text-xs italic text-text-tertiary mt-0.5">Left office: {h.removalReason}</p>
+                {/* Public record: the same reason appears in the holder's OFFICE_LEFT event. */}
+                {h.removalReason && (
+                  <p className="text-xs italic text-text-tertiary mt-0.5">Left office: {sentenceCase(h.removalReason)}</p>
                 )}
               </li>
             );

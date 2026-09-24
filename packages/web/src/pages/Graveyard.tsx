@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { usePlayers, type Player } from '../api/hooks/usePlayers';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { isSafeHttpUrl } from '../lib/url';
+import { isHttpsUrl } from '../lib/url';
 import { formatSimDate } from '../lib/format';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
@@ -45,7 +45,7 @@ function initials(name?: string): string {
 function ObituaryPortrait({ player }: { player: Player }) {
   // Discord attachment URLs expire, so fall back to initials on a load error.
   const [failed, setFailed] = useState(false);
-  if (player.characterPortraitUrl && !failed && isSafeHttpUrl(player.characterPortraitUrl)) {
+  if (player.characterPortraitUrl && !failed && isHttpsUrl(player.characterPortraitUrl)) {
     return (
       <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden flex-shrink-0 border border-border-subtle">
         <img

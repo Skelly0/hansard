@@ -84,6 +84,8 @@ export interface ElectionRound {
 export interface ElectionResults {
   totalVotes: number;
   turnout: number;
+  /** Eligible-voter cohort frozen at tally time, so historical turnout doesn't drift. */
+  eligibleVoters?: number;
   quorumMet?: boolean;
   passed?: boolean;
   rounds?: ElectionRound[];

@@ -43,7 +43,7 @@ function healthDotClass(status?: string | null): string {
     major: 'bg-[var(--health-major)]',
     critical: 'bg-[var(--health-critical)]',
   };
-  return status ? map[status] || map.healthy : 'bg-border-default';
+  return status ? map[status] || map.healthy : 'bg-border-strong';
 }
 
 function formatDate(iso?: string): string {

@@ -13,14 +13,23 @@ function playerRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function fakeDb(existing: Record<string, unknown>) {
-  const set = vi.fn(() => ({ where: () => ({ returning: async () => [{ ...existing, ...set.mock.calls[0]?.[0] }] }) }));
-  const db = {
+function fakeDb(existing: Record<string, unknown>, { failUpdate = false } = {}) {
+  const set = vi.fn(() => ({
+    where: () => ({
+      returning: async () => {
+        if (failUpdate) throw Object.assign(new Error('duplicate key'), { code: '23505' });
+        return [{ ...existing, ...set.mock.calls[0]?.[0] }];
+      },
+    }),
+  }));
+  const values = vi.fn(async () => {});
+  const db: any = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [existing], then: (r: any) => Promise.resolve([existing]).then(r) }) }) }),
     update: () => ({ set }),
-    insert: () => ({ values: async () => {} }),
+    insert: () => ({ values }),
   };
-  return { db, set };
+  db.transaction = async (fn: (tx: unknown) => unknown) => fn(db);
+  return { db, set, values };
 }
 
 describe('updateCharacter portrait handling', () => {
@@ -37,5 +46,19 @@ describe('updateCharacter portrait handling', () => {
     const { db, set } = fakeDb(playerRow({ profileData: null }));
     await updateCharacter(db as any, 'p1', { characterPortraitUrl: '' });
     expect(set).toHaveBeenCalledWith({ characterPortraitUrl: null });
+  });
+});
+
+describe('updateCharacter renames', () => {
+  it('logs the name change together with the update', async () => {
+    const { db, values } = fakeDb(playerRow());
+    await updateCharacter(db as any, 'p1', { characterName: 'Ada Vance' });
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({ newValue: { characterName: 'Ada Vance' } }));
+  });
+
+  it('writes no name-change event when the rename hits a taken name', async () => {
+    const { db, values } = fakeDb(playerRow(), { failUpdate: true });
+    await expect(updateCharacter(db as any, 'p1', { characterName: 'Taken Name' })).rejects.toThrow('duplicate key');
+    expect(values).not.toHaveBeenCalled();
   });
 });

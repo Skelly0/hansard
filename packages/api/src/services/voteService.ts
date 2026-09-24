@@ -34,6 +34,7 @@ import { getStrategy } from './tallying/index.js';
 import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
 import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
 import { appointToOffice } from './officeService.js';
+import { lookupPlayerSummaries } from './playerSummaries.js';
 
 // ============================================================
 // Election update allowlist
@@ -189,7 +190,8 @@ export interface CastBallotInput {
 export interface RegisterCandidateInput {
   electionId: string;
   playerId: string;
-  partyId?: string;
+  /** Omit to use the candidate's current party; null stands them as an independent. */
+  partyId?: string | null;
   statement?: string;
   nominatedById?: string;
 }
@@ -205,6 +207,37 @@ export interface NpcConfirmInput {
 // ============================================================
 // Service
 // ============================================================
+
+type EligibilityPlayer = {
+  characterName: string | null;
+  isAlive: boolean;
+  factionId: string | null;
+  partyId: string | null;
+};
+
+const NOT_IN_ELIGIBLE_OFFICE = 'You do not hold an eligible office for this election';
+
+/** Character-level reasons a player can't vote at all. */
+function characterIneligibility(player: EligibilityPlayer): string | null {
+  if (!player.characterName) return 'Character registration is required';
+  if (!player.isAlive) return 'Dead characters cannot vote';
+  return null;
+}
+
+/** Faction/party filters on an election's config. */
+function affiliationIneligibility(config: ElectionConfig, player: EligibilityPlayer): string | null {
+  if (config.eligibleFactions?.length) {
+    if (!player.factionId || !config.eligibleFactions.includes(player.factionId)) {
+      return 'Your faction is not eligible to vote in this election';
+    }
+  }
+  if (config.eligibleParties?.length) {
+    if (!player.partyId || !config.eligibleParties.includes(player.partyId)) {
+      return 'Your party is not eligible to vote in this election';
+    }
+  }
+  return null;
+}
 
 export class VoteService {
   constructor(private db: Database) {}
@@ -250,23 +283,9 @@ export class VoteService {
     }
 
     const config = election.config as ElectionConfig;
-    if (!player.characterName) {
-      return { eligible: false, reason: 'Character registration is required' };
-    }
-    if (!player.isAlive) {
-      return { eligible: false, reason: 'Dead characters cannot vote' };
-    }
-
-    if (config.eligibleFactions?.length) {
-      if (!player.factionId || !config.eligibleFactions.includes(player.factionId)) {
-        return { eligible: false, reason: 'Your faction is not eligible to vote in this election' };
-      }
-    }
-
-    if (config.eligibleParties?.length) {
-      if (!player.partyId || !config.eligibleParties.includes(player.partyId)) {
-        return { eligible: false, reason: 'Your party is not eligible to vote in this election' };
-      }
+    const blocked = characterIneligibility(player) ?? affiliationIneligibility(config, player);
+    if (blocked) {
+      return { eligible: false, reason: blocked };
     }
 
     if (config.eligibleOffices?.length) {
@@ -281,7 +300,7 @@ export class VoteService {
         .limit(1);
 
       if (!holding) {
-        return { eligible: false, reason: 'You do not hold an eligible office for this election' };
+        return { eligible: false, reason: NOT_IN_ELIGIBLE_OFFICE };
       }
     }
 
@@ -400,15 +419,12 @@ export class VoteService {
     const officeIds = [...new Set(rows.map((r) => r.forOfficeId).filter((x): x is string => !!x))];
     const creatorIds = [...new Set(rows.map((r) => r.createdById))];
 
-    const [withSlugs, officeRows, creatorRows, candidateRows] = await Promise.all([
+    const [withSlugs, officeRows, creatorMap, candidateRows] = await Promise.all([
       this.enrichElectionsWithSlugs(rows),
       officeIds.length
         ? this.db.select({ id: offices.id, name: offices.name }).from(offices).where(inArray(offices.id, officeIds))
         : Promise.resolve([] as { id: string; name: string }[]),
-      this.db
-        .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
-        .from(players)
-        .where(inArray(players.id, creatorIds)),
+      lookupPlayerSummaries(this.db, creatorIds),
       this.db
         .select({
           candidate: candidates,
@@ -426,7 +442,6 @@ export class VoteService {
     ]);
 
     const officeMap = new Map(officeRows.map((o) => [o.id, o]));
-    const creatorMap = new Map(creatorRows.map((p) => [p.id, p]));
     const candidatesByElection = new Map<string, unknown[]>();
     for (const row of candidateRows) {
       const c = row.candidate;
@@ -672,12 +687,14 @@ export class VoteService {
       .where(eq(ballots.electionId, id));
 
     const voted = ballotRows.length;
-    // Eligible cohort = the characters `getEligibilityForElection` would
-    // accept today (registered, alive, and inside any faction/party/office
-    // filter). `results.turnout` is a *vote count*, so it can't serve as the
-    // denominator. Never report fewer eligible than voted (voters can die
-    // after casting), which would push turnout past 100%.
-    const cohort = await this.countEligibleVoters(config);
+    // Eligible cohort: the snapshot frozen at tally time when there is one;
+    // otherwise the characters `getEligibilityForElection` would accept today
+    // (registered, alive, inside any faction/party/office filter).
+    // `results.turnout` is a *vote count*, so it can't be the denominator.
+    // Never report fewer eligible than voted (voters can die after casting),
+    // which would push turnout past 100%.
+    const snapshot = (election.results as ElectionResults | null)?.eligibleVoters;
+    const cohort = typeof snapshot === 'number' ? snapshot : await this.countEligibleVoters(config);
     const eligible = Math.max(cohort, voted);
     const turnoutPct = eligible > 0 ? (voted / eligible) * 100 : 0;
 
@@ -703,28 +720,67 @@ export class VoteService {
     const visibility = this.visibleElectionCondition(viewer);
     if (visibility) conditions.push(visibility);
 
+    // Every open vote (there are only ever a handful); the limit applies
+    // after eligibility, or eligible votes past the first page would vanish.
     const open = await this.db
       .select()
       .from(elections)
       .where(and(...conditions))
-      .orderBy(asc(elections.votingClosesAt))
-      .limit(limit);
+      .orderBy(asc(elections.votingClosesAt));
+    if (open.length === 0) return { items: [], total: 0 };
 
-    const awaiting: typeof open = [];
-    for (const election of open) {
-      const eligibility = await this.getEligibilityForElection(election, viewer.userId);
-      if (eligibility.eligible) awaiting.push(election);
-    }
-    const withSlugs = await this.enrichElectionsWithSlugs(awaiting);
-    return withSlugs.map((e) => ({
-      id: e.id,
-      title: e.title,
-      type: e.type,
-      method: e.method,
-      votingClosesAt: e.votingClosesAt,
-      useReactions: e.useReactions,
-      relatedBillSlug: e.relatedBillSlug,
-    }));
+    // The same rules as getEligibilityForElection, in a fixed number of
+    // queries rather than several per election: this runs on every sidebar
+    // poll.
+    const [player] = await this.db
+      .select({
+        characterName: players.characterName,
+        factionId: players.factionId,
+        partyId: players.partyId,
+        isAlive: players.isAlive,
+      })
+      .from(players)
+      .where(eq(players.id, viewer.userId))
+      .limit(1);
+    if (!player || characterIneligibility(player)) return { items: [], total: 0 };
+
+    const needsOffices = open.some((e) => (e.config as ElectionConfig).eligibleOffices?.length);
+    const [votedRows, officeRows] = await Promise.all([
+      this.db
+        .select({ electionId: ballots.electionId })
+        .from(ballots)
+        .where(and(eq(ballots.voterId, viewer.userId), inArray(ballots.electionId, open.map((e) => e.id)))),
+      needsOffices
+        ? this.db
+            .select({ officeId: officeHolders.officeId })
+            .from(officeHolders)
+            .where(and(eq(officeHolders.playerId, viewer.userId), isNull(officeHolders.endDate)))
+        : Promise.resolve([] as { officeId: string }[]),
+    ]);
+    const voted = new Set(votedRows.map((r) => r.electionId));
+    const offices = new Set(officeRows.map((r) => r.officeId));
+
+    const awaiting = open.filter((election) => {
+      const config = election.config as ElectionConfig;
+      if (voted.has(election.id)) return false;
+      if (affiliationIneligibility(config, player)) return false;
+      if (config.eligibleOffices?.length && !config.eligibleOffices.some((id) => offices.has(id))) return false;
+      return true;
+    });
+
+    const withSlugs = await this.enrichElectionsWithSlugs(awaiting.slice(0, limit));
+    return {
+      items: withSlugs.map((e) => ({
+        id: e.id,
+        title: e.title,
+        type: e.type,
+        method: e.method,
+        votingClosesAt: e.votingClosesAt,
+        useReactions: e.useReactions,
+        relatedBillSlug: e.relatedBillSlug,
+      })),
+      total: awaiting.length,
+    };
   }
 
   /** Count characters currently eligible under an election's config filters. */
@@ -884,6 +940,7 @@ export class VoteService {
         id: players.id,
         characterName: players.characterName,
         isAlive: players.isAlive,
+        partyId: players.partyId,
       })
       .from(players)
       .where(eq(players.id, input.playerId))
@@ -904,7 +961,9 @@ export class VoteService {
       .values({
         electionId: input.electionId,
         playerId: input.playerId,
-        partyId: input.partyId ?? null,
+        // Candidates stand under their current party unless a banner was
+        // chosen explicitly (null = independent), as `/vote candidate` does.
+        partyId: input.partyId === undefined ? (player.partyId ?? null) : input.partyId,
         statement: input.statement ?? null,
         nominatedById: input.nominatedById ?? null,
       })
@@ -1069,10 +1128,21 @@ export class VoteService {
       newStatus = 'npc_pending';
     }
 
+    // Freeze the eligible cohort as of the count, so this election's turnout
+    // doesn't drift as characters are created, die, or switch party later.
+    // Display-only, so a failed count must never block the tally.
+    let eligibleVoters: number | undefined;
+    try {
+      eligibleVoters = await this.countEligibleVoters(config);
+    } catch {
+      eligibleVoters = undefined;
+    }
+
     // Build results JSONB
     const electionResults: ElectionResults = {
       totalVotes: result.totalVotes,
       turnout: result.turnout,
+      eligibleVoters,
       quorumMet: result.quorumMet,
       passed: result.passed,
       rounds: result.rounds,

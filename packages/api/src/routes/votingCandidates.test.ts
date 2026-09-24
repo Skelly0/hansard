@@ -49,7 +49,9 @@ describe('POST /api/elections/:id/candidates', () => {
     expect(res.statusCode).toBe(201);
     expect(mocks.registerCandidate).toHaveBeenCalledWith(expect.objectContaining({
       playerId: 'player-1',
-      partyId: 'own-party',
+      // The claimed banner is dropped; the service falls back to the
+      // candidate's own current party.
+      partyId: undefined,
       statement: 'Vote for me',
       nominatedById: 'player-1',
     }));
@@ -131,6 +133,13 @@ describe('DELETE /api/elections/:id/candidates/:playerId', () => {
   it('locks the list for non-staff once voting has closed', async () => {
     mocks.getElection.mockResolvedValue({ id: 'e1', status: 'tallied', createdById: 'someone' });
     const res = await withdraw('player-1');
+    expect(res.statusCode).toBe(409);
+    expect(mocks.withdrawCandidate).not.toHaveBeenCalled();
+  });
+
+  it('locks the list for non-staff while a runoff is pending', async () => {
+    mocks.getElection.mockResolvedValue({ id: 'e1', status: 'runoff_needed', createdById: 'player-1' });
+    const res = await withdraw('player-2');
     expect(res.statusCode).toBe(409);
     expect(mocks.withdrawCandidate).not.toHaveBeenCalled();
   });

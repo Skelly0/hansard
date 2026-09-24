@@ -1,5 +1,6 @@
 import { eq, desc, and, ilike, or, sql, count, inArray, type SQL } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
+import { lookupPlayerSummaries, type PlayerSummary } from './playerSummaries.js';
 import {
   documents,
   documentVersions,
@@ -419,17 +420,7 @@ export async function getCollections(
 // Display enrichment (web routes)
 // ============================================================
 
-type DocumentPersonSummary = { id: string; characterName: string | null; discordUsername: string };
-
-async function lookupPeople(db: Database, ids: (string | null | undefined)[]) {
-  const unique = [...new Set(ids.filter((id): id is string => !!id))];
-  if (!unique.length) return new Map<string, DocumentPersonSummary>();
-  const rows = await db
-    .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
-    .from(players)
-    .where(inArray(players.id, unique));
-  return new Map(rows.map((row) => [row.id, row]));
-}
+type DocumentPersonSummary = PlayerSummary;
 
 /**
  * Attach `collection` ({ id, name, type }) and `author` summaries so the web
@@ -449,7 +440,7 @@ export async function attachDocumentDisplay<T extends Pick<Document, 'collection
       .select({ id: documentCollections.id, name: documentCollections.name, type: documentCollections.type })
       .from(documentCollections)
       .where(inArray(documentCollections.id, collectionIds)),
-    lookupPeople(db, docs.map((d) => d.authorId)),
+    lookupPlayerSummaries(db, docs.map((d) => d.authorId)),
   ]);
   const collectionMap = new Map(collectionRows.map((row) => [row.id, row]));
   return docs.map((doc) => ({
@@ -470,7 +461,7 @@ export async function attachVersionDisplay<T extends Pick<DocumentVersion, 'edit
   if (!versions.length) return [];
   const billIds = [...new Set(versions.map((v) => v.amendmentBillId).filter((id): id is string => !!id))];
   const [people, billRows] = await Promise.all([
-    lookupPeople(db, versions.map((v) => v.editedById)),
+    lookupPlayerSummaries(db, versions.map((v) => v.editedById)),
     billIds.length
       ? db.select({ id: bills.id, slug: bills.slug }).from(bills).where(inArray(bills.id, billIds))
       : Promise.resolve([] as { id: string; slug: string }[]),

@@ -7,7 +7,7 @@ import {
 } from '../../api/hooks/usePlayers';
 import { Modal } from '../shared/Modal';
 import { PlayerAvatar } from '../shared/PlayerAvatar';
-import { isSafeHttpUrl } from '../../lib/url';
+import { isHttpsUrl } from '../../lib/url';
 
 interface EditableCharacter {
   id: string;
@@ -48,7 +48,7 @@ export function EditCharacterModal({
 
   const portraitTrimmed = portrait.trim();
   const portraitInvalid = portraitTrimmed !== ''
-    && (!isSafeHttpUrl(portraitTrimmed) || portraitTrimmed.length > CHARACTER_PORTRAIT_URL_MAX);
+    && (!isHttpsUrl(portraitTrimmed) || portraitTrimmed.length > CHARACTER_PORTRAIT_URL_MAX);
   const bioTooLong = bio.length > CHARACTER_BIO_MAX;
 
   const submit = async (e?: React.FormEvent) => {
@@ -136,7 +136,7 @@ export function EditCharacterModal({
             />
             <span id="portrait-help" className={`block mt-1 text-xs ${portraitInvalid ? 'text-status-rejected' : 'text-text-tertiary'}`}>
               {portraitInvalid
-                ? `Use an http(s) link of at most ${CHARACTER_PORTRAIT_URL_MAX} characters.`
+                ? `Use an https link of at most ${CHARACTER_PORTRAIT_URL_MAX} characters.`
                 : isDiscordAttachmentUrl(portraitTrimmed)
                   ? 'Discord attachment links expire after a while; a durable image host lasts longer.'
                   : 'Leave empty to remove the portrait.'}

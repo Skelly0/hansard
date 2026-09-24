@@ -137,8 +137,17 @@ export function useElections(filters?: ElectionFilters) {
   });
 }
 
-/** While a vote is open, poll so turnout, status and results stay live. */
-const LIVE_REFRESH_MS = 30_000;
+/**
+ * Polling cadence. Every poll wakes the database (and rewrites the rolling
+ * session), so keep these slow: the production Postgres scales to zero when
+ * idle, and a fast poll from any open tab would hold it awake around the
+ * clock. Hidden tabs never poll (React Query's default), and a focused
+ * window refetches anything stale.
+ */
+/** While a vote is open, keep turnout, status and results roughly live. */
+const LIVE_REFRESH_MS = 60_000;
+/** The sidebar ballot badge: a nudge, not a live counter. */
+const AWAITING_REFRESH_MS = 5 * 60_000;
 
 export function useElection(id?: string) {
   return useQuery({
@@ -164,8 +173,8 @@ export function useAwaitingBallots() {
   return useQuery({
     queryKey: ['elections', 'awaiting-me'],
     queryFn: () => api.get<{ data: AwaitingBallot[]; total: number }>('/elections/awaiting-me'),
-    staleTime: 20_000,
-    refetchInterval: 60_000,
+    staleTime: 60_000,
+    refetchInterval: AWAITING_REFRESH_MS,
   });
 }
 

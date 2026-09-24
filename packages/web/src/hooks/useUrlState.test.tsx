@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useUrlState } from './useUrlState';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUrlState, useUrlText } from './useUrlState';
 
 const router = vi.hoisted(() => ({ search: {} as Record<string, unknown>, navigate: vi.fn() }));
 vi.mock('@tanstack/react-router', () => ({
@@ -41,5 +41,33 @@ describe('useUrlState', () => {
     act(() => result.current[1]({ status: 'enacted', page: 2 }));
     const [{ search }] = router.navigate.mock.calls[0];
     expect(search({})).toEqual({ status: 'enacted', page: 2 });
+  });
+});
+
+describe('useUrlText', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps keys typed while its own commit is still landing in the URL', () => {
+    const commit = vi.fn();
+    const { result, rerender } = renderHook(({ url }) => useUrlText(url, commit), { initialProps: { url: '' } });
+
+    act(() => result.current[1]('abc'));
+    act(() => { vi.advanceTimersByTime(260); });
+    expect(commit).toHaveBeenLastCalledWith('abc');
+
+    // The user keeps typing before the router applies the replace.
+    act(() => result.current[1]('abcd'));
+    rerender({ url: 'abc' });
+    expect(result.current[0]).toBe('abcd');
+  });
+
+  it('follows the URL when it changes from outside (back/forward)', () => {
+    const commit = vi.fn();
+    const { result, rerender } = renderHook(({ url }) => useUrlText(url, commit), { initialProps: { url: 'coal' } });
+    rerender({ url: 'ports' });
+    expect(result.current[0]).toBe('ports');
+    rerender({ url: '' });
+    expect(result.current[0]).toBe('');
   });
 });

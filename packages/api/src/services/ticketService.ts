@@ -16,6 +16,7 @@ import type {
   TicketPriority,
 } from '@hansard/shared';
 import { postToTicketThread } from './ticketThreadNotifier.js';
+import { lookupPlayerSummaries } from './playerSummaries.js';
 
 // ============================================================
 // Types
@@ -175,20 +176,8 @@ export class TicketService {
     return row?.characterName || row?.discordUsername || 'Unknown';
   }
 
-  private async lookupPlayerSummaries(ids: Iterable<string | null | undefined>): Promise<Map<string, TicketPlayerSummary>> {
-    const playerIds = [...new Set([...ids].filter((id): id is string => !!id))];
-    if (playerIds.length === 0) return new Map();
-
-    const rows = await this.db
-      .select({
-        id: players.id,
-        characterName: players.characterName,
-        discordUsername: players.discordUsername,
-      })
-      .from(players)
-      .where(inArray(players.id, playerIds));
-
-    return new Map(rows.map((row) => [row.id, row]));
+  private lookupPlayerSummaries(ids: Iterable<string | null | undefined>): Promise<Map<string, TicketPlayerSummary>> {
+    return lookupPlayerSummaries(this.db, ids);
   }
 
   // ----------------------------------------------------------

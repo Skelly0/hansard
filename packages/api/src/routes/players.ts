@@ -68,11 +68,15 @@ interface ChangePartyBody {
 const CHARACTER_BIO_MAX = 2000;
 const CHARACTER_PORTRAIT_URL_MAX = 512;
 
-function isHttpUrl(value: string, maxLength: number): boolean {
+/**
+ * Portraits must be https: the web loads them directly, and an http image on
+ * the https site is mixed content. (Discord proxies images, so the bot's
+ * `/character edit` can stay looser.)
+ */
+function isHttpsUrl(value: string, maxLength: number): boolean {
   if (value.length > maxLength) return false;
   try {
-    const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:';
+    return new URL(value).protocol === 'https:';
   } catch {
     return false;
   }
@@ -290,9 +294,9 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       }
       if (input.characterPortraitUrl !== undefined && input.characterPortraitUrl !== null) {
         const url = typeof input.characterPortraitUrl === 'string' ? input.characterPortraitUrl.trim() : '';
-        if (url !== '' && !isHttpUrl(url, CHARACTER_PORTRAIT_URL_MAX)) {
+        if (url !== '' && !isHttpsUrl(url, CHARACTER_PORTRAIT_URL_MAX)) {
           return reply.status(400).send({
-            error: `characterPortraitUrl must be an http(s) URL of at most ${CHARACTER_PORTRAIT_URL_MAX} characters`,
+            error: `characterPortraitUrl must be an https URL of at most ${CHARACTER_PORTRAIT_URL_MAX} characters`,
           });
         }
       }

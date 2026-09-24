@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { isSafeHttpUrl } from '../../lib/url';
+import { isHttpsUrl } from '../../lib/url';
 
 // Ink tones so the cream initial clears WCAG AA on every disc.
 const PALETTE = [
@@ -53,7 +53,7 @@ export function PlayerAvatar({ player, size = 'sm', muted = false }: PlayerAvata
   const sizeClasses = SIZE_CLASSES[size];
   const portrait = player.characterPortraitUrl;
   // Discord attachment URLs expire; fall back to the initial on load error.
-  if (portrait && !imageFailed && isSafeHttpUrl(portrait)) {
+  if (portrait && !imageFailed && isHttpsUrl(portrait)) {
     return (
       <img
         src={portrait}

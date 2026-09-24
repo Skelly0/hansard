@@ -37,4 +37,19 @@ describe('renderMarkdown', () => {
     expect(root.querySelector('script')).toBeNull();
     expect(root.textContent).toContain('<script>');
   });
+
+  it('terminates on Unicode line separators, treating them as line breaks', () => {
+    // Used to spin forever: the heading regex refused U+2028 while the
+    // paragraph loop still treated the line as a heading.
+    const root = html('# Title\u2028subtitle\u2029Body text');
+    expect(root.querySelector('h2')?.textContent).toBe('Title');
+    expect(root.textContent).toContain('subtitle');
+    expect(root.textContent).toContain('Body text');
+  });
+
+  it('renders text a heading pattern cannot claim instead of looping', () => {
+    const root = html('#\tTab heading\n##\u00a0nbsp heading');
+    expect(root.textContent).toContain('Tab heading');
+    expect(root.textContent).toContain('nbsp heading');
+  });
 });

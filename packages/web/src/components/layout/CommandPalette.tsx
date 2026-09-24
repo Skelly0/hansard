@@ -136,10 +136,13 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, searching, players.data, bills.data, votes.data, documents.data, isStaff, user]);
 
-  useEffect(() => setActive(0), [term]);
+  // Back to the top whenever the list changes: pages and actions filter on
+  // the raw query at once, so a stale index could point past the end.
+  useEffect(() => setActive(0), [query, term]);
+  const current = items.length ? Math.min(active, items.length - 1) : -1;
   useEffect(() => {
-    document.getElementById(`palette-opt-${active}`)?.scrollIntoView({ block: 'nearest' });
-  }, [active]);
+    if (current >= 0) document.getElementById(`palette-opt-${current}`)?.scrollIntoView({ block: 'nearest' });
+  }, [current]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
@@ -150,7 +153,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
       setActive((i) => (items.length ? (i - 1 + items.length) % items.length : 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      items[active]?.run();
+      if (current >= 0) items[current].run();
     }
   };
 
@@ -179,7 +182,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
             aria-expanded="true"
             aria-controls="palette-list"
             aria-autocomplete="list"
-            aria-activedescendant={items.length ? `palette-opt-${active}` : undefined}
+            aria-activedescendant={current >= 0 ? `palette-opt-${current}` : undefined}
             className="flex-1 bg-transparent py-4 text-body text-text-primary placeholder:text-text-tertiary focus:outline-none"
           />
           {loading && <span className="text-xs font-mono text-text-tertiary">searching…</span>}
@@ -203,14 +206,14 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
                 <div
                   id={`palette-opt-${i}`}
                   role="option"
-                  aria-selected={i === active}
+                  aria-selected={i === current}
                   onMouseMove={() => setActive(i)}
                   onClick={item.run}
                   className={`mx-2 px-3 py-2 rounded-card flex items-center gap-3 cursor-pointer ${
-                    i === active ? 'bg-hover' : ''
+                    i === current ? 'bg-hover' : ''
                   }`}
                 >
-                  <Icon name={item.icon} size={17} className={i === active ? 'text-accent-primary' : 'text-text-tertiary'} />
+                  <Icon name={item.icon} size={17} className={i === current ? 'text-accent-primary' : 'text-text-tertiary'} />
                   <span className="min-w-0 flex-1 truncate text-body-sm text-text-primary">{item.label}</span>
                   {item.hint && <span className="text-xs text-text-tertiary truncate max-w-[40%]">{item.hint}</span>}
                 </div>

@@ -290,6 +290,23 @@ describe('VoteService.getTurnout privacy', () => {
     })).resolves.toMatchObject({ eligible: 8, voted: 2, turnoutPct: 25 });
   });
 
+  it('uses the cohort frozen at tally time for a counted election', async () => {
+    const { db, select } = makeTurnoutDb({
+      results: { turnout: 8, eligibleVoters: 10 },
+      status: 'certified',
+      config: {},
+      createdById: 'creator-player',
+    }, Array.from({ length: 8 }, (_, i) => ({ id: `ballot-${i}` })), 30);
+
+    // Thirty characters exist today, but ten could vote when it was counted.
+    await expect(new VoteService(db as any).getTurnout('election-1')).resolves.toMatchObject({
+      eligible: 10,
+      voted: 8,
+      turnoutPct: 80,
+    });
+    expect(select).toHaveBeenCalledTimes(2);
+  });
+
   it('never reports fewer eligible voters than ballots cast', async () => {
     const { db } = makeTurnoutDb({
       results: null,
@@ -413,6 +430,21 @@ describe('VoteService character registration guards', () => {
     expect(db.insert).not.toHaveBeenCalled();
   });
 
+  it('stands a candidate under their current party unless a banner is named', async () => {
+    const db = makeRegisterCandidateDb({
+      playerRows: [{ id: 'player-1', characterName: 'Ada Vance', isAlive: true, partyId: 'labour' }],
+    });
+    await new VoteService(db as any).registerCandidate({ electionId: 'election-1', playerId: 'player-1' });
+    const values = db.insert.mock.results[0].value.values;
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({ partyId: 'labour' }));
+
+    const independent = makeRegisterCandidateDb({
+      playerRows: [{ id: 'player-1', characterName: 'Ada Vance', isAlive: true, partyId: 'labour' }],
+    });
+    await new VoteService(independent as any).registerCandidate({ electionId: 'election-1', playerId: 'player-1', partyId: null });
+    expect(independent.insert.mock.results[0].value.values).toHaveBeenCalledWith(expect.objectContaining({ partyId: null }));
+  });
+
   it('does not allow dead character rows to register as candidates', async () => {
     const db = makeRegisterCandidateDb({
       playerRows: [{ id: 'dead-player', characterName: 'Ada Vance', isAlive: false }],
@@ -460,6 +492,37 @@ describe('VoteService dead voter tally handling', () => {
     });
     expect(legacyBallotWhere).not.toHaveBeenCalled();
     expect(aliveBallotWhere).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('VoteService.tallyVotes turnout snapshot', () => {
+  it('freezes the eligible cohort into the results at tally time', async () => {
+    const castAt = new Date('2026-05-01T12:00:00.000Z');
+    const ballot = { id: 'b1', electionId: 'election-1', voterId: 'p1', vote: { type: 'yea_nay_abstain', choice: 'yea' }, castAt };
+    const { db, update } = makeTallyDb({
+      id: 'election-1', method: 'yea_nay_abstain', status: 'voting_closed', config: {},
+    }, [ballot]);
+    // Third query: the eligible-cohort count.
+    const eligibleWhere = vi.fn().mockResolvedValue([{ count: 12 }]);
+    (db.select as any).mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: eligibleWhere }) });
+
+    await new VoteService(db as any).tallyVotes('election-1');
+
+    const set = update.mock.results[0].value.set;
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({
+      results: expect.objectContaining({ eligibleVoters: 12, turnout: 1 }),
+    }));
+  });
+
+  it('still tallies when the cohort count fails', async () => {
+    const castAt = new Date('2026-05-01T12:00:00.000Z');
+    const ballot = { id: 'b1', electionId: 'election-1', voterId: 'p1', vote: { type: 'yea_nay_abstain', choice: 'yea' }, castAt };
+    const { db } = makeTallyDb({
+      id: 'election-1', method: 'yea_nay_abstain', status: 'voting_closed', config: {},
+    }, [ballot]);
+    (db.select as any).mockReturnValueOnce({ from: () => ({ where: () => Promise.reject(new Error('db down')) }) });
+
+    await expect(new VoteService(db as any).tallyVotes('election-1')).resolves.toMatchObject({ totalVotes: 1 });
   });
 });
 
@@ -825,23 +888,57 @@ describe('VoteService.listAwaitingBallot', () => {
   it('returns only votes the viewer is eligible for and has not voted in', async () => {
     const db = queuedDb([
       [openElection('e1'), openElection('e2')], // open elections
-      livingCharacter, [],                      // e1: player row, no existing ballot
-      livingCharacter, [{ id: 'ballot-1' }],     // e2: already voted
+      livingCharacter,                          // the viewer, once
+      [{ electionId: 'e2' }],                   // ballots already cast among them
     ]);
 
-    const result = await new VoteService(db as any).listAwaitingBallot({ userId: 'p1', isStaff: false });
+    const { items, total } = await new VoteService(db as any).listAwaitingBallot({ userId: 'p1', isStaff: false });
 
-    expect(result.map((e) => e.id)).toEqual(['e1']);
-    expect(result[0]).toMatchObject({ title: 'Vote e1', relatedBillSlug: null });
+    expect(items.map((e) => e.id)).toEqual(['e1']);
+    expect(items[0]).toMatchObject({ title: 'Vote e1', relatedBillSlug: null });
+    expect(total).toBe(1);
+    // Batched: open votes, player, ballots. Not a query per election.
+    expect(db.select).toHaveBeenCalledTimes(3);
   });
 
   it('skips votes the viewer is not eligible for', async () => {
     const db = queuedDb([
       [openElection('e1', { config: { eligibleParties: ['party-x'] } })],
       livingCharacter,
+      [],
     ]);
 
     await expect(new VoteService(db as any).listAwaitingBallot({ userId: 'p1', isStaff: false }))
-      .resolves.toEqual([]);
+      .resolves.toEqual({ items: [], total: 0 });
+  });
+
+  it('applies office filters from one holdings lookup', async () => {
+    const db = queuedDb([
+      [openElection('e1', { config: { eligibleOffices: ['cabinet'] } }), openElection('e2', { config: { eligibleOffices: ['lords'] } })],
+      livingCharacter,
+      [],
+      [{ officeId: 'cabinet' }],
+    ]);
+
+    const { items } = await new VoteService(db as any).listAwaitingBallot({ userId: 'p1', isStaff: false });
+    expect(items.map((e) => e.id)).toEqual(['e1']);
+  });
+
+  it('limits after filtering, so later eligible votes still count', async () => {
+    const open = Array.from({ length: 30 }, (_, i) =>
+      openElection(`e${i}`, i < 25 ? { config: { eligibleParties: ['elsewhere'] } } : {}),
+    );
+    const db = queuedDb([open, livingCharacter, []]);
+
+    const { items, total } = await new VoteService(db as any).listAwaitingBallot({ userId: 'p1', isStaff: false }, 3);
+    expect(total).toBe(5);
+    expect(items.map((e) => e.id)).toEqual(['e25', 'e26', 'e27']);
+  });
+
+  it('returns nothing for a viewer without a living character', async () => {
+    const db = queuedDb([[openElection('e1')], [{ ...livingCharacter[0], isAlive: false }]]);
+    await expect(new VoteService(db as any).listAwaitingBallot({ userId: 'p1', isStaff: false }))
+      .resolves.toEqual({ items: [], total: 0 });
+    expect(db.select).toHaveBeenCalledTimes(2);
   });
 });

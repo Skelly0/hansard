@@ -1,4 +1,5 @@
 import { eq, and, desc, isNull, isNotNull, ilike, or, inArray, count, ne, type SQL } from 'drizzle-orm';
+import { lookupPlayerSummaries, type PlayerSummary } from './playerSummaries.js';
 import {
   players,
   playerEventLog,
@@ -399,30 +400,35 @@ export async function updateCharacter(
       updates.profileData = Object.keys(rest).length > 0 ? rest : null;
     }
   }
-  if (data.characterName !== undefined && data.characterName !== existing.characterName) {
-    updates.characterName = data.characterName;
-
-    // Log name change — these get flagged for staff review
-    await db.insert(playerEventLog).values({
-      playerId: id,
-      eventType: PlayerEventType.NAME_CHANGE,
-      description: `Name changed from "${existing.characterName}" to "${data.characterName}"`,
-      oldValue: { characterName: existing.characterName },
-      newValue: { characterName: data.characterName },
-    });
-  }
+  const renamed = data.characterName !== undefined && data.characterName !== existing.characterName;
+  if (renamed) updates.characterName = data.characterName;
 
   if (Object.keys(updates).length === 0) {
     return existing;
   }
 
-  const [updated] = await db
-    .update(players)
-    .set(updates)
-    .where(eq(players.id, id))
-    .returning();
+  // The update and its name-change log commit together: a rename that loses
+  // the unique-name race (23505) must not leave a "Name changed" event behind.
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(players)
+      .set(updates)
+      .where(eq(players.id, id))
+      .returning();
 
-  return toPlayerProfile(updated);
+    if (renamed) {
+      // Name changes get flagged for staff review.
+      await tx.insert(playerEventLog).values({
+        playerId: id,
+        eventType: PlayerEventType.NAME_CHANGE,
+        description: `Name changed from "${existing.characterName}" to "${data.characterName}"`,
+        oldValue: { characterName: existing.characterName },
+        newValue: { characterName: data.characterName },
+      });
+    }
+
+    return toPlayerProfile(updated);
+  });
 }
 
 /**
@@ -609,7 +615,7 @@ export async function getPlayerHealth(
 
   return {
     healthStatus: player.healthStatus,
-    ailments: player.ailments,
+    ailments: !viewer || viewer.isStaff ? player.ailments : withoutStaffAilmentNotes(player.ailments),
     events: sanitizePlayerEvents(healthEvents.map(toPlayerEvent), viewer),
   };
 }
@@ -731,6 +737,14 @@ function toPlayerEvent(row: typeof playerEventLog.$inferSelect): PlayerEvent {
   };
 }
 
+/**
+ * Ailment `notes` are staff free text (planning, rationale); the affected
+ * player may see their own ailments but never the notes.
+ */
+export function withoutStaffAilmentNotes(ailments: Ailment[]): Ailment[] {
+  return ailments.map(({ notes: _notes, ...rest }) => rest);
+}
+
 export function sanitizePlayerProfile(
   profile: PlayerProfile,
   viewer?: PlayerPrivacyViewer,
@@ -741,7 +755,7 @@ export function sanitizePlayerProfile(
   return {
     ...profile,
     healthStatus: canViewOwnHealth || !profile.isAlive ? profile.healthStatus : null,
-    ailments: canViewOwnHealth ? profile.ailments : [],
+    ailments: canViewOwnHealth ? withoutStaffAilmentNotes(profile.ailments) : [],
     staffRole: null,
     profileData: null,
   };
@@ -796,15 +810,8 @@ export async function attachPlayerAffiliations<T extends { partyId: string | nul
 export async function attachEventActors<T extends { triggeredById: string | null }>(
   db: Database,
   events: T[],
-): Promise<(T & { triggeredBy: { id: string; characterName: string | null; discordUsername: string } | null })[]> {
-  const actorIds = [...new Set(events.map((e) => e.triggeredById).filter((x): x is string => !!x))];
-  const actorRows = actorIds.length
-    ? await db
-        .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
-        .from(players)
-        .where(inArray(players.id, actorIds))
-    : [];
-  const actorMap = new Map(actorRows.map((row) => [row.id, row]));
+): Promise<(T & { triggeredBy: PlayerSummary | null })[]> {
+  const actorMap = await lookupPlayerSummaries(db, events.map((e) => e.triggeredById));
   return events.map((event) => ({
     ...event,
     triggeredBy: event.triggeredById ? actorMap.get(event.triggeredById) ?? null : null,

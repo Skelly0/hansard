@@ -950,6 +950,15 @@ describe('player profile/event privacy sanitizers', () => {
     expect(result.profileData).toBeNull();
   });
 
+  it('shows a player their own ailments without the staff notes', () => {
+    const own = sanitizePlayerProfile(profile, { userId: 'target-player', isStaff: false });
+    expect(own.ailments[0].condition).toBe('fever');
+    expect(own.ailments[0]).not.toHaveProperty('notes');
+
+    const staff = sanitizePlayerProfile(profile, { userId: 'staff', isStaff: true });
+    expect(staff.ailments[0].notes).toBe('staff-only detail');
+  });
+
   it('filters private event types and values for other non-staff players', () => {
     const events = [
       {

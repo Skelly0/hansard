@@ -61,9 +61,16 @@ export function useUrlText(urlValue: string, commit: (value: string) => void, de
   const debounced = useDebouncedValue(text, delayMs);
   const commitRef = useRef(commit);
   commitRef.current = commit;
+  // The value this input last committed. When the URL catches up to it,
+  // that is our own echo landing, and keys typed since must survive it.
+  const committed = useRef(urlValue);
 
   useEffect(() => {
-    if (debounced.trim() !== urlValue) commitRef.current(debounced.trim());
+    const next = debounced.trim();
+    if (next !== urlValue) {
+      committed.current = next;
+      commitRef.current(next);
+    }
     // Only react to the user's debounced typing, not URL changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debounced]);
@@ -72,6 +79,9 @@ export function useUrlText(urlValue: string, commit: (value: string) => void, de
   useEffect(() => {
     if (urlValue === lastUrl.current) return;
     lastUrl.current = urlValue;
+    if (urlValue === committed.current) return; // our own commit arriving
+    // Back/forward or a link changed the URL: show what it says.
+    committed.current = urlValue;
     if (urlValue !== text.trim()) setText(urlValue);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlValue]);

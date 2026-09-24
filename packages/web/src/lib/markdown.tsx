@@ -11,7 +11,10 @@ import { isSafeHttpUrl } from './url';
  * `**bold**`, `*italic*`, `` `code` ``. Anything else renders as text.
  */
 export function renderMarkdown(source: string): ReactNode {
-  const lines = source.replace(/\r\n?/g, '\n').split('\n');
+  // Unicode line/paragraph separators are line breaks too; left in, `.` in
+  // the block regexes refuses them and the heading and paragraph checks
+  // disagree about the same line.
+  const lines = source.replace(/\r\n?|[\u2028\u2029\u0085]/g, '\n').split('\n');
   const blocks: ReactNode[] = [];
   let i = 0;
   let key = 0;
@@ -114,6 +117,9 @@ export function renderMarkdown(source: string): ReactNode {
     ) {
       para.push(lines[i++]);
     }
+    // Backstop: a line no block claims still renders as text, and the loop
+    // always advances.
+    if (para.length === 0) para.push(lines[i++]);
     blocks.push(
       <p key={key++} className="my-3 first:mt-0">
         {para.map((p, idx) => (

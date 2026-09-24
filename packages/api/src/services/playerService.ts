@@ -47,7 +47,8 @@ export interface CreateCharacterInput {
 
 export interface UpdateCharacterInput {
   characterBio?: string;
-  characterPortraitUrl?: string;
+  /** Empty string or null clears the portrait. */
+  characterPortraitUrl?: string | null;
   characterName?: string;
 }
 
@@ -388,7 +389,15 @@ export async function updateCharacter(
     updates.characterBio = data.characterBio;
   }
   if (data.characterPortraitUrl !== undefined) {
-    updates.characterPortraitUrl = data.characterPortraitUrl;
+    const portrait = typeof data.characterPortraitUrl === 'string' ? data.characterPortraitUrl.trim() : '';
+    updates.characterPortraitUrl = portrait || null;
+    // A new portrait URL supersedes any Discord direct-upload reference;
+    // otherwise `/character view` keeps refreshing the old attachment.
+    const profile = existing.profileData as Record<string, unknown> | null;
+    if (profile && 'characterPortraitAttachment' in profile) {
+      const { characterPortraitAttachment: _dropped, ...rest } = profile;
+      updates.profileData = Object.keys(rest).length > 0 ? rest : null;
+    }
   }
   if (data.characterName !== undefined && data.characterName !== existing.characterName) {
     updates.characterName = data.characterName;

@@ -792,3 +792,56 @@ describe('VoteService legislative bill status updates', () => {
     });
   });
 });
+
+describe('VoteService.listAwaitingBallot', () => {
+  /** Each select() resolves to the next queued row set, whatever the chain. */
+  function queuedDb(queue: unknown[][]) {
+    const select = vi.fn(() => {
+      const rows = queue.shift() ?? [];
+      const chain: any = {};
+      for (const m of ['from', 'where', 'orderBy', 'limit', 'innerJoin', 'leftJoin']) chain[m] = () => chain;
+      chain.then = (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
+        Promise.resolve(rows).then(resolve, reject);
+      return chain;
+    });
+    return { select };
+  }
+
+  const openElection = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    title: `Vote ${id}`,
+    type: 'referendum',
+    method: 'yea_nay_abstain',
+    status: 'voting_open',
+    config: {},
+    votingClosesAt: new Date(Date.now() + 3_600_000),
+    useReactions: false,
+    relatedBillId: null,
+    createdById: 'creator',
+    ...extra,
+  });
+  const livingCharacter = [{ id: 'p1', characterName: 'Ada', factionId: null, partyId: null, isAlive: true }];
+
+  it('returns only votes the viewer is eligible for and has not voted in', async () => {
+    const db = queuedDb([
+      [openElection('e1'), openElection('e2')], // open elections
+      livingCharacter, [],                      // e1: player row, no existing ballot
+      livingCharacter, [{ id: 'ballot-1' }],     // e2: already voted
+    ]);
+
+    const result = await new VoteService(db as any).listAwaitingBallot({ userId: 'p1', isStaff: false });
+
+    expect(result.map((e) => e.id)).toEqual(['e1']);
+    expect(result[0]).toMatchObject({ title: 'Vote e1', relatedBillSlug: null });
+  });
+
+  it('skips votes the viewer is not eligible for', async () => {
+    const db = queuedDb([
+      [openElection('e1', { config: { eligibleParties: ['party-x'] } })],
+      livingCharacter,
+    ]);
+
+    await expect(new VoteService(db as any).listAwaitingBallot({ userId: 'p1', isStaff: false }))
+      .resolves.toEqual([]);
+  });
+});

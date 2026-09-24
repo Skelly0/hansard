@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createParty, updateParty, dissolveParty } from './partyService';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { createParty, updateParty, dissolveParty, getPartyById } from './partyService';
 
 describe('createParty', () => {
   it('rejects malformed colour', async () => {
@@ -168,5 +169,37 @@ describe('dissolveParty', () => {
     const result = await dissolveParty(db, 'p1', null);
     expect(result?.party.isActive).toBe(false);
     expect(setCalls).toContainEqual(expect.objectContaining({ leaderId: null, isActive: false }));
+  });
+});
+
+describe('getPartyById', () => {
+  it('lists only living characters as members', async () => {
+    const partyRow = {
+      party: {
+        id: 'p1', name: 'Greens', shortName: null, factionId: null, leaderId: null, ideology: null,
+        colour: null, discordRoleId: null, isInviteOnly: false, isActive: true,
+        foundedAt: new Date('2026-01-01T00:00:00Z'), dissolvedAt: null,
+      },
+      factionName: null,
+    };
+    const memberWheres: unknown[] = [];
+    const select = vi.fn()
+      .mockReturnValueOnce({
+        from: () => ({ leftJoin: () => ({ where: () => ({ limit: async () => [partyRow] }) }) }),
+      })
+      .mockReturnValueOnce({
+        from: () => ({
+          where: (w: unknown) => {
+            memberWheres.push(w);
+            return { orderBy: async () => [{ id: 'a', characterName: 'Ada', discordUsername: 'ada' }] };
+          },
+        }),
+      });
+
+    const party = await getPartyById({ select } as any, 'p1');
+    expect(party?.memberCount).toBe(1);
+    const { sql } = new PgDialect().sqlToQuery(memberWheres[0] as any);
+    expect(sql).toContain('"is_alive"');
+    expect(sql).toContain('"character_name" is not null');
   });
 });

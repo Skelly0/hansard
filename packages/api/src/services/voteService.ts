@@ -5,7 +5,7 @@
  * runoff generation, NPC confirmation, and certification (with auto
  * office-appointment on certified position elections).
  */
-import { eq, and, exists, inArray, isNotNull, isNull, sql, gte, lte, or, ne } from 'drizzle-orm';
+import { eq, and, asc, exists, gt, ilike, inArray, isNotNull, isNull, sql, gte, lte, or, ne } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import {
   elections,
@@ -136,6 +136,8 @@ export interface ListElectionsFilter {
   method?: VotingMethod;
   forOfficeId?: string;
   createdById?: string;
+  /** Case-insensitive title substring. */
+  search?: string;
   /** ISO date string — only return elections created on/after this. */
   since?: string;
   /** ISO date string — only return elections created on/before this. */
@@ -551,6 +553,11 @@ export class VoteService {
     if (filters.type) {
       conditions.push(eq(elections.type, filters.type));
     }
+    if (filters.search?.trim()) {
+      // Escape LIKE wildcards so a literal % or _ in the query matches itself.
+      const term = filters.search.trim().slice(0, 100).replace(/[\\%_]/g, (c) => `\\${c}`);
+      conditions.push(ilike(elections.title, `%${term}%`));
+    }
     if (filters.method) {
       conditions.push(eq(elections.method, filters.method));
     }
@@ -681,6 +688,43 @@ export class VoteService {
       turnoutPct,
       totalBallots: voted, // legacy field — kept for any older consumers
     };
+  }
+
+  /**
+   * Open votes the viewer could still cast a ballot in: `voting_open`, not
+   * past close, and passing the exact `getEligibilityForElection` checks
+   * (which include "Already voted"). Soonest-closing first. Reaction-mode
+   * votes are included — reaction ballots are rows too, so a reaction clears
+   * the item just like a button or web ballot.
+   */
+  async listAwaitingBallot(viewer: ElectionViewer, limit = 25) {
+    const now = new Date();
+    const conditions = [eq(elections.status, 'voting_open'), gt(elections.votingClosesAt, now)];
+    const visibility = this.visibleElectionCondition(viewer);
+    if (visibility) conditions.push(visibility);
+
+    const open = await this.db
+      .select()
+      .from(elections)
+      .where(and(...conditions))
+      .orderBy(asc(elections.votingClosesAt))
+      .limit(limit);
+
+    const awaiting: typeof open = [];
+    for (const election of open) {
+      const eligibility = await this.getEligibilityForElection(election, viewer.userId);
+      if (eligibility.eligible) awaiting.push(election);
+    }
+    const withSlugs = await this.enrichElectionsWithSlugs(awaiting);
+    return withSlugs.map((e) => ({
+      id: e.id,
+      title: e.title,
+      type: e.type,
+      method: e.method,
+      votingClosesAt: e.votingClosesAt,
+      useReactions: e.useReactions,
+      relatedBillSlug: e.relatedBillSlug,
+    }));
   }
 
   /** Count characters currently eligible under an election's config filters. */

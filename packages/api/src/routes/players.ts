@@ -65,6 +65,19 @@ interface ChangePartyBody {
   triggeredById?: string;
 }
 
+const CHARACTER_BIO_MAX = 2000;
+const CHARACTER_PORTRAIT_URL_MAX = 512;
+
+function isHttpUrl(value: string, maxLength: number): boolean {
+  if (value.length > maxLength) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 function uniqueViolationContext(err: unknown): string | null {
   const error = err as { code?: string; message?: string; detail?: string; constraint?: string } | null;
   if (error?.code !== '23505') return null;
@@ -261,13 +274,30 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       }
       if (id !== user.id && request.player?.isStaff) request.staffActionLog = true;
 
-      if (!body.characterBio && !body.characterPortraitUrl && !body.characterName) {
+      const input = (body ?? {}) as UpdateCharacterInput;
+      if (
+        input.characterBio === undefined
+        && input.characterPortraitUrl === undefined
+        && input.characterName === undefined
+      ) {
         return reply.status(400).send({
           error: 'At least one field required: characterBio, characterPortraitUrl, characterName',
         });
       }
+      // Same limits as the `/character edit` modal.
+      if (input.characterBio !== undefined && (typeof input.characterBio !== 'string' || input.characterBio.length > CHARACTER_BIO_MAX)) {
+        return reply.status(400).send({ error: `characterBio must be at most ${CHARACTER_BIO_MAX} characters` });
+      }
+      if (input.characterPortraitUrl !== undefined && input.characterPortraitUrl !== null) {
+        const url = typeof input.characterPortraitUrl === 'string' ? input.characterPortraitUrl.trim() : '';
+        if (url !== '' && !isHttpUrl(url, CHARACTER_PORTRAIT_URL_MAX)) {
+          return reply.status(400).send({
+            error: `characterPortraitUrl must be an http(s) URL of at most ${CHARACTER_PORTRAIT_URL_MAX} characters`,
+          });
+        }
+      }
 
-      let patchBody: UpdateCharacterInput = body;
+      let patchBody: UpdateCharacterInput = input;
       if (body.characterName !== undefined) {
         const nameValidation = validateCharacterName(body.characterName);
         if (!nameValidation.ok) {
@@ -278,12 +308,21 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         patchBody = { ...body, characterName: nameValidation.normalized! };
       }
 
-      const updated = await updateCharacter(fastify.db, id, patchBody);
+      let updated;
+      try {
+        updated = await updateCharacter(fastify.db, id, patchBody);
+      } catch (err) {
+        // Only character_name is unique among the fields this route writes.
+        if (uniqueViolationContext(err) !== null) {
+          return reply.status(409).send({ error: 'That character name is already taken' });
+        }
+        throw err;
+      }
       if (!updated) {
         return reply.status(404).send({ error: 'Player not found' });
       }
 
-      const nameChanged = body.characterName !== undefined;
+      const nameChanged = input.characterName !== undefined;
       return {
         player: sanitizePlayerProfile(updated, viewerFor(request)),
         nameChangeflagged: nameChanged,
@@ -302,7 +341,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth] },
     async (request, reply) => {
       const { id } = request.params;
-      const { partyId } = request.body;
+      const { partyId } = (request.body ?? {}) as ChangePartyBody;
       const user = request.session.user!;
 
       if (id !== user.id && !request.player?.isStaff) {

@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -87,6 +87,9 @@ export function usePlayers(filters?: PlayerFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['players', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: Player[]; total: number }>(`/players${qs ? `?${qs}` : ''}`),
     enabled: filters !== undefined,
   });
@@ -140,11 +143,30 @@ export function usePlayerHealth(id?: string) {
   });
 }
 
+export interface UpdatePlayerInput {
+  id: string;
+  characterName?: string;
+  characterBio?: string;
+  /** Empty string or null clears the portrait. */
+  characterPortraitUrl?: string | null;
+}
+
+export interface UpdatePlayerResponse {
+  player: Player;
+  nameChangeflagged: boolean;
+  message: string;
+}
+
+/** Limits enforced by PATCH /api/players/:id (same as the bot's /character edit). */
+export const CHARACTER_BIO_MAX = 2000;
+export const CHARACTER_PORTRAIT_URL_MAX = 512;
+
 export function useUpdatePlayer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...body }: { id: string; characterBio?: string; characterPortraitUrl?: string }) =>
-      api.patch<Player>(`/players/${id}`, body),
+    meta: { successMessage: (data: UpdatePlayerResponse) => data?.message || 'Character updated' },
+    mutationFn: ({ id, ...body }: UpdatePlayerInput) =>
+      api.patch<UpdatePlayerResponse>(`/players/${id}`, body),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['players'] });
       qc.invalidateQueries({ queryKey: ['players', vars.id] });
@@ -155,6 +177,7 @@ export function useUpdatePlayer() {
 export function useChangeParty() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Party membership updated' },
     mutationFn: ({ id, partyId }: { id: string; partyId: string | null }) =>
       api.post(`/players/${id}/party`, { partyId }),
     onSuccess: (_d, vars) => {
@@ -165,9 +188,22 @@ export function useChangeParty() {
 }
 
 /**
- * Convenience for player typeahead. Disabled when search is empty/short
- * to avoid spamming the API on every keystroke.
+ * Typeahead lookup. Idle (no request, no results) until at least two
+ * characters are typed — an empty search used to fetch the whole roster.
+ * Previous results bridge the gap between two real searches only: React
+ * Query applies placeholder data to disabled queries too, so keeping it on
+ * after the box is cleared would leave the old list on screen.
  */
 export function useSearchPlayers(search: string, limit = 8) {
-  return usePlayers(search.length >= 2 ? { search, limit } : undefined);
+  const term = search.trim();
+  const enabled = term.length >= 2;
+  return useQuery({
+    queryKey: ['players', 'search', term, limit],
+    queryFn: () => api.get<{ data: Player[]; total: number }>(
+      `/players?search=${encodeURIComponent(term)}&limit=${limit}`,
+    ),
+    enabled,
+    placeholderData: enabled ? keepPreviousData : undefined,
+    staleTime: 30_000,
+  });
 }

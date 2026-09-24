@@ -1,12 +1,16 @@
-import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useTickets, useTicketCategories, useTicketMetrics } from '../api/hooks/useTickets';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
-import { MetricCard } from '../components/shared/MetricCard';
+import { MetricStrip } from '../components/shared/MetricCard';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
+import { PageHeader, SectionHeading } from '../components/shared/PageHeader';
+import { FilterBar, FilterField } from '../components/shared/FilterBar';
+import { formatDate, humanizeToken, plural, recordNumber } from '../lib/format';
+import { useUrlState } from '../hooks/useUrlState';
 import type { Ticket } from '../api/hooks/useTickets';
 
 const STATUSES = ['all', 'open', 'in_progress', 'waiting', 'resolved', 'closed'];
@@ -22,15 +26,15 @@ const priorityLabel: Record<string, string> = {
 type TabKey = 'list' | 'metrics';
 
 export function Tickets() {
-  const [tab, setTab] = useState<TabKey>('list');
-  const [status, setStatus] = useState('all');
-  const [category, setCategory] = useState('all');
-  const [priority, setPriority] = useState('all');
-  const [page, setPage] = useState(1);
+  const [url, setUrl] = useUrlState({ tab: 'list', status: 'all', category: 'all', priority: 'all', page: 1 });
+  const tab: TabKey = url.tab === 'metrics' ? 'metrics' : 'list';
+  const { status, category, priority, page } = url;
+  const setTab = (next: TabKey) => setUrl({ tab: next });
+  const setPage = (p: number) => setUrl({ page: p });
   const limit = 20;
 
   const { data: categories } = useTicketCategories();
-  const { data, isLoading, isError, error } = useTickets({
+  const { data, isLoading, isError, error, isPlaceholderData } = useTickets({
     status: status !== 'all' ? status : undefined,
     category: category !== 'all' ? category : undefined,
     priority: priority !== 'all' ? priority : undefined,
@@ -38,10 +42,10 @@ export function Tickets() {
     limit,
   });
 
-  if (isLoading) return <PageSkeleton />;
-  if (isError) {
+  if (isLoading && !data) return <PageSkeleton />;
+  if (isError && !data) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load tickets" error={error} />
       </div>
     );
@@ -63,7 +67,7 @@ export function Tickets() {
           params={{ id: row.id }}
           className="text-accent-primary hover:underline"
         >
-          #{String(row.number).padStart(3, '0')}
+          {recordNumber(row.number)}
         </Link>
       ),
     },
@@ -71,6 +75,7 @@ export function Tickets() {
       key: 'title',
       header: 'Ticket',
       minWidth: '320px',
+      primary: true,
       render: (row) => (
         <div className="max-w-3xl">
           <Link
@@ -94,7 +99,7 @@ export function Tickets() {
       minWidth: '100px',
       render: (row) => (
         <Tag color={statusToTagColor(row.status)}>
-          {row.status.replace(/_/g, ' ')}
+          {humanizeToken(row.status)}
         </Tag>
       ),
     },
@@ -117,8 +122,8 @@ export function Tickets() {
       header: 'Category',
       minWidth: '100px',
       render: (row) => (
-        <span className="text-body-sm text-text-secondary">
-          {row.category?.emoji} {row.category?.name || '—'}
+        <span className="text-body-sm text-text-secondary whitespace-nowrap">
+          {row.category ? <>{row.category.emoji && <span aria-hidden="true">{row.category.emoji} </span>}{row.category.name}</> : '—'}
         </span>
       ),
     },
@@ -136,96 +141,83 @@ export function Tickets() {
       header: 'Created',
       mono: true,
       minWidth: '100px',
-      render: (row) => new Date(row.createdAt).toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'short', year: 'numeric',
-      }),
+      render: (row) => formatDate(row.createdAt),
     },
   ];
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Tickets</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            {total} ticket{total !== 1 ? 's' : ''} in the system
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Tickets"
+        subtitle={
+          <>
+            {plural(total, 'ticket')} on file &middot; open a new one in Discord with{' '}
+            <code className="font-mono text-xs text-text-secondary">/ticket create</code>
+          </>
+        }
+      />
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-border-subtle">
-        <button
-          onClick={() => setTab('list')}
-          className={`px-4 py-2.5 text-body-sm font-medium relative transition-colors duration-150 ${tab === 'list' ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}`}
-        >
-          All Tickets
-          {tab === 'list' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-tickets" />}
-        </button>
-        <button
-          onClick={() => setTab('metrics')}
-          className={`px-4 py-2.5 text-body-sm font-medium relative transition-colors duration-150 ${tab === 'metrics' ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'}`}
-        >
-          Metrics
-          {tab === 'metrics' && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-tickets" />}
-        </button>
-      </div>
+      <Tabs
+        idPrefix="tickets"
+        label="Ticket views"
+        items={[
+          { key: 'list', label: 'All tickets' },
+          { key: 'metrics', label: 'Metrics' },
+        ]}
+        value={tab}
+        onChange={setTab}
+        className="mb-5"
+      />
 
+      <div {...tabPanelProps('tickets', tab)}>
       {tab === 'metrics' && <TicketMetricsView />}
       {tab === 'list' && <>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        {/* Status filter */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Status</label>
+      <FilterBar>
+        <FilterField label="Status">
           <select
             value={status}
-            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            onChange={(e) => setUrl({ status: e.target.value, page: 1 })}
+            className="field"
           >
             {STATUSES.map((s) => (
-              <option key={s} value={s}>{s === 'all' ? 'All' : s.replace(/_/g, ' ')}</option>
+              <option key={s} value={s}>{s === 'all' ? 'All' : humanizeToken(s)}</option>
             ))}
           </select>
-        </div>
-
-        {/* Category filter */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Category</label>
+        </FilterField>
+        <FilterField label="Category">
           <select
             value={category}
-            onChange={(e) => { setCategory(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            onChange={(e) => setUrl({ category: e.target.value, page: 1 })}
+            className="field"
           >
             <option value="all">All</option>
             {categories?.map((c) => (
               <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
             ))}
           </select>
-        </div>
-
-        {/* Priority filter */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Priority</label>
+        </FilterField>
+        <FilterField label="Priority">
           <select
             value={priority}
-            onChange={(e) => { setPriority(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            onChange={(e) => setUrl({ priority: e.target.value, page: 1 })}
+            className="field"
           >
             {PRIORITIES.map((p) => (
               <option key={p} value={p}>{p === 'all' ? 'All' : priorityLabel[p]}</option>
             ))}
           </select>
-        </div>
-      </div>
+        </FilterField>
+      </FilterBar>
 
       {/* Table */}
-      <div className="card border-l-accent-tickets">
+      <div className={`card card-flush transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
           columns={columns}
           data={tickets}
           rowKey={(row) => row.id}
+          caption="Tickets"
           emptyMessage="Inbox is empty. The chamber rests."
         />
       </div>
@@ -238,6 +230,7 @@ export function Tickets() {
         className="mt-6 justify-center flex"
       />
       </>}
+      </div>
     </div>
   );
 }
@@ -257,7 +250,7 @@ function TicketMetricsView() {
   if (isError) return <QueryErrorState title="Could not load ticket metrics" error={error} />;
   if (!metrics) {
     return (
-      <div className="card border-l-accent-tickets">
+      <div className="card">
         <p className="text-body text-text-tertiary italic">No metrics available.</p>
       </div>
     );
@@ -265,37 +258,20 @@ function TicketMetricsView() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard
-          label="Open"
-          value={metrics.openCount}
-          color="text-accent-tickets"
-          borderColor="border-l-accent-tickets"
-        />
-        <MetricCard
-          label="In Progress"
-          value={(metrics as any).inProgressCount ?? 0}
-          color="text-status-pending"
-          borderColor="border-l-status-pending"
-        />
-        <MetricCard
-          label="Resolved (24h)"
-          value={(metrics as any).resolvedToday ?? metrics.resolvedThisWeek ?? 0}
-          color="text-status-passed"
-          borderColor="border-l-status-passed"
-        />
-        <MetricCard
-          label="Avg First Response"
-          value={formatDuration(metrics.avgResponseTimeMs)}
-          color="text-text-primary"
-          borderColor="border-l-border-subtle"
-        />
-      </div>
+      <MetricStrip
+        className="grid-cols-2 md:grid-cols-4"
+        metrics={[
+          { label: 'Open', value: metrics.openCount, color: 'text-accent-tickets' },
+          { label: 'In Progress', value: metrics.inProgressCount ?? 0, color: 'text-status-pending' },
+          { label: 'Resolved (24h)', value: metrics.resolvedToday ?? 0, color: 'text-status-passed' },
+          { label: 'Avg First Response', value: formatDuration(metrics.avgResponseTimeMs), color: 'text-text-primary' },
+        ]}
+      />
 
       {metrics.byCategory && metrics.byCategory.length > 0 && (
         <div>
-          <h2 className="text-heading-2 text-text-secondary mb-3">By Category</h2>
-          <div className="card border-l-accent-tickets space-y-2">
+          <SectionHeading>By Category</SectionHeading>
+          <div className="card space-y-2">
             {metrics.byCategory.map((row) => (
               <div key={row.categoryId} className="flex items-center justify-between py-1">
                 <span className="text-body-sm text-text-primary">{row.categoryName}</span>
@@ -308,8 +284,8 @@ function TicketMetricsView() {
 
       {metrics.byPriority && Object.keys(metrics.byPriority).length > 0 && (
         <div>
-          <h2 className="text-heading-2 text-text-secondary mb-3">By Priority</h2>
-          <div className="card border-l-accent-tickets space-y-2">
+          <SectionHeading>By Priority</SectionHeading>
+          <div className="card space-y-2">
             {Object.entries(metrics.byPriority).map(([prio, count]) => (
               <div key={prio} className="flex items-center justify-between py-1">
                 <span className="text-body-sm text-text-primary capitalize">{prio}</span>

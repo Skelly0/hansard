@@ -1,4 +1,4 @@
-import { eq, and, desc, isNull } from 'drizzle-orm';
+import { eq, and, desc, isNull, inArray } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import {
   simulationClock,
@@ -22,6 +22,16 @@ import {
   type TimeAdvanceSummary,
 } from '@hansard/shared';
 import { expireCharacterFavourBalances } from './favourService.js';
+import { lookupPlayerSummaries } from './playerSummaries.js';
+
+/**
+ * An ailment as written into `player_event_log`. Staff `notes` stay on the
+ * ailment itself (redacted for players on read) and never enter event
+ * history, which the affected player can read.
+ */
+function ailmentEventPayload<T extends { notes?: string }>({ notes: _notes, ...rest }: T): Omit<T, 'notes'> {
+  return rest;
+}
 
 // ============================================================
 // Default Aging Config — used when simulation_clock.aging_config is null.
@@ -576,7 +586,13 @@ export async function advanceTime(
   db: Database,
   ticks: number,
   advancedById: string,
+  options: { notes?: string | null } = {},
 ): Promise<AdvanceResult> {
+  // Staff-only context for the history log; sanitizeTimeAdvanceLog strips it
+  // for non-staff viewers.
+  const notes = typeof options.notes === 'string' && options.notes.trim()
+    ? options.notes.trim().slice(0, 2000)
+    : null;
   const clock = await getClock(db);
   if (!clock) throw new Error('No simulation clock found. Create one first.');
   if (clock.isPaused) throw new Error('Simulation clock is paused. Unpause before advancing.');
@@ -667,7 +683,7 @@ export async function advanceTime(
           playerId: player.id,
           eventType: PlayerEventType.AILMENT_RECOVERED,
           description: `Recovered from ${ailment.severity} ailment: ${ailment.condition} (timed recovery)`,
-          oldValue: ailment,
+          oldValue: ailmentEventPayload(ailment),
           simTick: tick,
           simDate: date,
           isAutomatic: true,
@@ -685,7 +701,7 @@ export async function advanceTime(
           playerId: player.id,
           eventType: 'ailment_acquired',
           description: `Acquired ${ailment.severity} ailment: ${ailment.condition}`,
-          newValue: ailment,
+          newValue: ailmentEventPayload(ailment),
           simTick: tick,
           simDate: date,
           isAutomatic: true,
@@ -734,6 +750,7 @@ export async function advanceTime(
       toDate,
       advancedById,
       summary,
+      notes,
     });
   });
 
@@ -875,7 +892,7 @@ export async function manualAilment(
   condition: string,
   severity: 'minor' | 'major' | 'critical',
   triggeredById?: string,
-  options: { durationYears?: number } = {},
+  options: { durationYears?: number; notes?: string | null } = {},
 ) {
   const [player] = await db.select().from(players).where(eq(players.id, playerId));
   if (!player) throw new Error('Player not found');
@@ -906,7 +923,9 @@ export async function manualAilment(
     acquiredAtTick: currentTick,
     acquiredAtAge: player.currentAge ?? 0,
     ...buildAilmentRecoverySchedule(clock?.currentDate ?? null, options.durationYears),
-    notes: 'Manually assigned by staff',
+    notes: typeof options.notes === 'string' && options.notes.trim()
+      ? options.notes.trim().slice(0, 500)
+      : 'Manually assigned by staff',
   };
 
   const updatedAilments = [...currentAilments, newAilment];
@@ -924,7 +943,7 @@ export async function manualAilment(
     playerId,
     eventType: 'ailment_acquired',
     description: `Staff assigned ${severity} ailment: ${condition}${newAilment.healsAtDate ? `; expected recovery ${newAilment.healsAtDate}` : ''}`,
-    newValue: newAilment,
+    newValue: ailmentEventPayload(newAilment),
     simTick: currentTick,
     simDate: currentDate,
     triggeredById: triggeredById ?? null,
@@ -981,7 +1000,7 @@ export async function heal(
     playerId,
     eventType: 'ailment_recovered',
     description: `Recovered from ${removed.severity} ailment: ${condition}`,
-    oldValue: removed,
+    oldValue: ailmentEventPayload(removed),
     simTick: currentTick,
     simDate: currentDate,
     triggeredById: triggeredById ?? null,
@@ -1145,11 +1164,40 @@ export function sanitizeTimeAdvanceLog<T extends { summary: unknown; notes?: unk
 
 export async function getHistory(db: Database, limit = 20, viewer?: SimulationPrivacyViewer) {
   const rows = await db
-    .select()
+    .select({
+      log: timeAdvanceLog,
+      advancedByCharacterName: players.characterName,
+      advancedByDiscordUsername: players.discordUsername,
+    })
     .from(timeAdvanceLog)
+    .leftJoin(players, eq(timeAdvanceLog.advancedById, players.id))
     .orderBy(desc(timeAdvanceLog.createdAt))
     .limit(limit);
-  return rows.map((row) => sanitizeTimeAdvanceLog(row, viewer));
+  const entries = rows.map((row) => sanitizeTimeAdvanceLog({
+    ...row.log,
+    advancedBy: {
+      id: row.log.advancedById,
+      characterName: row.advancedByCharacterName,
+      discordUsername: row.advancedByDiscordUsername ?? '',
+    },
+  }, viewer));
+
+  // Staff history shows who died/fell ill/recovered; the summary stores player
+  // ids, so resolve them to names here. Non-staff summaries have already had
+  // those ids stripped by sanitizeTimeAdvanceLog, so nothing leaks.
+  if (viewer && !viewer.isStaff) return entries;
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    const summary = entry.summary as Record<string, unknown> | null;
+    for (const key of ['deaths', 'pendingDeaths', 'ailments', 'recoveries']) {
+      const list = summary?.[key];
+      if (Array.isArray(list)) for (const id of list) if (typeof id === 'string') ids.add(id);
+    }
+  }
+  const people = await lookupPlayerSummaries(db, ids);
+  const playerNames: Record<string, string> = {};
+  for (const [id, person] of people) playerNames[id] = person.characterName ?? person.discordUsername;
+  return entries.map((entry) => ({ ...entry, playerNames }));
 }
 
 // ============================================================

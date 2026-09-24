@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -6,9 +6,9 @@ import { api } from '../client';
 export interface ModAction {
   id: string;
   targetPlayerId: string;
-  targetPlayer?: { id: string; characterName: string; discordUsername: string };
+  targetPlayer?: { id: string; characterName: string | null; discordUsername: string } | null;
   moderatorId: string;
-  moderator?: { id: string; characterName: string; discordUsername: string };
+  moderator?: { id: string; characterName: string | null; discordUsername: string } | null;
   type: 'note' | 'verbal_warning' | 'formal_warning' | 'mute' | 'temporary_suspension' | 'permanent_ban';
   reason: string;
   internalNotes?: string;
@@ -35,6 +35,8 @@ export interface ModStats {
   totalActions: number;
   activeActions: number;
   pendingAppeals: number;
+  /** Warnings (verbal + formal) issued in the last 7 days. */
+  warningsThisWeek?: number;
   byType: Record<string, number>;
   recentActions: ModAction[];
 }
@@ -59,6 +61,9 @@ export function useModActions(filters?: ModActionFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['moderation', 'actions', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: ModAction[]; total: number }>(`/moderation/actions${qs ? `?${qs}` : ''}`),
   });
 }
@@ -81,6 +86,7 @@ export function useModStats() {
 export function useCreateModAction() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Moderation action recorded' },
     mutationFn: (body: {
       targetPlayerId: string;
       type: string;
@@ -142,6 +148,7 @@ export function useCreateModAction() {
 export function useUpdateModAction() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Moderation action updated', errorMessage: 'Could not update the action' },
     mutationFn: ({ id, ...body }: { id: string; isActive?: boolean; appealStatus?: string; appealReason?: string }) =>
       api.patch<ModAction>(`/moderation/actions/${id}`, body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['moderation'] }); },
@@ -151,6 +158,7 @@ export function useUpdateModAction() {
 export function useAddModNote() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Note added', errorMessage: 'Could not add the note' },
     mutationFn: (body: { targetPlayerId: string; content: string }) =>
       api.post<ModNote>('/moderation/notes', body),
     onSuccess: (_d, vars) => {

@@ -41,7 +41,7 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
     '/api/simulation/advance',
     { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
-      const { ticks: rawTicks } = (request.body ?? {}) as { ticks?: unknown; notes?: string };
+      const { ticks: rawTicks, notes } = (request.body ?? {}) as { ticks?: unknown; notes?: unknown };
       const ticks = parseTicks(rawTicks);
 
       if (ticks === null) {
@@ -51,7 +51,9 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
       const userId = request.session.user!.id;
 
       try {
-        const result = await simService.advanceTime(fastify.db, ticks, userId);
+        const result = await simService.advanceTime(fastify.db, ticks, userId, {
+          notes: typeof notes === 'string' ? notes : null,
+        });
         return result;
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to advance time';
@@ -149,11 +151,12 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
     '/api/simulation/ailment',
     { preHandler: [requireAuth, requireStaff] },
     async (request, reply) => {
-      const { playerId, condition, severity, durationYears } = request.body as {
+      const { playerId, condition, severity, durationYears, notes } = (request.body ?? {}) as {
         playerId: string;
         condition: string;
         severity: 'minor' | 'major' | 'critical';
         durationYears?: unknown;
+        notes?: unknown;
       };
 
       if (!playerId || !condition || !severity) {
@@ -183,7 +186,10 @@ export default async function simulationRoutes(fastify: FastifyInstance) {
           condition,
           severity,
           request.session.user!.id,
-          durationYears === undefined ? undefined : { durationYears },
+          {
+            ...(durationYears === undefined ? {} : { durationYears }),
+            notes: typeof notes === 'string' ? notes : null,
+          },
         );
         return result;
       } catch (err) {

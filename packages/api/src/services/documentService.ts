@@ -1,9 +1,12 @@
-import { eq, desc, and, ilike, or, sql, count, type SQL } from 'drizzle-orm';
+import { eq, desc, and, ilike, or, sql, count, inArray, type SQL } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
+import { lookupPlayerSummaries, type PlayerSummary } from './playerSummaries.js';
 import {
   documents,
   documentVersions,
   documentCollections,
+  players,
+  bills,
 } from '@hansard/db';
 import type {
   Document,
@@ -411,4 +414,62 @@ export async function getCollections(
     : await base.orderBy(documentCollections.sortOrder);
 
   return rows.map(toDocumentCollection);
+}
+
+// ============================================================
+// Display enrichment (web routes)
+// ============================================================
+
+type DocumentPersonSummary = PlayerSummary;
+
+/**
+ * Attach `collection` ({ id, name, type }) and `author` summaries so the web
+ * registry can render the Collection/Type/Author columns without extra calls.
+ */
+export async function attachDocumentDisplay<T extends Pick<Document, 'collectionId' | 'authorId'>>(
+  db: Database,
+  docs: T[],
+): Promise<(T & {
+  collection: { id: string; name: string; type: string } | null;
+  author: DocumentPersonSummary | null;
+})[]> {
+  if (!docs.length) return [];
+  const collectionIds = [...new Set(docs.map((d) => d.collectionId))];
+  const [collectionRows, people] = await Promise.all([
+    db
+      .select({ id: documentCollections.id, name: documentCollections.name, type: documentCollections.type })
+      .from(documentCollections)
+      .where(inArray(documentCollections.id, collectionIds)),
+    lookupPlayerSummaries(db, docs.map((d) => d.authorId)),
+  ]);
+  const collectionMap = new Map(collectionRows.map((row) => [row.id, row]));
+  return docs.map((doc) => ({
+    ...doc,
+    collection: collectionMap.get(doc.collectionId) ?? null,
+    author: doc.authorId ? people.get(doc.authorId) ?? null : null,
+  }));
+}
+
+/**
+ * Attach `editedBy` and the amendment bill's slug (versions only store the
+ * bill UUID, but web bill routes are keyed by slug).
+ */
+export async function attachVersionDisplay<T extends Pick<DocumentVersion, 'editedById' | 'amendmentBillId'>>(
+  db: Database,
+  versions: T[],
+): Promise<(T & { editedBy: DocumentPersonSummary | null; amendmentBillSlug: string | null })[]> {
+  if (!versions.length) return [];
+  const billIds = [...new Set(versions.map((v) => v.amendmentBillId).filter((id): id is string => !!id))];
+  const [people, billRows] = await Promise.all([
+    lookupPlayerSummaries(db, versions.map((v) => v.editedById)),
+    billIds.length
+      ? db.select({ id: bills.id, slug: bills.slug }).from(bills).where(inArray(bills.id, billIds))
+      : Promise.resolve([] as { id: string; slug: string }[]),
+  ]);
+  const slugMap = new Map(billRows.map((row) => [row.id, row.slug]));
+  return versions.map((version) => ({
+    ...version,
+    editedBy: people.get(version.editedById) ?? null,
+    amendmentBillSlug: version.amendmentBillId ? slugMap.get(version.amendmentBillId) ?? null : null,
+  }));
 }

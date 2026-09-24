@@ -1,11 +1,16 @@
-import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useElections } from '../api/hooks/useVoting';
+import { useAwaitingBallots, useElections } from '../api/hooks/useVoting';
+import { Countdown } from '../components/shared/Countdown';
+import { useUrlState } from '../hooks/useUrlState';
 import { DataTable, type Column } from '../components/shared/DataTable';
 import { Tag, statusToTagColor } from '../components/shared/Tag';
 import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { PageHeader } from '../components/shared/PageHeader';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
+import { FilterBar, FilterField } from '../components/shared/FilterBar';
+import { formatDate, humanizeToken, plural, relativeTime } from '../lib/format';
 import type { Election } from '../api/hooks/useVoting';
 
 const ELECTION_STATUSES = [
@@ -69,7 +74,7 @@ function describeOutcome(row: Election): string {
       // 'yea'/'nay' show as themselves, otherwise look up candidate
       if (w === 'yea' || w === 'nay') return w;
       const named = row.candidates?.find((c) => c.playerId === w);
-      return named?.player?.characterName ?? 'winner picked';
+      return named?.player?.characterName ?? named?.player?.discordUsername ?? 'winner declared';
     }
     return `${r.winners.length} winners`;
   }
@@ -78,13 +83,15 @@ function describeOutcome(row: Election): string {
 }
 
 export function Voting() {
-  const [scope, setScope] = useState<ScopeTab>('all');
-  const [status, setStatus] = useState('all');
-  const [type, setType] = useState('all');
-  const [page, setPage] = useState(1);
+  const [url, setUrl] = useUrlState({ scope: 'all', status: 'all', type: 'all', page: 1 });
+  const scope = (SCOPE_TABS.some((t) => t.key === url.scope) ? url.scope : 'all') as ScopeTab;
+  const { status, type, page } = url;
+  const setPage = (p: number) => setUrl({ page: p });
   const limit = 20;
 
-  const { data, isLoading, isError, error } = useElections({
+  const { data: awaiting } = useAwaitingBallots();
+  const awaitingIds = new Set((awaiting?.data ?? []).map((v) => v.id));
+  const { data, isLoading, isError, error, isPlaceholderData } = useElections({
     // Explicit status wins over scope on the server, so only send one.
     status: status !== 'all' ? status : undefined,
     scope: status === 'all' && scope !== 'all' ? scope : undefined,
@@ -93,10 +100,10 @@ export function Voting() {
     limit,
   });
 
-  if (isLoading) return <PageSkeleton />;
-  if (isError) {
+  if (isLoading && !data) return <PageSkeleton />;
+  if (isError && !data) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load votes" error={error} />
       </div>
     );
@@ -110,16 +117,21 @@ export function Voting() {
     {
       key: 'title',
       header: 'Title',
+      primary: true,
       render: (row) => (
-        <Link
-          to="/voting/$id"
-          params={{ id: row.id }}
-          className="font-display font-medium text-text-primary hover:text-accent-primary transition-colors"
-        >
-          {row.title}
-        </Link>
+        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Link
+            to="/voting/$id"
+            params={{ id: row.id }}
+            className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary hover:text-accent-primary transition-colors"
+          >
+            {row.title}
+          </Link>
+          {awaitingIds.has(row.id) && <Tag color="primary">Your ballot</Tag>}
+        </span>
       ),
     },
+
     {
       key: 'type',
       header: 'Type',
@@ -146,7 +158,7 @@ export function Voting() {
       minWidth: '110px',
       render: (row) => (
         <Tag color={statusToTagColor(row.status)}>
-          {row.status.replace(/_/g, ' ')}
+          {humanizeToken(row.status)}
         </Tag>
       ),
     },
@@ -158,7 +170,7 @@ export function Voting() {
         const outcome = describeOutcome(row);
         if (!outcome) return <span className="text-text-tertiary">—</span>;
         const isFail = outcome === 'failed' || outcome === 'cancelled';
-        const isPass = outcome === 'passed';
+        const isPass = outcome === 'passed' || !['runoff', 'failed', 'cancelled'].includes(outcome);
         return (
           <span
             className={`text-body-sm ${
@@ -173,6 +185,7 @@ export function Voting() {
     {
       key: 'forOffice',
       header: 'Office',
+      hideOnMobile: true,
       render: (row) => (
         <span className="text-body-sm text-text-secondary">
           {row.forOffice?.name || '—'}
@@ -182,6 +195,7 @@ export function Voting() {
     {
       key: 'round',
       header: 'Rnd',
+      hideOnMobile: true,
       mono: true,
       align: 'center',
       minWidth: '50px',
@@ -191,19 +205,22 @@ export function Voting() {
       key: 'votingOpensAt',
       header: 'Opens',
       mono: true,
-      minWidth: '100px',
-      render: (row) => new Date(row.votingOpensAt).toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'short',
-      }),
+      minWidth: '90px',
+      hideOnMobile: true,
+      render: (row) => formatDate(row.votingOpensAt, { withYear: false }),
     },
     {
       key: 'votingClosesAt',
       header: 'Closes',
       mono: true,
       minWidth: '100px',
-      render: (row) => new Date(row.votingClosesAt).toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'short',
-      }),
+      render: (row) => (
+        <span title={new Date(row.votingClosesAt).toLocaleString('en-GB')}>
+          {row.status === 'voting_open'
+            ? <Countdown to={row.votingClosesAt} prefix="in" />
+            : formatDate(row.votingClosesAt, { withYear: false })}
+        </span>
+      ),
     },
   ];
 
@@ -219,85 +236,55 @@ export function Voting() {
   })();
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Voting</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Elections, referenda, and legislative votes — past and present
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Voting"
+        subtitle={<>Elections, referenda, and legislative votes &mdash; {plural(total, 'vote')}</>}
+      />
 
       {/* Scope tabs — quick presets that override the status dropdown */}
-      <div className="flex flex-wrap gap-2 mb-4 border-b border-border-subtle">
-        {SCOPE_TABS.map((tab) => {
-          const isActive = scope === tab.key && status === 'all';
-          return (
-            <button
-              key={tab.key}
-              onClick={() => {
-                setScope(tab.key);
-                setStatus('all');
-                setPage(1);
-              }}
-              className={`px-3 py-2 -mb-px border-b-2 text-body-sm transition-colors ${
-                isActive
-                  ? 'border-accent-primary text-text-primary'
-                  : 'border-transparent text-text-tertiary hover:text-text-secondary'
-              }`}
-              title={tab.description}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        idPrefix="vote-scope"
+        label="Vote scope"
+        items={SCOPE_TABS.map((tab) => ({ key: tab.key, label: tab.label, title: tab.description }))}
+        value={status === 'all' ? scope : null}
+        onChange={(key) => setUrl({ scope: key, status: 'all', page: 1 })}
+        className="mb-5"
+      />
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        {/* Status — when set explicitly, overrides scope on the server */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Status</label>
+      <FilterBar>
+        <FilterField label="Status">
           <select
             value={status}
-            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            onChange={(e) => setUrl({ status: e.target.value, page: 1 })}
+            className="field"
           >
             {ELECTION_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s === 'all' ? 'All Statuses' : s.replace(/_/g, ' ')}
+                {s === 'all' ? 'All statuses' : humanizeToken(s)}
               </option>
             ))}
           </select>
-        </div>
-
-        {/* Type */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Type</label>
+        </FilterField>
+        <FilterField label="Type">
           <select
             value={type}
-            onChange={(e) => { setType(e.target.value); setPage(1); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            onChange={(e) => setUrl({ type: e.target.value, page: 1 })}
+            className="field"
           >
             {ELECTION_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t === 'all' ? 'All Types' : typeLabel[t] || t}
+                {t === 'all' ? 'All types' : typeLabel[t] || t}
               </option>
             ))}
           </select>
-        </div>
-
-        {total > 0 && (
-          <div className="ml-auto self-center text-label-ui text-text-tertiary">
-            {total} {total === 1 ? 'vote' : 'votes'}
-          </div>
-        )}
-      </div>
+        </FilterField>
+      </FilterBar>
 
       {/* Table */}
-      <div className="card border-l-accent-voting">
+      <div {...tabPanelProps('vote-scope', status === 'all' ? scope : null)} className={`card card-flush transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
+          caption="Votes"
           columns={columns}
           data={elections}
           rowKey={(row) => row.id}

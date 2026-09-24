@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { useSearchPlayers } from '../../api/hooks/usePlayers';
 import { useCreateModAction } from '../../api/hooks/useModeration';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { PlayerAvatar } from './PlayerAvatar';
+import { Modal } from './Modal';
 
 type ModType = 'warn' | 'mute' | 'suspend';
 
@@ -30,9 +31,9 @@ const RAIL_COLOR: Record<ModType, string> = {
 };
 
 const SUBMIT_COLOR: Record<ModType, string> = {
-  warn: 'bg-status-pending hover:bg-status-pending/90',
-  mute: 'bg-accent-tickets hover:bg-accent-tickets/90',
-  suspend: 'bg-accent-moderation hover:bg-accent-moderation/90',
+  warn: 'bg-ink-pending hover:bg-ink-pending/90',
+  mute: 'bg-ink-tickets hover:bg-ink-tickets/90',
+  suspend: 'bg-ink-moderation hover:bg-ink-moderation/90',
 };
 
 const DURATION_PRESETS = [
@@ -59,17 +60,10 @@ export function ModActionModal({ type, onClose }: ModActionModalProps) {
   const [reason, setReason] = useState('');
   const [internalNotes, setInternalNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
   const debouncedSearch = useDebouncedValue(search, 300);
   const { data: searchResults } = useSearchPlayers(debouncedSearch);
   const createAction = useCreateModAction();
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const apiType = type === 'warn'
     ? warnSubtype
@@ -105,29 +99,31 @@ export function ModActionModal({ type, onClose }: ModActionModalProps) {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <Modal
+      open
+      onClose={onClose}
+      eyebrow={TYPE_LABELS[type]}
+      title={TITLES[type]}
+      railClass={RAIL_COLOR[type]}
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button
+            onClick={handleSubmit}
+            disabled={createAction.isPending}
+            className={`px-5 py-2.5 rounded-card font-display text-sm text-text-inverse font-medium ${SUBMIT_COLOR[type]} disabled:opacity-50`}
+          >
+            {createAction.isPending ? 'Submitting…' : TITLES[type].replace('Issue ', '')}
+          </button>
+        </>
+      }
     >
-      <div ref={dialogRef} className="bg-card rounded-card shadow-modal-warm w-full max-w-md overflow-hidden">
-        <div className={`h-[3px] ${RAIL_COLOR[type]}`} />
-        <div className="p-6">
-          <div className="flex items-baseline justify-between mb-5">
-            <div>
-              <div className="text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
-                {TYPE_LABELS[type]}
-              </div>
-              <h2 className="text-heading-1 text-text-primary">{TITLES[type]}</h2>
-            </div>
-            <button onClick={onClose} className="text-text-tertiary hover:text-text-primary text-xl leading-none">×</button>
-          </div>
-
           <div className="mb-4">
             <label className="block text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
               Target Player
             </label>
             {selected ? (
-              <div className="flex items-center gap-2 bg-card border border-border-default rounded-card px-3 py-2">
+              <div className="flex items-center gap-2 bg-card border border-border rounded-card px-3 py-2">
                 <PlayerAvatar player={selected} size="sm" />
                 <span className="text-body-sm text-text-primary">{selected.characterName ?? selected.discordUsername}</span>
                 <span className="text-mono text-xs text-text-tertiary ml-auto">@{selected.discordUsername}</span>
@@ -139,9 +135,10 @@ export function ModActionModal({ type, onClose }: ModActionModalProps) {
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search by name..."
+                  placeholder="Search by name…"
+                  aria-label="Search for the target player"
                   autoFocus
-                  className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary"
+                  className="field w-full"
                 />
                 {searchResults?.data && searchResults.data.length > 0 && (
                   <div className="mt-1 border border-border-subtle rounded-card overflow-hidden">
@@ -186,7 +183,7 @@ export function ModActionModal({ type, onClose }: ModActionModalProps) {
                     <button
                       key={preset.label}
                       onClick={() => { setDurationMs(preset.ms); setCustomMode(false); }}
-                      className={`text-body-sm px-3 py-1 rounded-card border transition-colors ${active ? 'bg-accent-primary-light border-accent-primary text-accent-primary font-medium' : 'bg-card border-border-default text-text-secondary hover:border-accent-primary'}`}
+                      className={`text-body-sm px-3 py-1 rounded-card border transition-colors ${active ? 'bg-accent-primary-light border-accent-primary text-accent-primary font-medium' : 'bg-card border-border text-text-secondary hover:border-accent-primary'}`}
                     >
                       {preset.label}
                     </button>
@@ -204,54 +201,44 @@ export function ModActionModal({ type, onClose }: ModActionModalProps) {
                   type="datetime-local"
                   value={customExpiry}
                   onChange={(e) => setCustomExpiry(e.target.value)}
-                  className="mt-2 bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary"
+                  className="field mt-2"
                 />
               )}
             </div>
           )}
 
           <div className="mb-4">
-            <label className="block text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
-              Reason <span className="text-status-rejected">*</span>
+            <label htmlFor="mod-reason" className="block text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
+              Reason <span className="text-status-rejected" aria-hidden="true">*</span>
             </label>
             <textarea
+              id="mod-reason"
+              required
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               rows={3}
               placeholder="Required, at least 8 characters."
-              className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary resize-y"
+              className="field w-full resize-y"
             />
           </div>
 
           <div className="mb-5">
-            <label className="block text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
-              Internal notes <span className="italic text-border-strong normal-case">staff only</span>
+            <label htmlFor="mod-notes" className="block text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
+              Internal notes <span className="italic text-text-tertiary normal-case">staff only</span>
             </label>
             <textarea
+              id="mod-notes"
               value={internalNotes}
               onChange={(e) => setInternalNotes(e.target.value)}
               rows={2}
               placeholder="optional…"
-              className="w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm focus:outline-none focus:border-accent-primary resize-y"
+              className="field w-full resize-y"
             />
           </div>
 
           {error && (
-            <p className="text-body-sm text-status-rejected mb-3">{error}</p>
+            <p role="alert" className="text-body-sm text-status-rejected">{error}</p>
           )}
-
-          <div className="flex justify-end gap-2">
-            <button onClick={onClose} className="btn-secondary">Cancel</button>
-            <button
-              onClick={handleSubmit}
-              disabled={createAction.isPending}
-              className={`px-4 py-1.5 rounded-card text-text-inverse font-medium ${SUBMIT_COLOR[type]} disabled:opacity-50`}
-            >
-              {createAction.isPending ? 'Submitting…' : TITLES[type].replace('Issue ', '')}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

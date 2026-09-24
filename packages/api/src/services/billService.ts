@@ -925,7 +925,9 @@ export async function repealBill(
 export async function getBillStatusLog(
   db: Database,
   slug: string,
-): Promise<BillStatusLogEntry[]> {
+): Promise<(BillStatusLogEntry & {
+  changedBy: { id: string; characterName: string | null; discordUsername: string };
+})[]> {
   const [bill] = await db
     .select({ id: bills.id })
     .from(bills)
@@ -935,12 +937,26 @@ export async function getBillStatusLog(
   if (!bill) return [];
 
   const rows = await db
-    .select()
+    .select({
+      log: billStatusLog,
+      changedByCharacterName: players.characterName,
+      changedByDiscordUsername: players.discordUsername,
+    })
     .from(billStatusLog)
+    .leftJoin(players, eq(billStatusLog.changedById, players.id))
     .where(eq(billStatusLog.billId, bill.id))
     .orderBy(desc(billStatusLog.createdAt));
 
-  return rows.map(toStatusLogEntry);
+  // Attach a display summary for whoever moved the bill so the web history
+  // can say "by <name>" without a second round-trip per entry.
+  return rows.map((row) => ({
+    ...toStatusLogEntry(row.log),
+    changedBy: {
+      id: row.log.changedById,
+      characterName: row.changedByCharacterName,
+      discordUsername: row.changedByDiscordUsername ?? '',
+    },
+  }));
 }
 
 /**

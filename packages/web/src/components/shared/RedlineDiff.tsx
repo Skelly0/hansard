@@ -48,18 +48,12 @@ export function RedlineDiff({
         <div className="bg-card rounded-card border border-border-subtle p-4 font-body text-body text-text-primary leading-relaxed whitespace-pre-wrap min-h-[4rem]">
           {leftSegments.map((seg, i) =>
             seg.type === 'removed' ? (
-              <span
+              <del
                 key={i}
-                className="line-through"
-                style={{
-                  color: '#C25B4E',
-                  backgroundColor: 'rgba(194, 91, 78, 0.15)',
-                  borderRadius: '2px',
-                  padding: '0 2px',
-                }}
+                className="line-through text-status-rejected bg-status-rejected/15 rounded-sm px-0.5"
               >
                 {seg.value}
-              </span>
+              </del>
             ) : (
               <span key={i}>{seg.value}</span>
             ),
@@ -75,18 +69,12 @@ export function RedlineDiff({
         <div className="bg-card rounded-card border border-border-subtle p-4 font-body text-body text-text-primary leading-relaxed whitespace-pre-wrap min-h-[4rem]">
           {rightSegments.map((seg, i) =>
             seg.type === 'added' ? (
-              <span
+              <ins
                 key={i}
-                className="font-medium"
-                style={{
-                  color: '#788C5D',
-                  backgroundColor: 'rgba(120, 140, 93, 0.15)',
-                  borderRadius: '2px',
-                  padding: '0 2px',
-                }}
+                className="font-medium text-status-passed bg-status-passed/15 rounded-sm px-0.5 no-underline"
               >
                 {seg.value}
-              </span>
+              </ins>
             ) : (
               <span key={i}>{seg.value}</span>
             ),

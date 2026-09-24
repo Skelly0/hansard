@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router';
 import { useState, useMemo, useEffect } from 'react';
 import {
   useFavourCategories,
@@ -17,6 +18,8 @@ import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { Modal, ConfirmModal } from '../components/shared/Modal';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
+import { PageHeader } from '../components/shared/PageHeader';
 
 // ---- Types for the matrix view ----
 
@@ -32,9 +35,9 @@ interface PlayerRow {
 function amberTint(value: number, maxValue: number): React.CSSProperties {
   if (value <= 0 || maxValue <= 0) return {};
   const intensity = Math.min(value / maxValue, 1);
-  // Amber tint from transparent to warm amber at 25% opacity
-  const alpha = Math.round(intensity * 25);
-  return { backgroundColor: `rgba(196, 135, 59, ${alpha / 100})` };
+  // Favours accent from transparent up to 28% — theme-aware via the token.
+  const pct = Math.round(intensity * 28);
+  return { backgroundColor: `color-mix(in srgb, var(--c-favours) ${pct}%, transparent)` };
 }
 
 function formatDate(dateString: string): string {
@@ -125,8 +128,15 @@ function StaffOverview() {
       key: 'characterName',
       header: 'Player',
       minWidth: '160px',
+      primary: true,
       render: (row) => (
-        <span className="font-display font-medium text-text-primary">{row.characterName}</span>
+        <Link
+          to="/players/$id"
+          params={{ id: row.playerId }}
+          className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary hover:text-accent-primary transition-colors"
+        >
+          {row.characterName}
+        </Link>
       ),
     },
     ...sortedCategories.map(
@@ -152,7 +162,7 @@ function StaffOverview() {
   ];
 
   return (
-    <div className="card border-l-accent-favours">
+    <div className="card card-flush">
       <DataTable
         columns={columns}
         data={rows}
@@ -214,7 +224,7 @@ function MyFavours({ playerId }: { playerId: string }) {
   return (
     <div className="space-y-6">
       {/* Horizontal bar chart */}
-      <div className="card border-l-accent-favours">
+      <div className="card">
         <h2 className="text-heading-2 mb-4">Balances</h2>
         {barData.length === 0 ? (
           <p className="text-body-sm text-text-tertiary italic">No balances to display.</p>
@@ -230,7 +240,7 @@ function MyFavours({ playerId }: { playerId: string }) {
                     className="h-full rounded transition-all duration-400 ease-out"
                     style={{
                       width: `${Math.max((Math.abs(bar.value) / maxBar) * 100, 2)}%`,
-                      backgroundColor: '#C4873B',
+                      backgroundColor: 'var(--c-favours)',
                     }}
                   />
                 </div>
@@ -244,7 +254,7 @@ function MyFavours({ playerId }: { playerId: string }) {
       </div>
 
       {/* Transaction history */}
-      <div className="card border-l-accent-favours">
+      <div className="card">
         <h2 className="text-heading-2 mb-4">Transaction History</h2>
         {(!history || history.length === 0) ? (
           <p className="text-body-sm text-text-tertiary italic">No transactions yet.</p>
@@ -475,7 +485,7 @@ function ManageCategories() {
         </button>
       </div>
 
-      <div className="card border-l-accent-favours">
+      <div className="card">
         {sorted.length === 0 ? (
           <p className="text-body text-text-tertiary italic">
             No categories defined yet.
@@ -490,7 +500,7 @@ function ManageCategories() {
                 <span className="text-lg w-6 text-center">{cat.emoji || '·'}</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-display font-medium text-text-primary truncate">
+                    <span className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary truncate">
                       {cat.name}
                     </span>
                     {cat.shortName && (
@@ -582,7 +592,7 @@ function CategoryFormFields({
   setForm: (f: CategoryFormState) => void;
   showActiveToggle: boolean;
 }) {
-  const fieldClass = 'w-full bg-card border border-border-default rounded-card px-3 py-2 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary transition-colors duration-150';
+  const fieldClass = 'field w-full';
   return (
     <>
       <div className="grid grid-cols-2 gap-3">
@@ -685,77 +695,42 @@ export function Favours() {
   const playerId = user?.id ?? '';
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Favours</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Favour balances and transaction ledger
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Favours"
+        subtitle="Who owes whom — balances and the transaction ledger."
+      />
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b border-border-subtle">
-        {isStaff && (
-          <TabButton active={tab === 'staff'} onClick={() => setTab('staff')}>
-            Staff Overview
-          </TabButton>
-        )}
-        <TabButton active={tab === 'my'} onClick={() => setTab('my')}>
-          My Favours
-        </TabButton>
-        {isStaff && (
-          <TabButton active={tab === 'categories'} onClick={() => setTab('categories')}>
-            Manage Categories
-          </TabButton>
-        )}
-      </div>
+      <Tabs
+        idPrefix="favours"
+        label="Favour views"
+        items={[
+          ...(isStaff ? [{ key: 'staff' as const, label: 'Staff overview' }] : []),
+          { key: 'my' as const, label: 'My favours' },
+          ...(isStaff ? [{ key: 'categories' as const, label: 'Manage categories' }] : []),
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
 
       {/* Content */}
+      <div {...tabPanelProps('favours', tab)}>
       {isStaff && tab === 'categories' && <ManageCategories />}
       {isStaff && tab === 'staff' && <StaffOverview />}
       {tab === 'my' && (
         playerId ? (
           <MyFavours playerId={playerId} />
         ) : (
-          <div className="card border-l-accent-favours">
+          <div className="card">
             <p className="text-body text-text-secondary italic">
               Sign in to view your personal favour balances and history.
             </p>
           </div>
         )
       )}
+      </div>
     </div>
   );
 }
 
-// ---- Tab button ----
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`
-        px-4 py-2.5 text-body-sm font-medium transition-colors relative
-        ${active
-          ? 'text-text-primary'
-          : 'text-text-tertiary hover:text-text-secondary'
-        }
-      `}
-    >
-      {children}
-      {active && (
-        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent-favours" />
-      )}
-    </button>
-  );
-}

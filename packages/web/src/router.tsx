@@ -2,32 +2,40 @@ import {
   createRouter,
   createRootRoute,
   createRoute,
+  lazyRouteComponent,
   Outlet,
 } from '@tanstack/react-router';
 import { Shell } from './components/layout/Shell';
 import { RouteGuard } from './components/auth/RouteGuard';
-import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
-import { Tickets } from './pages/Tickets';
-import { TicketDetail } from './pages/TicketDetail';
-import { Bills } from './pages/Bills';
-import { BillDetail } from './pages/BillDetail';
-import { Documents } from './pages/Documents';
-import { Voting } from './pages/Voting';
-import { ElectionDetail } from './pages/ElectionDetail';
-import { Offices } from './pages/Offices';
-import { Players } from './pages/Players';
-import { Parties } from './pages/Parties';
-import { CharacterDossier } from './pages/CharacterDossier';
-import { Moderation } from './pages/Moderation';
-import { Graveyard } from './pages/Graveyard';
-import { Favours } from './pages/Favours';
-import { Simulation } from './pages/Simulation';
+import { NotFound } from './pages/NotFound';
+import { PageSkeleton } from './components/shared/SkeletonLoader';
+
+// Pages are split into their own chunks so the first paint only downloads the
+// shell plus the page being opened. `defaultPreload: 'intent'` below fetches a
+// page's chunk as soon as its link is hovered or focused.
+const Dashboard = lazyRouteComponent(() => import('./pages/Dashboard'), 'Dashboard');
+const Tickets = lazyRouteComponent(() => import('./pages/Tickets'), 'Tickets');
+const TicketDetail = lazyRouteComponent(() => import('./pages/TicketDetail'), 'TicketDetail');
+const Bills = lazyRouteComponent(() => import('./pages/Bills'), 'Bills');
+const BillDetail = lazyRouteComponent(() => import('./pages/BillDetail'), 'BillDetail');
+const Documents = lazyRouteComponent(() => import('./pages/Documents'), 'Documents');
+const Voting = lazyRouteComponent(() => import('./pages/Voting'), 'Voting');
+const ElectionDetail = lazyRouteComponent(() => import('./pages/ElectionDetail'), 'ElectionDetail');
+const Offices = lazyRouteComponent(() => import('./pages/Offices'), 'Offices');
+const Players = lazyRouteComponent(() => import('./pages/Players'), 'Players');
+const Parties = lazyRouteComponent(() => import('./pages/Parties'), 'Parties');
+const CharacterDossier = lazyRouteComponent(() => import('./pages/CharacterDossier'), 'CharacterDossier');
+const Moderation = lazyRouteComponent(() => import('./pages/Moderation'), 'Moderation');
+const Graveyard = lazyRouteComponent(() => import('./pages/Graveyard'), 'Graveyard');
+const Favours = lazyRouteComponent(() => import('./pages/Favours'), 'Favours');
+const Simulation = lazyRouteComponent(() => import('./pages/Simulation'), 'Simulation');
 
 // Bare root — does NOT mount the app Shell, so unauthenticated routes
 // (e.g. /login) get a clean full-screen layout without the sidebar.
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
+  notFoundComponent: NotFound,
 });
 
 // /login is the only unauthenticated route
@@ -185,7 +193,12 @@ const routeTree = rootRoute.addChildren([
   ]),
 ]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({
+  routeTree,
+  defaultPreload: 'intent',
+  defaultPendingComponent: PageSkeleton,
+  defaultNotFoundComponent: NotFound,
+});
 
 declare module '@tanstack/react-router' {
   interface Register {

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import {
+  useDocument,
   useDocuments,
   useDocumentCollections,
   useDocumentVersions,
@@ -15,6 +16,15 @@ import { Pagination } from '../components/shared/Pagination';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { RedlineDiff, type DiffHunk } from '../components/shared/RedlineDiff';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
+import { PageHeader } from '../components/shared/PageHeader';
+import { FilterBar, FilterField, SearchInput } from '../components/shared/FilterBar';
+import { Modal } from '../components/shared/Modal';
+import { Icon } from '../components/shared/Icon';
+import { useUrlState, useUrlText } from '../hooks/useUrlState';
+import { renderMarkdown } from '../lib/markdown';
+import { isGoogleDocsHttpUrl } from '../lib/url';
+import { formatDate, formatDateTime, plural } from '../lib/format';
 
 const collectionTypeLabel: Record<string, string> = {
   legislation: 'Legislation',
@@ -82,7 +92,7 @@ function VersionHistoryPanel({ doc }: { doc: Document }) {
       {versions.map((v) => (
         <div
           key={v.id}
-          className="flex items-center gap-3 py-2 border-b border-border-subtle last:border-0"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 border-b border-border-subtle last:border-0"
         >
           {/* Version number */}
           <span className="font-mono text-xs text-text-tertiary w-10 flex-shrink-0">
@@ -90,29 +100,25 @@ function VersionHistoryPanel({ doc }: { doc: Document }) {
           </span>
 
           {/* Date */}
-          <span className="font-mono text-xs text-text-tertiary w-24 flex-shrink-0">
-            {new Date(v.createdAt).toLocaleDateString('en-GB', {
-              day: 'numeric',
-              month: 'short',
-              year: 'numeric',
-            })}
+          <span className="font-mono text-xs text-text-tertiary w-24 flex-shrink-0" title={formatDateTime(v.createdAt)}>
+            {formatDate(v.createdAt)}
           </span>
 
           {/* Editor name */}
           <span className="text-body-sm text-text-secondary flex-shrink-0">
-            {v.editedBy?.characterName || '—'}
+            {v.editedBy?.characterName || v.editedBy?.discordUsername || '—'}
           </span>
 
           {/* Change description */}
-          <span className="text-body-sm text-text-tertiary italic flex-1 truncate">
+          <span className="text-body-sm text-text-tertiary italic flex-1 min-w-[8rem] truncate">
             {v.changeDescription || '—'}
           </span>
 
           {/* Amendment tag */}
-          {v.amendmentBillId && (
+          {v.amendmentBillSlug && (
             <Link
               to="/bills/$slug"
-              params={{ slug: v.amendmentBillId }}
+              params={{ slug: v.amendmentBillSlug }}
               className="flex-shrink-0"
             >
               <Tag color="bills">
@@ -186,27 +192,108 @@ function VersionHistoryPanel({ doc }: { doc: Document }) {
   );
 }
 
+// ---- Document reader ----
+
+function DocumentReader({ slug, onClose }: { slug: string; onClose: () => void }) {
+  const { data: doc, isLoading, isError, error } = useDocument(slug);
+  const [tab, setTab] = useState<'read' | 'history'>('read');
+  const body = doc?.content ?? doc?.cachedContent ?? '';
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={doc?.title ?? 'Loading…'}
+      eyebrow={doc ? `${doc.collection?.name ?? 'Document'} · v${doc.currentVersion}` : 'Document'}
+      railClass="bg-accent-bills"
+      maxWidth="max-w-3xl"
+    >
+      {isLoading ? (
+        <div className="space-y-2">
+          <div className="skeleton h-4 w-3/4" />
+          <div className="skeleton h-4 w-full" />
+          <div className="skeleton h-4 w-5/6" />
+        </div>
+      ) : isError || !doc ? (
+        <QueryErrorState title="Could not open this document" error={error} />
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4 text-body-sm text-text-tertiary">
+            {doc.author && (
+              <span>By <span className="text-text-secondary">{doc.author.characterName || doc.author.discordUsername}</span></span>
+            )}
+            <span className="font-mono text-xs">Updated {formatDate(doc.updatedAt)}</span>
+            {doc.tags.map((tag) => <Tag key={tag} color="bills">{tag}</Tag>)}
+            {isGoogleDocsHttpUrl(doc.googleDocUrl) && (
+              <a
+                href={doc.googleDocUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-accent-primary hover:underline ml-auto"
+              >
+                Google Doc <Icon name="external" size={13} />
+              </a>
+            )}
+          </div>
+
+          <Tabs
+            idPrefix="document"
+            label="Document views"
+            items={[
+              { key: 'read', label: 'Read' },
+              { key: 'history', label: 'History' },
+            ]}
+            value={tab}
+            onChange={setTab}
+            className="mb-5"
+          />
+
+          <div {...tabPanelProps('document', tab)}>
+          {tab === 'read' ? (
+            body.trim() ? (
+              <article className="text-body text-text-primary leading-[1.8] max-w-[70ch]">
+                {renderMarkdown(body)}
+              </article>
+            ) : (
+              <p className="text-body-sm italic text-text-tertiary">
+                {doc.googleDocUrl ? 'This document lives in Google Docs and has not been cached yet.' : 'This document is empty.'}
+              </p>
+            )
+          ) : (
+            <VersionHistoryPanel doc={doc} />
+          )}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 // ---- Main Documents Page ----
 
 export function Documents() {
-  const [collection, setCollection] = useState('all');
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
+  const [url, setUrl] = useUrlState({ collection: 'all', q: '', page: 1, doc: '' });
+  const { collection, q: debouncedSearch, page } = url;
+  // `?doc=<slug>` opens the reader, so documents are linkable (and the
+  // command palette can jump straight to one).
+  const openSlug = url.doc || null;
+  const setOpenSlug = (slug: string | null) => setUrl({ doc: slug ?? '' });
+  const [search, setSearch] = useUrlText(debouncedSearch, (q) => setUrl({ q, page: 1 }));
+  const setPage = (p: number) => setUrl({ page: p });
   const limit = 20;
 
   const { data: collections } = useDocumentCollections();
-  const { data, isLoading, isError, error } = useDocuments({
+  const { data, isLoading, isError, error, isPlaceholderData } = useDocuments({
     collection: collection !== 'all' ? collection : undefined,
-    search: search || undefined,
+    search: debouncedSearch || undefined,
     page,
     limit,
   });
 
-  if (isLoading) return <PageSkeleton />;
-  if (isError) {
+  if (isLoading && !data) return <PageSkeleton />;
+  if (isError && !data) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load documents" error={error} />
       </div>
     );
@@ -215,27 +302,23 @@ export function Documents() {
   const documents = data?.data ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / limit);
+  const collectionTag = (type?: string) =>
+    type === 'legislation' ? 'bills' : type === 'worldbuilding' ? 'simulation' : 'tickets';
 
   const columns: Column<Document>[] = [
     {
       key: 'title',
       header: 'Title',
+      primary: true,
       render: (row) => (
-        <div>
-          <button
-            onClick={() =>
-              setExpandedDocId(expandedDocId === row.id ? null : row.id)
-            }
-            className="font-display font-medium text-text-primary hover:text-accent-primary transition-colors text-left"
-          >
-            {row.title}
-          </button>
-          {row.hierarchyLevel > 0 && (
-            <span className="text-text-tertiary ml-1">
-              {'  '.repeat(row.hierarchyLevel)}
-            </span>
-          )}
-        </div>
+        <button
+          onClick={() => setOpenSlug(row.slug)}
+          className="font-display font-semibold text-[1.0625rem] leading-snug text-text-primary hover:text-accent-primary transition-colors text-left"
+          style={row.hierarchyLevel > 0 ? { paddingLeft: `${row.hierarchyLevel * 0.875}rem` } : undefined}
+        >
+          {row.hierarchyLevel > 0 && <span className="text-text-tertiary mr-1" aria-hidden="true">↳</span>}
+          {row.title}
+        </button>
       ),
     },
     {
@@ -252,10 +335,11 @@ export function Documents() {
       key: 'type',
       header: 'Type',
       minWidth: '100px',
+      hideOnMobile: true,
       render: (row) => {
         const typeName = row.collection?.type;
         return typeName ? (
-          <Tag color={typeName === 'legislation' ? 'bills' : typeName === 'worldbuilding' ? 'simulation' : 'tickets'}>
+          <Tag color={collectionTag(typeName)}>
             {collectionTypeLabel[typeName] || typeName}
           </Tag>
         ) : <span className="text-text-tertiary">—</span>;
@@ -274,19 +358,22 @@ export function Documents() {
       header: 'Author',
       render: (row) => (
         <span className="text-body-sm text-text-secondary">
-          {row.author?.characterName || '—'}
+          {row.author?.characterName || row.author?.discordUsername || '—'}
         </span>
       ),
     },
     {
       key: 'tags',
       header: 'Tags',
+      hideOnMobile: true,
       render: (row) => (
-        <div className="flex flex-wrap gap-1">
-          {row.tags.slice(0, 3).map((tag) => (
-            <Tag key={tag} color="bills">{tag}</Tag>
-          ))}
-        </div>
+        row.tags.length === 0 ? <span className="text-text-tertiary">—</span> : (
+          <div className="flex flex-wrap gap-1">
+            {row.tags.slice(0, 3).map((tag) => (
+              <Tag key={tag} color="bills">{tag}</Tag>
+            ))}
+          </div>
+        )
       ),
     },
     {
@@ -294,66 +381,52 @@ export function Documents() {
       header: 'Updated',
       mono: true,
       minWidth: '100px',
-      render: (row) => new Date(row.updatedAt).toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'short', year: 'numeric',
-      }),
+      render: (row) => formatDate(row.updatedAt),
     },
   ];
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Documents</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Worldbuilding, reference, and constitutional documents
-          </p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Documents"
+        subtitle={<>Constitutional, reference, and worldbuilding records &mdash; {plural(total, 'document')}</>}
+      />
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
-        {/* Search */}
-        <div className="flex-1 min-w-[200px] max-w-sm">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); setExpandedDocId(null); }}
-            placeholder="Search documents..."
-            className="w-full bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-primary"
-          />
-        </div>
-
-        {/* Collection filter */}
-        <div className="flex items-center gap-2">
-          <label className="text-label-ui text-text-tertiary">Collection</label>
+      <FilterBar>
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search titles and text…"
+          label="Search documents"
+        />
+        <FilterField label="Collection">
           <select
             value={collection}
-            onChange={(e) => { setCollection(e.target.value); setPage(1); setExpandedDocId(null); }}
-            className="bg-card border border-border-subtle rounded-card px-3 py-1.5 text-body-sm font-body text-text-primary focus:outline-none focus:border-accent-primary"
+            onChange={(e) => setUrl({ collection: e.target.value, page: 1 })}
+            className="field"
           >
-            <option value="all">All Collections</option>
+            <option value="all">All collections</option>
             {collections?.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
-        </div>
-      </div>
+        </FilterField>
+      </FilterBar>
 
       {/* Collection cards overview */}
-      {collection === 'all' && collections && collections.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+      {collection === 'all' && !debouncedSearch && collections && collections.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-8">
           {collections.map((col) => (
             <button
               key={col.id}
-              onClick={() => { setCollection(col.id); setPage(1); setExpandedDocId(null); }}
-              className="card border-l-accent-bills text-left hover:border-border transition-colors"
+              onClick={() => setUrl({ collection: col.id, page: 1 })}
+              className="card text-left hover:bg-hover/40"
             >
-              <h3 className="text-heading-2 text-text-primary mb-1">{col.name}</h3>
+              <h2 className="text-heading-2 text-text-primary mb-1">{col.name}</h2>
               {col.description && (
                 <p className="text-body-sm text-text-secondary line-clamp-2">{col.description}</p>
               )}
-              <Tag color={col.type === 'legislation' ? 'bills' : col.type === 'worldbuilding' ? 'simulation' : 'tickets'} className="mt-2">
+              <Tag color={collectionTag(col.type)} className="mt-2">
                 {collectionTypeLabel[col.type] || col.type}
               </Tag>
             </button>
@@ -361,37 +434,15 @@ export function Documents() {
         </div>
       )}
 
-      {/* Table */}
-      <div className="card border-l-accent-bills">
+      <div className={`card card-flush transition-opacity ${isPlaceholderData ? 'opacity-60' : ''}`} aria-busy={isPlaceholderData}>
         <DataTable
           columns={columns}
           data={documents}
           rowKey={(row) => row.id}
-          emptyMessage="No documents in this collection."
+          caption="Documents"
+          emptyMessage={debouncedSearch ? 'No documents match that search.' : 'No documents in this collection.'}
         />
       </div>
-
-      {/* Expanded version history panel */}
-      {expandedDocId && (() => {
-        const doc = documents.find((d) => d.id === expandedDocId);
-        if (!doc) return null;
-        return (
-          <div className="mt-4 card border-l-accent-bills">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-heading-2 text-text-secondary">
-                Version History: {doc.title}
-              </h2>
-              <button
-                onClick={() => setExpandedDocId(null)}
-                className="text-body-sm text-text-tertiary hover:text-text-secondary transition-colors"
-              >
-                Close
-              </button>
-            </div>
-            <VersionHistoryPanel doc={doc} />
-          </div>
-        );
-      })()}
 
       <Pagination
         currentPage={page}
@@ -399,6 +450,8 @@ export function Documents() {
         onPageChange={setPage}
         className="mt-6 justify-center flex"
       />
+
+      {openSlug && <DocumentReader slug={openSlug} onClose={() => setOpenSlug(null)} />}
     </div>
   );
 }

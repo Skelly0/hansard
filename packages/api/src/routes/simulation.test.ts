@@ -76,7 +76,25 @@ describe('simulation routes', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(mocks.advanceTime).toHaveBeenCalledWith(expect.anything(), 2, 'staff-player');
+    expect(mocks.advanceTime).toHaveBeenCalledWith(expect.anything(), 2, 'staff-player', { notes: null });
+  });
+
+  it('forwards staff notes to advanceTime so they reach the history log', async () => {
+    const app = await appWithSimulationRoutes();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/simulation/advance',
+      payload: { ticks: 1, notes: 'Year-end advance' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mocks.advanceTime).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      'staff-player',
+      { notes: 'Year-end advance' },
+    );
   });
 
   it('defaults missing advance body to one tick', async () => {
@@ -88,7 +106,7 @@ describe('simulation routes', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(mocks.advanceTime).toHaveBeenCalledWith(expect.anything(), 1, 'staff-player');
+    expect(mocks.advanceTime).toHaveBeenCalledWith(expect.anything(), 1, 'staff-player', { notes: null });
   });
 
   it('rejects unsupported clock tick units', async () => {
@@ -125,7 +143,32 @@ describe('simulation routes', () => {
       'Head Trauma',
       'major',
       'staff-player',
-      { durationYears: 5 },
+      { durationYears: 5, notes: null },
+    );
+  });
+
+  it('forwards staff ailment notes to manualAilment', async () => {
+    const app = await appWithSimulationRoutes();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/simulation/ailment',
+      payload: {
+        playerId: 'player-1',
+        condition: 'Pneumonia',
+        severity: 'critical',
+        notes: 'Caught at the winter session',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mocks.manualAilment).toHaveBeenCalledWith(
+      expect.anything(),
+      'player-1',
+      'Pneumonia',
+      'critical',
+      'staff-player',
+      { notes: 'Caught at the winter session' },
     );
   });
 });

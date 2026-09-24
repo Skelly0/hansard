@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -59,7 +59,7 @@ export interface BillStatusEntry {
   fromStatus?: string;
   toStatus: string;
   changedById: string;
-  changedBy?: { id: string; characterName: string };
+  changedBy?: { id: string; characterName: string | null; discordUsername?: string };
   notes?: string;
   simTick?: number;
   simDate?: string;
@@ -85,7 +85,8 @@ type LegacyBillVoterApiRow = Omit<BillVoter, 'playerId' | 'characterName'> & {
 };
 
 export interface BillDetail extends Bill {
-  statusLog: BillStatusEntry[];
+  /** Not embedded by `GET /bills/:slug`; use `useBillStatusLog`. */
+  statusLog?: BillStatusEntry[];
   voters?: BillVoter[];
 }
 
@@ -115,6 +116,9 @@ export function useBills(filters?: BillFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['bills', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: Bill[]; total: number }>(`/bills${qs ? `?${qs}` : ''}`),
   });
 }
@@ -171,6 +175,7 @@ export function useSearchBills(query?: string) {
 export function useCreateBill() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: (bill: { title?: string } | undefined) => (bill?.title ? `“${bill.title}” submitted` : 'Bill submitted') },
     mutationFn: (body: { title: string; billType?: 'google_doc' | 'short'; googleDocUrl?: string | null; content?: string; summary?: string; tags?: string[]; policyAreas?: string[]; authorId?: string }) =>
       api.post<Bill>('/bills', body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['bills'] }); },
@@ -180,6 +185,7 @@ export function useCreateBill() {
 export function useUpdateBill() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Bill updated', errorMessage: 'Could not update the bill' },
     mutationFn: ({ slug, ...body }: { slug: string; tags?: string[]; summary?: string; policyAreas?: string[] }) =>
       api.patch<Bill>(`/bills/${slug}`, body),
     onSuccess: (_d, vars) => {
@@ -192,6 +198,7 @@ export function useUpdateBill() {
 export function useCacheBillContent() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Bill text refreshed from Google Docs', errorMessage: 'Could not refresh the bill text' },
     mutationFn: (slug: string) => api.post(`/bills/${slug}/cache`),
     onSuccess: (_d, slug) => { qc.invalidateQueries({ queryKey: ['bills', slug] }); },
   });
@@ -200,6 +207,7 @@ export function useCacheBillContent() {
 export function useCreateBillVote() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Vote opened on the bill', errorMessage: 'Could not open a vote' },
     mutationFn: (slug: string) => api.post(`/bills/${slug}/create-vote`),
     onSuccess: (_d, slug) => { qc.invalidateQueries({ queryKey: ['bills', slug] }); },
   });
@@ -208,6 +216,7 @@ export function useCreateBillVote() {
 export function useEnterNpcVote() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'NPC house vote recorded' },
     mutationFn: ({ slug, ...body }: { slug: string; yea: number; nay: number; abstain: number; notes?: string }) =>
       api.post(`/bills/${slug}/npc-vote`, body),
     onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['bills', vars.slug] }); },
@@ -217,6 +226,7 @@ export function useEnterNpcVote() {
 export function useUpdateBillEffects() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Estimated effects saved' },
     mutationFn: ({ slug, ...effects }: { slug: string; economy?: { description: string; affectedSectors?: string[]; estimatedGdpImpact?: string }; popsim?: { description: string; affectedGroups?: string[]; estimatedApprovalImpact?: string }; notes?: string }) =>
       api.patch<Bill>(`/bills/${slug}/effects`, effects),
     onSuccess: (_d, vars) => {
@@ -229,6 +239,7 @@ export function useUpdateBillEffects() {
 export function useEnactBill() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Bill enacted', errorMessage: 'Could not enact the bill' },
     mutationFn: (slug: string) => api.post(`/bills/${slug}/enact`),
     onSuccess: (_d, slug) => {
       qc.invalidateQueries({ queryKey: ['bills'] });

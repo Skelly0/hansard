@@ -950,6 +950,35 @@ describe('player profile/event privacy sanitizers', () => {
     expect(result.profileData).toBeNull();
   });
 
+  it('shows a player their own ailments without the staff notes', () => {
+    const own = sanitizePlayerProfile(profile, { userId: 'target-player', isStaff: false });
+    expect(own.ailments[0].condition).toBe('fever');
+    expect(own.ailments[0]).not.toHaveProperty('notes');
+
+    const staff = sanitizePlayerProfile(profile, { userId: 'staff', isStaff: true });
+    expect(staff.ailments[0].notes).toBe('staff-only detail');
+  });
+
+  it('strips staff ailment notes from a player\'s own ailment events', () => {
+    const base = {
+      playerId: 'viewer-player', description: 'x', simTick: null, simDate: null,
+      triggeredById: null, isAutomatic: false, createdAt: '2026-01-01T00:00:00.000Z',
+    };
+    const events = [
+      { ...base, id: 'acq', eventType: PlayerEventType.AILMENT_ACQUIRED, oldValue: null,
+        newValue: { condition: 'Stroke', severity: 'major', notes: 'staff plan' } },
+      { ...base, id: 'rec', eventType: PlayerEventType.AILMENT_RECOVERED, newValue: null,
+        oldValue: { condition: 'Stroke', severity: 'major', notes: 'staff plan' } },
+    ] as any;
+
+    const own = sanitizePlayerEvents(events, { userId: 'viewer-player', isStaff: false });
+    expect(own[0].newValue).toEqual({ condition: 'Stroke', severity: 'major' });
+    expect(own[1].oldValue).toEqual({ condition: 'Stroke', severity: 'major' });
+
+    const staff = sanitizePlayerEvents(events, { userId: 'staff', isStaff: true });
+    expect((staff[1].oldValue as any).notes).toBe('staff plan');
+  });
+
   it('filters private event types and values for other non-staff players', () => {
     const events = [
       {

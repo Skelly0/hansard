@@ -66,6 +66,18 @@ describe('list hook API contracts', () => {
     expect(api.get).not.toHaveBeenCalled();
   });
 
+  it('drops the previous player results once the search is cleared', async () => {
+    (api.get as any).mockResolvedValue({ data: [{ id: 'p1', characterName: 'Ada' }], total: 1 });
+    const { result, rerender } = renderHook(({ term }) => useSearchPlayers(term), {
+      wrapper,
+      initialProps: { term: 'ada' },
+    });
+    await waitFor(() => expect(result.current.data?.data).toHaveLength(1));
+
+    rerender({ term: '' });
+    expect(result.current.data).toBeUndefined();
+  });
+
   it('serializes ticket filters with backend names and offset pagination', async () => {
     renderHook(
       () => useTickets({

@@ -34,3 +34,17 @@ export function isGoogleDocsHttpUrl(url: string | null | undefined): url is stri
     return false;
   }
 }
+
+/**
+ * Return true only for https URLs: the rule for images the page loads by
+ * itself (portraits). An http image on the https site is mixed content, and
+ * unlike Discord (which proxies images) the browser fetches it directly.
+ */
+export function isHttpsUrl(url: string | null | undefined): url is string {
+  if (!url) return false;
+  try {
+    return new URL(url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}

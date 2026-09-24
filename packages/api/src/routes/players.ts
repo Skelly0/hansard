@@ -16,6 +16,8 @@ import {
   getPlayerOfficeHistory,
   getPlayerVotingRecord,
   sanitizePlayerProfile,
+  attachPlayerAffiliations,
+  attachEventActors,
   calculateStartingAgeFavourBonus,
   type CreateCharacterInput,
   type UpdateCharacterInput,
@@ -61,6 +63,23 @@ interface PlayerEventsQuery {
 interface ChangePartyBody {
   partyId: string;
   triggeredById?: string;
+}
+
+const CHARACTER_BIO_MAX = 2000;
+const CHARACTER_PORTRAIT_URL_MAX = 512;
+
+/**
+ * Portraits must be https: the web loads them directly, and an http image on
+ * the https site is mixed content. (Discord proxies images, so the bot's
+ * `/character edit` can stay looser.)
+ */
+function isHttpsUrl(value: string, maxLength: number): boolean {
+  if (value.length > maxLength) return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function uniqueViolationContext(err: unknown): string | null {
@@ -115,7 +134,11 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         countPlayers(fastify.db, filters),
       ]);
       const viewer = viewerFor(request);
-      return { data: players.map((player) => sanitizePlayerProfile(player, viewer)), total };
+      const data = await attachPlayerAffiliations(
+        fastify.db,
+        players.map((player) => sanitizePlayerProfile(player, viewer)),
+      );
+      return { data, total };
     },
   );
 
@@ -134,16 +157,18 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       const voteViewer = { userId: request.session.user!.id, isStaff: !!request.player?.isStaff };
       const canViewPrivate = canViewPrivatePlayerData(request, id);
 
-      const [offices, billResult, votes, favourBalances, events] = await Promise.all([
+      const [offices, billResult, votes, favourBalances, rawEvents, [profile]] = await Promise.all([
         getPlayerOfficeHistory(fastify.db, id),
         listBills(fastify.db, { authorId: id, limit: 100 }),
         getPlayerVotingRecord(fastify.db, id, voteViewer),
         canViewPrivate ? getPlayerBalances(fastify.db, id) : Promise.resolve([]),
         getPlayerEvents(fastify.db, id, { limit: 50 }, voteViewer),
+        attachPlayerAffiliations(fastify.db, [sanitizePlayerProfile(player, voteViewer)]),
       ]);
+      const events = await attachEventActors(fastify.db, rawEvents);
 
       const response: Record<string, unknown> = {
-        ...sanitizePlayerProfile(player, voteViewer),
+        ...profile,
         offices,
         bills: billResult.bills,
         votes,
@@ -253,13 +278,30 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
       }
       if (id !== user.id && request.player?.isStaff) request.staffActionLog = true;
 
-      if (!body.characterBio && !body.characterPortraitUrl && !body.characterName) {
+      const input = (body ?? {}) as UpdateCharacterInput;
+      if (
+        input.characterBio === undefined
+        && input.characterPortraitUrl === undefined
+        && input.characterName === undefined
+      ) {
         return reply.status(400).send({
           error: 'At least one field required: characterBio, characterPortraitUrl, characterName',
         });
       }
+      // Same limits as the `/character edit` modal.
+      if (input.characterBio !== undefined && (typeof input.characterBio !== 'string' || input.characterBio.length > CHARACTER_BIO_MAX)) {
+        return reply.status(400).send({ error: `characterBio must be at most ${CHARACTER_BIO_MAX} characters` });
+      }
+      if (input.characterPortraitUrl !== undefined && input.characterPortraitUrl !== null) {
+        const url = typeof input.characterPortraitUrl === 'string' ? input.characterPortraitUrl.trim() : '';
+        if (url !== '' && !isHttpsUrl(url, CHARACTER_PORTRAIT_URL_MAX)) {
+          return reply.status(400).send({
+            error: `characterPortraitUrl must be an https URL of at most ${CHARACTER_PORTRAIT_URL_MAX} characters`,
+          });
+        }
+      }
 
-      let patchBody: UpdateCharacterInput = body;
+      let patchBody: UpdateCharacterInput = input;
       if (body.characterName !== undefined) {
         const nameValidation = validateCharacterName(body.characterName);
         if (!nameValidation.ok) {
@@ -270,12 +312,21 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
         patchBody = { ...body, characterName: nameValidation.normalized! };
       }
 
-      const updated = await updateCharacter(fastify.db, id, patchBody);
+      let updated;
+      try {
+        updated = await updateCharacter(fastify.db, id, patchBody);
+      } catch (err) {
+        // Only character_name is unique among the fields this route writes.
+        if (uniqueViolationContext(err) !== null) {
+          return reply.status(409).send({ error: 'That character name is already taken' });
+        }
+        throw err;
+      }
       if (!updated) {
         return reply.status(404).send({ error: 'Player not found' });
       }
 
-      const nameChanged = body.characterName !== undefined;
+      const nameChanged = input.characterName !== undefined;
       return {
         player: sanitizePlayerProfile(updated, viewerFor(request)),
         nameChangeflagged: nameChanged,
@@ -294,7 +345,7 @@ export default fp(async function playerRoutes(fastify: FastifyInstance) {
     { preHandler: [requireAuth] },
     async (request, reply) => {
       const { id } = request.params;
-      const { partyId } = request.body;
+      const { partyId } = (request.body ?? {}) as ChangePartyBody;
       const user = request.session.user!;
 
       if (id !== user.id && !request.player?.isStaff) {

@@ -91,7 +91,8 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
             const sev = SEVERITY_DISPLAY[a.severity] ?? a.severity;
             const acquired = `acquired age ${a.acquiredAtAge} (tick ${a.acquiredAtTick})`;
             const recovery = a.healsAtDate ? `\n  Expected recovery: ${a.healsAtDate}` : '';
-            const notes = a.notes ? `\n  *${a.notes}*` : '';
+            // Ailment notes are staff free text; the player sees their ailments, not the notes.
+            const notes = actorIsStaff && a.notes ? `\n  *${a.notes}*` : '';
             return `• **${a.condition}** — ${sev}, ${acquired}${recovery}${notes}`;
           })
           .join('\n')

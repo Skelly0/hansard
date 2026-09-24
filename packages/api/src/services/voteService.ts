@@ -5,7 +5,7 @@
  * runoff generation, NPC confirmation, and certification (with auto
  * office-appointment on certified position elections).
  */
-import { eq, and, inArray, isNull, sql, gte, lte, or, ne } from 'drizzle-orm';
+import { eq, and, asc, exists, gt, ilike, inArray, isNotNull, isNull, sql, gte, lte, or, ne } from 'drizzle-orm';
 import type { Database } from '@hansard/db';
 import {
   elections,
@@ -14,6 +14,8 @@ import {
   bills,
   billStatusLog,
   players,
+  parties,
+  offices,
   officeHolders,
   simulationClock,
 } from '@hansard/db';
@@ -32,6 +34,7 @@ import { getStrategy } from './tallying/index.js';
 import { TwoRoundRunoffStrategy } from './tallying/twoRoundRunoff.js';
 import { ExhaustiveBallotStrategy } from './tallying/exhaustiveBallot.js';
 import { appointToOffice } from './officeService.js';
+import { lookupPlayerSummaries } from './playerSummaries.js';
 
 // ============================================================
 // Election update allowlist
@@ -134,6 +137,8 @@ export interface ListElectionsFilter {
   method?: VotingMethod;
   forOfficeId?: string;
   createdById?: string;
+  /** Case-insensitive title substring. */
+  search?: string;
   /** ISO date string — only return elections created on/after this. */
   since?: string;
   /** ISO date string — only return elections created on/before this. */
@@ -185,7 +190,8 @@ export interface CastBallotInput {
 export interface RegisterCandidateInput {
   electionId: string;
   playerId: string;
-  partyId?: string;
+  /** Omit to use the candidate's current party; null stands them as an independent. */
+  partyId?: string | null;
   statement?: string;
   nominatedById?: string;
 }
@@ -201,6 +207,37 @@ export interface NpcConfirmInput {
 // ============================================================
 // Service
 // ============================================================
+
+type EligibilityPlayer = {
+  characterName: string | null;
+  isAlive: boolean;
+  factionId: string | null;
+  partyId: string | null;
+};
+
+const NOT_IN_ELIGIBLE_OFFICE = 'You do not hold an eligible office for this election';
+
+/** Character-level reasons a player can't vote at all. */
+function characterIneligibility(player: EligibilityPlayer): string | null {
+  if (!player.characterName) return 'Character registration is required';
+  if (!player.isAlive) return 'Dead characters cannot vote';
+  return null;
+}
+
+/** Faction/party filters on an election's config. */
+function affiliationIneligibility(config: ElectionConfig, player: EligibilityPlayer): string | null {
+  if (config.eligibleFactions?.length) {
+    if (!player.factionId || !config.eligibleFactions.includes(player.factionId)) {
+      return 'Your faction is not eligible to vote in this election';
+    }
+  }
+  if (config.eligibleParties?.length) {
+    if (!player.partyId || !config.eligibleParties.includes(player.partyId)) {
+      return 'Your party is not eligible to vote in this election';
+    }
+  }
+  return null;
+}
 
 export class VoteService {
   constructor(private db: Database) {}
@@ -246,23 +283,9 @@ export class VoteService {
     }
 
     const config = election.config as ElectionConfig;
-    if (!player.characterName) {
-      return { eligible: false, reason: 'Character registration is required' };
-    }
-    if (!player.isAlive) {
-      return { eligible: false, reason: 'Dead characters cannot vote' };
-    }
-
-    if (config.eligibleFactions?.length) {
-      if (!player.factionId || !config.eligibleFactions.includes(player.factionId)) {
-        return { eligible: false, reason: 'Your faction is not eligible to vote in this election' };
-      }
-    }
-
-    if (config.eligibleParties?.length) {
-      if (!player.partyId || !config.eligibleParties.includes(player.partyId)) {
-        return { eligible: false, reason: 'Your party is not eligible to vote in this election' };
-      }
+    const blocked = characterIneligibility(player) ?? affiliationIneligibility(config, player);
+    if (blocked) {
+      return { eligible: false, reason: blocked };
     }
 
     if (config.eligibleOffices?.length) {
@@ -277,7 +300,7 @@ export class VoteService {
         .limit(1);
 
       if (!holding) {
-        return { eligible: false, reason: 'You do not hold an eligible office for this election' };
+        return { eligible: false, reason: NOT_IN_ELIGIBLE_OFFICE };
       }
     }
 
@@ -374,22 +397,98 @@ export class VoteService {
     if (!election) return null;
     if (!this.canViewElection(election, viewer)) return null;
 
-    const [electionCandidates, relatedBillSlug] = await Promise.all([
-      this.db.select().from(candidates).where(eq(candidates.electionId, id)),
-      this.lookupRelatedBillSlug(election.relatedBillId),
-    ]);
-
-    return { ...election, candidates: electionCandidates, relatedBillSlug };
+    const [enriched] = await this.enrichElectionsForDisplay([election]);
+    return enriched;
   }
 
-  private async lookupRelatedBillSlug(billId: string | null): Promise<string | null> {
-    if (!billId) return null;
-    const [row] = await this.db
-      .select({ slug: bills.slug })
-      .from(bills)
-      .where(eq(bills.id, billId))
-      .limit(1);
-    return row?.slug ?? null;
+  /**
+   * Attach the display summaries the web/MCP render next to raw ids:
+   * `relatedBillSlug`, `forOffice`, `createdBy`, and `candidates` (ordered by
+   * registration, each with nested `player`/`party` summaries). Candidate
+   * rows and names are public ballot information, so no viewer gating here —
+   * visibility of the election itself is enforced by the callers.
+   */
+  private async enrichElectionsForDisplay<T extends {
+    id: string;
+    relatedBillId: string | null;
+    forOfficeId: string | null;
+    createdById: string;
+  }>(rows: T[], { statements = true }: { statements?: boolean } = {}) {
+    if (rows.length === 0) return [];
+    const electionIds = rows.map((r) => r.id);
+    const officeIds = [...new Set(rows.map((r) => r.forOfficeId).filter((x): x is string => !!x))];
+    const creatorIds = [...new Set(rows.map((r) => r.createdById))];
+
+    const [withSlugs, officeRows, creatorMap, candidateRows] = await Promise.all([
+      this.enrichElectionsWithSlugs(rows),
+      officeIds.length
+        ? this.db.select({ id: offices.id, name: offices.name }).from(offices).where(inArray(offices.id, officeIds))
+        : Promise.resolve([] as { id: string; name: string }[]),
+      lookupPlayerSummaries(this.db, creatorIds),
+      this.db
+        .select({
+          // Lists need the roster (to name a winner) but not the manifestos,
+          // which are only read on the election's own page.
+          candidate: statements
+            ? candidates
+            : {
+              id: candidates.id,
+              electionId: candidates.electionId,
+              playerId: candidates.playerId,
+              partyId: candidates.partyId,
+              nominatedById: candidates.nominatedById,
+              isWithdrawn: candidates.isWithdrawn,
+              registeredAt: candidates.registeredAt,
+            },
+          playerCharacterName: players.characterName,
+          playerDiscordUsername: players.discordUsername,
+          partyName: parties.name,
+          partyShortName: parties.shortName,
+          partyColour: parties.colour,
+        })
+        .from(candidates)
+        .leftJoin(players, eq(candidates.playerId, players.id))
+        .leftJoin(parties, eq(candidates.partyId, parties.id))
+        .where(inArray(candidates.electionId, electionIds))
+        .orderBy(candidates.registeredAt, candidates.id),
+    ]);
+
+    const officeMap = new Map(officeRows.map((o) => [o.id, o]));
+    const candidatesByElection = new Map<string, unknown[]>();
+    for (const row of candidateRows) {
+      const c = row.candidate;
+      const list = candidatesByElection.get(c.electionId) ?? [];
+      list.push({
+        ...c,
+        player: {
+          id: c.playerId,
+          characterName: row.playerCharacterName,
+          discordUsername: row.playerDiscordUsername ?? '',
+        },
+        party: c.partyId && row.partyName
+          ? { id: c.partyId, name: row.partyName, shortName: row.partyShortName, colour: row.partyColour }
+          : null,
+      });
+      candidatesByElection.set(c.electionId, list);
+    }
+
+    return withSlugs.map((row) => {
+      const office = row.forOfficeId ? officeMap.get(row.forOfficeId) : undefined;
+      const creator = creatorMap.get(row.createdById);
+      return {
+        ...row,
+        forOffice: office ? { id: office.id, name: office.name } : null,
+        createdBy: creator
+          ? { id: creator.id, characterName: creator.characterName, discordUsername: creator.discordUsername }
+          : null,
+        candidates: (candidatesByElection.get(row.id) ?? []) as Array<Omit<typeof candidates.$inferSelect, 'statement'> & {
+          /** Absent on list responses; only the election detail carries statements. */
+          statement?: string | null;
+          player: { id: string; characterName: string | null; discordUsername: string };
+          party: { id: string; name: string; shortName: string | null; colour: string | null } | null;
+        }>,
+      };
+    });
   }
 
   private async isNpcHouseActive(executor: Pick<Database, 'select'> = this.db): Promise<boolean> {
@@ -483,6 +582,11 @@ export class VoteService {
     if (filters.type) {
       conditions.push(eq(elections.type, filters.type));
     }
+    if (filters.search?.trim()) {
+      // Escape LIKE wildcards so a literal % or _ in the query matches itself.
+      const term = filters.search.trim().slice(0, 100).replace(/[\\%_]/g, (c) => `\\${c}`);
+      conditions.push(ilike(elections.title, `%${term}%`));
+    }
     if (filters.method) {
       conditions.push(eq(elections.method, filters.method));
     }
@@ -525,7 +629,7 @@ export class VoteService {
         : this.db.select({ count: sql<number>`count(*)::int` }).from(elections),
     ]);
 
-    const enriched = await this.enrichElectionsWithSlugs(rows);
+    const enriched = await this.enrichElectionsForDisplay(rows, { statements: false });
     return { data: enriched, total: totalRow[0]?.count ?? enriched.length };
   }
 
@@ -597,12 +701,15 @@ export class VoteService {
       .where(eq(ballots.electionId, id));
 
     const voted = ballotRows.length;
-    // We don't have a true eligible-voter cohort yet (eligibility filters are
-    // a TODO on the schema), so fall back to the recorded turnout numerator
-    // from the latest tally if present. Otherwise treat votes cast as the
-    // denominator so the page renders meaningful numbers.
-    const recordedTurnout = (election?.results as ElectionResults | null)?.turnout;
-    const eligible = recordedTurnout && recordedTurnout > 0 ? recordedTurnout : voted;
+    // Eligible cohort: the snapshot frozen at tally time when there is one;
+    // otherwise the characters `getEligibilityForElection` would accept today
+    // (registered, alive, inside any faction/party/office filter).
+    // `results.turnout` is a *vote count*, so it can't be the denominator.
+    // Never report fewer eligible than voted (voters can die after casting),
+    // which would push turnout past 100%.
+    const snapshot = (election.results as ElectionResults | null)?.eligibleVoters;
+    const cohort = typeof snapshot === 'number' ? snapshot : await this.countEligibleVoters(config);
+    const eligible = Math.max(cohort, voted);
     const turnoutPct = eligible > 0 ? (voted / eligible) * 100 : 0;
 
     return {
@@ -612,6 +719,112 @@ export class VoteService {
       turnoutPct,
       totalBallots: voted, // legacy field — kept for any older consumers
     };
+  }
+
+  /**
+   * Open votes the viewer could still cast a ballot in: `voting_open`, not
+   * past close, and passing the exact `getEligibilityForElection` checks
+   * (which include "Already voted"). Soonest-closing first. Reaction-mode
+   * votes are included — reaction ballots are rows too, so a reaction clears
+   * the item just like a button or web ballot. The default limit is high
+   * because the web tags every awaited vote on the Voting list by id; the
+   * rows are tiny and the open set has already been loaded to filter it.
+   */
+  async listAwaitingBallot(viewer: ElectionViewer, limit = 100) {
+    const now = new Date();
+    const conditions = [eq(elections.status, 'voting_open'), gt(elections.votingClosesAt, now)];
+    const visibility = this.visibleElectionCondition(viewer);
+    if (visibility) conditions.push(visibility);
+
+    // Every open vote (there are only ever a handful); the limit applies
+    // after eligibility, or eligible votes past the first page would vanish.
+    const open = await this.db
+      .select()
+      .from(elections)
+      .where(and(...conditions))
+      .orderBy(asc(elections.votingClosesAt));
+    if (open.length === 0) return { items: [], total: 0 };
+
+    // The same rules as getEligibilityForElection, in a fixed number of
+    // queries rather than several per election: this runs on every sidebar
+    // poll.
+    const [player] = await this.db
+      .select({
+        characterName: players.characterName,
+        factionId: players.factionId,
+        partyId: players.partyId,
+        isAlive: players.isAlive,
+      })
+      .from(players)
+      .where(eq(players.id, viewer.userId))
+      .limit(1);
+    if (!player || characterIneligibility(player)) return { items: [], total: 0 };
+
+    const needsOffices = open.some((e) => (e.config as ElectionConfig).eligibleOffices?.length);
+    const [votedRows, officeRows] = await Promise.all([
+      this.db
+        .select({ electionId: ballots.electionId })
+        .from(ballots)
+        .where(and(eq(ballots.voterId, viewer.userId), inArray(ballots.electionId, open.map((e) => e.id)))),
+      needsOffices
+        ? this.db
+            .select({ officeId: officeHolders.officeId })
+            .from(officeHolders)
+            .where(and(eq(officeHolders.playerId, viewer.userId), isNull(officeHolders.endDate)))
+        : Promise.resolve([] as { officeId: string }[]),
+    ]);
+    const voted = new Set(votedRows.map((r) => r.electionId));
+    const offices = new Set(officeRows.map((r) => r.officeId));
+
+    const awaiting = open.filter((election) => {
+      const config = election.config as ElectionConfig;
+      if (voted.has(election.id)) return false;
+      if (affiliationIneligibility(config, player)) return false;
+      if (config.eligibleOffices?.length && !config.eligibleOffices.some((id) => offices.has(id))) return false;
+      return true;
+    });
+
+    const withSlugs = await this.enrichElectionsWithSlugs(awaiting.slice(0, limit));
+    return {
+      items: withSlugs.map((e) => ({
+        id: e.id,
+        title: e.title,
+        type: e.type,
+        method: e.method,
+        votingClosesAt: e.votingClosesAt,
+        useReactions: e.useReactions,
+        relatedBillSlug: e.relatedBillSlug,
+      })),
+      total: awaiting.length,
+    };
+  }
+
+  /** Count characters currently eligible under an election's config filters. */
+  private async countEligibleVoters(config: ElectionConfig): Promise<number> {
+    const conditions = [isNotNull(players.characterName), eq(players.isAlive, true)];
+    if (config.eligibleFactions?.length) {
+      conditions.push(inArray(players.factionId, config.eligibleFactions));
+    }
+    if (config.eligibleParties?.length) {
+      conditions.push(inArray(players.partyId, config.eligibleParties));
+    }
+    if (config.eligibleOffices?.length) {
+      conditions.push(exists(
+        this.db
+          .select({ id: officeHolders.id })
+          .from(officeHolders)
+          .where(and(
+            eq(officeHolders.playerId, players.id),
+            isNull(officeHolders.endDate),
+            inArray(officeHolders.officeId, config.eligibleOffices),
+          )),
+      ));
+    }
+    const [row] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(players)
+      .where(and(...conditions));
+    return Number(row?.count ?? 0);
   }
 
   async getEligibility(electionId: string, playerId: string, viewer?: ElectionViewer) {
@@ -743,6 +956,7 @@ export class VoteService {
         id: players.id,
         characterName: players.characterName,
         isAlive: players.isAlive,
+        partyId: players.partyId,
       })
       .from(players)
       .where(eq(players.id, input.playerId))
@@ -763,7 +977,9 @@ export class VoteService {
       .values({
         electionId: input.electionId,
         playerId: input.playerId,
-        partyId: input.partyId ?? null,
+        // Candidates stand under their current party unless a banner was
+        // chosen explicitly (null = independent), as `/vote candidate` does.
+        partyId: input.partyId === undefined ? (player.partyId ?? null) : input.partyId,
         statement: input.statement ?? null,
         nominatedById: input.nominatedById ?? null,
       })
@@ -928,10 +1144,21 @@ export class VoteService {
       newStatus = 'npc_pending';
     }
 
+    // Freeze the eligible cohort as of the count, so this election's turnout
+    // doesn't drift as characters are created, die, or switch party later.
+    // Display-only, so a failed count must never block the tally.
+    let eligibleVoters: number | undefined;
+    try {
+      eligibleVoters = await this.countEligibleVoters(config);
+    } catch {
+      eligibleVoters = undefined;
+    }
+
     // Build results JSONB
     const electionResults: ElectionResults = {
       totalVotes: result.totalVotes,
       turnout: result.turnout,
+      eligibleVoters,
       quorumMet: result.quorumMet,
       passed: result.passed,
       rounds: result.rounds,

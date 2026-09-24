@@ -41,6 +41,16 @@ describe('useTheme', () => {
     expect(document.documentElement.dataset.theme).toBe('light');
   });
 
+  it('prints in the light palette and restores dark afterwards', () => {
+    window.localStorage.setItem('hansard-theme', 'dark');
+    renderHook(() => useTheme(), { wrapper: wrap });
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    act(() => { window.dispatchEvent(new Event('beforeprint')); });
+    expect(document.documentElement.dataset.theme).toBe('light');
+    act(() => { window.dispatchEvent(new Event('afterprint')); });
+    expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
   it('reads explicit preference from localStorage on mount', () => {
     window.localStorage.setItem('hansard-theme', 'dark');
     const { result } = renderHook(() => useTheme(), { wrapper: wrap });

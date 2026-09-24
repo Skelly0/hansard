@@ -10,6 +10,8 @@ import { ApiError, api } from '../../api/client';
 
 vi.mock('@tanstack/react-router', () => ({
   Navigate: ({ to }: { to: string }) => <div data-testid="navigate">{to}</div>,
+  useNavigate: () => vi.fn(),
+  useRouterState: ({ select }: { select: (s: any) => unknown }) => select({ location: { href: '/tickets' } }),
 }));
 
 vi.mock('../../api/client', async (importOriginal) => {

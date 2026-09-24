@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -7,9 +7,9 @@ export interface Candidate {
   id: string;
   electionId: string;
   playerId: string;
-  player?: { id: string; characterName: string; discordUsername: string };
+  player?: { id: string; characterName: string | null; discordUsername: string };
   partyId?: string;
-  party?: { id: string; name: string; shortName?: string; colour?: string };
+  party?: { id: string; name: string; shortName?: string | null; colour?: string | null } | null;
   statement?: string;
   nominatedById?: string;
   isWithdrawn: boolean;
@@ -87,8 +87,10 @@ export interface Election {
   results?: ElectionResults | null;
   relatedBillId?: string | null;
   relatedBillSlug?: string | null;
+  /** Ballots come from emoji reactions on the Discord message, not buttons/web. */
+  useReactions?: boolean;
   createdById: string;
-  createdBy?: { id: string; characterName: string };
+  createdBy?: { id: string; characterName: string | null; discordUsername?: string };
   candidates?: Candidate[];
   createdAt: string;
   updatedAt: string;
@@ -101,6 +103,8 @@ interface ElectionFilters {
   type?: string;
   method?: string;
   forOffice?: string;
+  /** Case-insensitive title search. */
+  search?: string;
   /** ISO date string lower bound on createdAt. */
   since?: string;
   /** ISO date string upper bound on createdAt. */
@@ -118,6 +122,7 @@ export function useElections(filters?: ElectionFilters) {
   if (filters?.type) params.set('type', filters.type);
   if (filters?.method) params.set('method', filters.method);
   if (filters?.forOffice) params.set('forOfficeId', filters.forOffice);
+  if (filters?.search) params.set('search', filters.search);
   if (filters?.since) params.set('since', filters.since);
   if (filters?.until) params.set('until', filters.until);
   if (filters?.page) params.set('page', String(filters.page));
@@ -125,23 +130,60 @@ export function useElections(filters?: ElectionFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['elections', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: Election[]; total: number }>(`/elections${qs ? `?${qs}` : ''}`),
   });
 }
+
+/**
+ * Polling cadence. Every poll wakes the database (and rewrites the rolling
+ * session), so keep these slow: the production Postgres scales to zero when
+ * idle, and a fast poll from any open tab would hold it awake around the
+ * clock. Hidden tabs never poll (React Query's default), and a focused
+ * window refetches anything stale.
+ */
+/** While a vote is open, keep turnout, status and results roughly live. */
+const LIVE_REFRESH_MS = 60_000;
+/** The sidebar ballot badge: a nudge, not a live counter. */
+const AWAITING_REFRESH_MS = 5 * 60_000;
 
 export function useElection(id?: string) {
   return useQuery({
     queryKey: ['elections', id],
     queryFn: () => api.get<Election>(`/elections/${id}`),
     enabled: !!id,
+    refetchInterval: (query) => (query.state.data?.status === 'voting_open' ? LIVE_REFRESH_MS : false),
   });
 }
 
-export function useElectionResults(id?: string) {
+export interface AwaitingBallot {
+  id: string;
+  title: string;
+  type: string;
+  method: string;
+  votingClosesAt: string;
+  useReactions: boolean;
+  relatedBillSlug: string | null;
+}
+
+/** Open votes the signed-in player is eligible for and hasn't voted in yet. */
+export function useAwaitingBallots() {
+  return useQuery({
+    queryKey: ['elections', 'awaiting-me'],
+    queryFn: () => api.get<{ data: AwaitingBallot[]; total: number }>('/elections/awaiting-me'),
+    staleTime: 60_000,
+    refetchInterval: AWAITING_REFRESH_MS,
+  });
+}
+
+export function useElectionResults(id?: string, live = false) {
   return useQuery({
     queryKey: ['elections', id, 'results'],
     queryFn: () => api.get<ElectionResultsResponse>(`/elections/${id}/results`),
     enabled: !!id,
+    refetchInterval: live ? LIVE_REFRESH_MS : false,
   });
 }
 
@@ -153,17 +195,19 @@ export function useElectionRounds(id?: string) {
   });
 }
 
-export function useElectionTurnout(id?: string) {
+export function useElectionTurnout(id?: string, live = false) {
   return useQuery({
     queryKey: ['elections', id, 'turnout'],
     queryFn: () => api.get<{ eligible: number; voted: number; turnoutPct: number }>(`/elections/${id}/turnout`),
     enabled: !!id,
+    refetchInterval: live ? LIVE_REFRESH_MS : false,
   });
 }
 
 export function useCreateElection() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Vote created' },
     mutationFn: (body: { title: string; description?: string; type: string; method: string; config: Record<string, unknown>; votingOpensAt: string; votingClosesAt: string; forOfficeId?: string }) =>
       api.post<Election>('/elections', body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['elections'] }); },
@@ -173,6 +217,7 @@ export function useCreateElection() {
 export function useOpenVoting() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Voting is open' },
     mutationFn: (id: string) => api.post(`/elections/${id}/open`),
     onSuccess: (_d, id) => {
       qc.invalidateQueries({ queryKey: ['elections'] });
@@ -184,6 +229,7 @@ export function useOpenVoting() {
 export function useCloseVoting() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Voting closed' },
     mutationFn: (id: string) => api.post(`/elections/${id}/close`),
     onSuccess: (_d, id) => {
       qc.invalidateQueries({ queryKey: ['elections'] });
@@ -195,6 +241,7 @@ export function useCloseVoting() {
 export function useTallyVotes() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Votes tallied' },
     mutationFn: (id: string) => api.post(`/elections/${id}/tally`),
     onSuccess: (_d, id) => {
       qc.invalidateQueries({ queryKey: ['elections'] });
@@ -203,18 +250,40 @@ export function useTallyVotes() {
   });
 }
 
+/** Whether the signed-in player may vote right now (and why not, if not). */
+export function useElectionEligibility(id?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['elections', id, 'eligibility'],
+    queryFn: () => api.get<{ eligible: boolean; reason?: string }>(`/elections/${id}/eligibility`),
+    enabled: !!id && enabled,
+  });
+}
+
+export type BallotVote =
+  | { type: 'yea_nay_abstain'; choice: 'yea' | 'nay' | 'abstain' }
+  | { type: 'fptp'; candidateId: string }
+  | { type: 'two_round'; candidateId: string }
+  | { type: 'exhaustive'; candidateId: string }
+  | { type: 'ranked'; ranking: string[] }
+  | { type: 'approval'; approved: string[] };
+
 export function useCastBallot() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ electionId, vote }: { electionId: string; vote: unknown }) =>
+    meta: { successMessage: 'Ballot cast' },
+    mutationFn: ({ electionId, vote }: { electionId: string; vote: BallotVote }) =>
       api.post(`/elections/${electionId}/vote`, { vote }),
-    onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['elections', vars.electionId] }); },
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['elections', vars.electionId] });
+      qc.invalidateQueries({ queryKey: ['elections', 'awaiting-me'] });
+    },
   });
 }
 
 export function useRegisterCandidate() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Candidacy registered' },
     mutationFn: ({ electionId, statement, playerId, partyId }: { electionId: string; statement?: string; playerId?: string; partyId?: string }) =>
       api.post(`/elections/${electionId}/candidates`, { statement, playerId, partyId }),
     onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['elections', vars.electionId] }); },
@@ -224,6 +293,7 @@ export function useRegisterCandidate() {
 export function useWithdrawCandidate() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Candidate withdrawn' },
     mutationFn: ({ electionId, playerId }: { electionId: string; playerId: string }) =>
       api.delete(`/elections/${electionId}/candidates/${playerId}`),
     onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['elections', vars.electionId] }); },
@@ -233,6 +303,7 @@ export function useWithdrawCandidate() {
 export function useCertifyElection() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Result certified' },
     mutationFn: (id: string) => api.post(`/elections/${id}/certify`),
     onSuccess: (_d, id) => {
       qc.invalidateQueries({ queryKey: ['elections'] });
@@ -244,6 +315,7 @@ export function useCertifyElection() {
 export function useCreateRunoff() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Runoff round created' },
     mutationFn: (id: string) => api.post<Election>(`/elections/${id}/create-runoff`),
     onSuccess: (_d, id) => {
       qc.invalidateQueries({ queryKey: ['elections'] });
@@ -255,6 +327,7 @@ export function useCreateRunoff() {
 export function useNpcConfirm() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'NPC confirmation recorded' },
     mutationFn: ({ electionId, ...body }: { electionId: string; yea: number; nay: number; abstain: number; notes?: string }) =>
       api.post(`/elections/${electionId}/npc-confirm`, body),
     onSuccess: (_d, vars) => { qc.invalidateQueries({ queryKey: ['elections', vars.electionId] }); },

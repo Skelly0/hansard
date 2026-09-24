@@ -44,6 +44,21 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Fits a Discord embed field (1024), where the bot echoes statements. */
+export const CANDIDATE_STATEMENT_MAX = 1000;
+
+/** Statuses after which non-staff can no longer change who stood. */
+const CANDIDATE_LIST_LOCKED_STATUSES = new Set([
+  'voting_closed',
+  'tallied',
+  // A runoff round is built from the remaining candidates, so striking one
+  // off here would silently drop them from the next round.
+  'runoff_needed',
+  'npc_pending',
+  'certified',
+  'cancelled',
+]);
+
 export function sanitizeElectionUpdate(
   body: unknown,
   isStaff: boolean,
@@ -88,12 +103,26 @@ export default async function votingRoutes(fastify: FastifyInstance) {
         method: query.method as any,
         forOfficeId: query.forOfficeId,
         createdById: query.createdById,
+        search: query.search,
         since: query.since,
         until: query.until,
         limit: query.limit ? parseInt(query.limit, 10) : undefined,
         offset: query.offset ? parseInt(query.offset, 10) : undefined,
         page: query.page ? parseInt(query.page, 10) : undefined,
       }, getViewer(request));
+    },
+  );
+
+  // ------------------------------------------------------------------
+  // GET open votes still awaiting the signed-in player's ballot
+  // ------------------------------------------------------------------
+  fastify.get(
+    '/api/elections/awaiting-me',
+    { preHandler: [requireAuth] },
+    async (request) => {
+      const service = getService();
+      const { items, total } = await service.listAwaitingBallot(getViewer(request));
+      return { data: items, total };
     },
   );
 
@@ -284,7 +313,7 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const service = getService();
       const user = request.session.user!;
       const { id } = request.params as { id: string };
-      const body = request.body as any;
+      const body = (request.body ?? {}) as any;
       const election = await service.getElection(id, getViewer(request));
       if (!election) {
         return reply.status(404).send({ error: 'Election not found' });
@@ -300,13 +329,22 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       if (targetPlayerId !== user.id && request.player?.isStaff) {
         request.staffActionLog = true;
       }
+      if (body.statement !== undefined && body.statement !== null && typeof body.statement !== 'string') {
+        return reply.status(400).send({ error: 'statement must be a string' });
+      }
+      const statement = typeof body.statement === 'string' ? body.statement.trim() : '';
+      if (statement.length > CANDIDATE_STATEMENT_MAX) {
+        return reply.status(400).send({ error: `statement must be at most ${CANDIDATE_STATEMENT_MAX} characters` });
+      }
 
       try {
         const candidate = await service.registerCandidate({
           electionId: id,
           playerId: targetPlayerId,
-          partyId: body.partyId,
-          statement: body.statement,
+          // Candidates stand under their own current party (the service
+          // defaults to it); only staff may name a different banner.
+          partyId: request.player?.isStaff ? body.partyId : undefined,
+          statement: statement || undefined,
           // Always derive from session — never trust the client.
           nominatedById: user.id,
         });
@@ -338,6 +376,17 @@ export default async function votingRoutes(fastify: FastifyInstance) {
       const isOwner = election.createdById === user.id;
       if (!isSelf && !isOwner && !request.player?.isStaff) {
         return reply.status(403).send({ error: 'Not allowed to withdraw this candidate' });
+      }
+      // Once the count has started the candidate list is part of the record;
+      // only staff may correct it. A non-staff creator may strike someone
+      // else off only before voting opens, never mid-ballot.
+      if (!request.player?.isStaff) {
+        if (CANDIDATE_LIST_LOCKED_STATUSES.has(election.status)) {
+          return reply.status(409).send({ error: 'The candidate list is locked once voting has closed' });
+        }
+        if (!isSelf && election.status === 'voting_open') {
+          return reply.status(403).send({ error: 'Only the candidate or staff can withdraw a candidate while voting is open' });
+        }
       }
       if (!isSelf && !isOwner && request.player?.isStaff) {
         request.staffActionLog = true;

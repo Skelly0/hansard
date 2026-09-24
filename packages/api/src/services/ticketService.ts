@@ -1,4 +1,4 @@
-import { eq, desc, and, ilike, sql, count, avg, inArray, or, type SQL } from 'drizzle-orm';
+import { eq, desc, and, ilike, sql, count, avg, gte, inArray, or, type SQL } from 'drizzle-orm';
 import {
   tickets,
   ticketCategories,
@@ -16,6 +16,7 @@ import type {
   TicketPriority,
 } from '@hansard/shared';
 import { postToTicketThread } from './ticketThreadNotifier.js';
+import { lookupPlayerSummaries } from './playerSummaries.js';
 
 // ============================================================
 // Types
@@ -87,6 +88,10 @@ export interface TicketMetrics {
   inProgressCount: number;
   resolvedToday: number;
   avgResponseTimeMs: number | null;
+  /** Live (not resolved/closed) tickets per category, largest first. */
+  byCategory: { categoryId: string; categoryName: string; count: number }[];
+  /** Live (not resolved/closed) tickets per priority. */
+  byPriority: Record<string, number>;
 }
 
 export interface CreateCategoryData {
@@ -171,20 +176,8 @@ export class TicketService {
     return row?.characterName || row?.discordUsername || 'Unknown';
   }
 
-  private async lookupPlayerSummaries(ids: Iterable<string | null | undefined>): Promise<Map<string, TicketPlayerSummary>> {
-    const playerIds = [...new Set([...ids].filter((id): id is string => !!id))];
-    if (playerIds.length === 0) return new Map();
-
-    const rows = await this.db
-      .select({
-        id: players.id,
-        characterName: players.characterName,
-        discordUsername: players.discordUsername,
-      })
-      .from(players)
-      .where(inArray(players.id, playerIds));
-
-    return new Map(rows.map((row) => [row.id, row]));
+  private lookupPlayerSummaries(ids: Iterable<string | null | undefined>): Promise<Map<string, TicketPlayerSummary>> {
+    return lookupPlayerSummaries(this.db, ids);
   }
 
   // ----------------------------------------------------------
@@ -354,12 +347,48 @@ export class TicketService {
       .from(tickets)
       .where(whereClause);
 
+    const redacted = (rows as unknown as Ticket[]).map((ticket) =>
+      this.redactDiscordFieldsForViewer(ticket, viewer),
+    );
     return {
-      tickets: (rows as unknown as Ticket[]).map((ticket) =>
-        this.redactDiscordFieldsForViewer(ticket, viewer),
-      ),
+      tickets: await this.attachListSummaries(redacted),
       total,
     };
+  }
+
+  /**
+   * List rows carry only ids; the web list renders the category name/emoji
+   * and creator/assignee names, so attach the same display summaries that
+   * `getTicket` provides — batched, two queries regardless of page size.
+   */
+  private async attachListSummaries(rows: Ticket[]) {
+    if (rows.length === 0) return [];
+    const categoryIds = [...new Set(rows.map((t) => t.categoryId).filter(Boolean))];
+    const [categoryRows, playerSummaries] = await Promise.all([
+      categoryIds.length
+        ? this.db
+            .select({
+              id: ticketCategories.id,
+              name: ticketCategories.name,
+              emoji: ticketCategories.emoji,
+              colour: ticketCategories.colour,
+            })
+            .from(ticketCategories)
+            .where(inArray(ticketCategories.id, categoryIds))
+        : Promise.resolve([] as { id: string; name: string; emoji: string | null; colour: string | null }[]),
+      this.lookupPlayerSummaries(rows.flatMap((t) => [t.createdById, t.assignedToId])),
+    ]);
+    const categoryMap = new Map(
+      (Array.isArray(categoryRows) ? categoryRows : [])
+        .filter((row) => row && typeof row.id === 'string')
+        .map((row) => [row.id, row]),
+    );
+    return rows.map((ticket) => ({
+      ...ticket,
+      category: categoryMap.get(ticket.categoryId),
+      createdBy: playerSummaries.get(ticket.createdById),
+      assignedTo: ticket.assignedToId ? playerSummaries.get(ticket.assignedToId) : undefined,
+    }));
   }
 
   // ----------------------------------------------------------
@@ -872,7 +901,7 @@ export class TicketService {
       .from(tickets)
       .where(this.combineConditions([
         eq(tickets.status, 'resolved'),
-        sql`${tickets.resolvedAt} >= ${oneDayAgo}`,
+        gte(tickets.resolvedAt, oneDayAgo),
         visibilityCondition,
       ]));
 
@@ -893,11 +922,42 @@ export class TicketService {
       ? Math.round(parseFloat(String(avgResult[0].value)))
       : null;
 
+    // Breakdown of the live queue (anything not yet resolved/closed).
+    const liveCondition = this.combineConditions([
+      sql`${tickets.status} NOT IN ('resolved', 'closed')`,
+      visibilityCondition,
+    ]);
+    const [categoryRows, priorityRows] = await Promise.all([
+      this.db
+        .select({
+          categoryId: tickets.categoryId,
+          categoryName: ticketCategories.name,
+          count: count(),
+        })
+        .from(tickets)
+        .leftJoin(ticketCategories, eq(tickets.categoryId, ticketCategories.id))
+        .where(liveCondition)
+        .groupBy(tickets.categoryId, ticketCategories.name),
+      this.db
+        .select({ priority: tickets.priority, count: count() })
+        .from(tickets)
+        .where(liveCondition)
+        .groupBy(tickets.priority),
+    ]);
+
     return {
       openCount,
       inProgressCount,
       resolvedToday,
       avgResponseTimeMs,
+      byCategory: categoryRows
+        .map((row) => ({
+          categoryId: row.categoryId,
+          categoryName: row.categoryName ?? 'Uncategorised',
+          count: Number(row.count),
+        }))
+        .sort((a, b) => b.count - a.count),
+      byPriority: Object.fromEntries(priorityRows.map((row) => [row.priority, Number(row.count)])),
     };
   }
 }

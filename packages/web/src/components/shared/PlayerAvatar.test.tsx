@@ -35,4 +35,19 @@ describe('PlayerAvatar', () => {
     );
     expect(getByText('?')).toBeInTheDocument();
   });
+
+  it('loads an https portrait', () => {
+    const { container } = render(
+      <PlayerAvatar player={{ id: '1', characterName: 'Ada', discordUsername: 'ada', characterPortraitUrl: 'https://cdn.example.org/a.png' }} />,
+    );
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example.org/a.png');
+  });
+
+  it('does not load a plain-http portrait (mixed content), showing the initial instead', () => {
+    const { container, getByText } = render(
+      <PlayerAvatar player={{ id: '1', characterName: 'Ada', discordUsername: 'ada', characterPortraitUrl: 'http://tracker.example/px.gif' }} />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    expect(getByText('A')).toBeInTheDocument();
+  });
 });

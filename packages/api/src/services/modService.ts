@@ -1,4 +1,4 @@
-import { eq, and, desc, count, type SQL } from 'drizzle-orm';
+import { eq, and, desc, count, gte, inArray, or, type SQL } from 'drizzle-orm';
 import {
   modActions,
   modNotes,
@@ -6,6 +6,7 @@ import {
   type Database,
 } from '@hansard/db';
 import type { ModAction, ModNote } from '@hansard/shared';
+import { lookupPlayerSummaries, type PlayerSummary } from './playerSummaries.js';
 import type { ModActionType, AppealStatus } from '@hansard/shared';
 
 // ============================================================
@@ -227,47 +228,74 @@ export async function countActions(
 /**
  * Get moderation activity stats — counts by type, active actions total.
  */
+
+/**
+ * Attach `targetPlayer` / `moderator` display summaries so staff views show
+ * names instead of raw UUIDs. Moderation routes are staff-only.
+ */
+export async function attachModActionPeople<T extends { targetPlayerId: string; moderatorId: string }>(
+  db: Database,
+  actions: T[],
+): Promise<(T & { targetPlayer: PlayerSummary | null; moderator: PlayerSummary | null })[]> {
+  const byId = await lookupPlayerSummaries(db, actions.flatMap((a) => [a.targetPlayerId, a.moderatorId]));
+  return actions.map((action) => ({
+    ...action,
+    targetPlayer: byId.get(action.targetPlayerId) ?? null,
+    moderator: byId.get(action.moderatorId) ?? null,
+  }));
+}
+
 export async function getStats(db: Database): Promise<{
   totalActions: number;
   activeActions: number;
+  pendingAppeals: number;
+  warningsThisWeek: number;
   byType: Record<string, number>;
   recentActions: ModAction[];
 }> {
-  // Total actions
-  const [totalResult] = await db
-    .select({ value: count() })
-    .from(modActions);
-  const totalActions = totalResult?.value ?? 0;
-
-  // Active actions
-  const [activeResult] = await db
-    .select({ value: count() })
-    .from(modActions)
-    .where(eq(modActions.isActive, true));
-  const activeActions = activeResult?.value ?? 0;
-
-  // All actions for counting by type
-  const allActions = await db
-    .select({ type: modActions.type })
-    .from(modActions);
+  // Independent counts, fetched together. Per-type counts come from one
+  // GROUP BY (the total is their sum) rather than loading every action row.
+  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [typeCounts, [activeResult], [pendingResult], [warningsResult], recent] = await Promise.all([
+    db
+      .select({ type: modActions.type, value: count() })
+      .from(modActions)
+      .groupBy(modActions.type),
+    db
+      .select({ value: count() })
+      .from(modActions)
+      .where(eq(modActions.isActive, true)),
+    db
+      .select({ value: count() })
+      .from(modActions)
+      .where(eq(modActions.appealStatus, 'pending')),
+    db
+      .select({ value: count() })
+      .from(modActions)
+      .where(and(
+        or(eq(modActions.type, 'verbal_warning'), eq(modActions.type, 'formal_warning')),
+        gte(modActions.createdAt, oneWeekAgo),
+      )),
+    // Recent 10 actions
+    db
+      .select()
+      .from(modActions)
+      .orderBy(desc(modActions.createdAt))
+      .limit(10),
+  ]);
 
   const byType: Record<string, number> = {};
-  for (const a of allActions) {
-    byType[a.type] = (byType[a.type] ?? 0) + 1;
-  }
-
-  // Recent 10 actions
-  const recent = await db
-    .select()
-    .from(modActions)
-    .orderBy(desc(modActions.createdAt))
-    .limit(10);
+  for (const row of typeCounts) byType[row.type] = row.value;
+  const totalActions = typeCounts.reduce((sum, row) => sum + row.value, 0);
+  const activeActions = activeResult?.value ?? 0;
 
   return {
     totalActions,
     activeActions,
+    pendingAppeals: pendingResult?.value ?? 0,
+    warningsThisWeek: warningsResult?.value ?? 0,
     byType,
-    recentActions: recent.map(toModAction),
+    recentActions: await attachModActionPeople(db, recent.map(toModAction)),
   };
 }
 

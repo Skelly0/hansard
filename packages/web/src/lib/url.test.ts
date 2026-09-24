@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSafeHttpUrl, isGoogleDocsHttpUrl } from './url';
+import { isSafeHttpUrl, isGoogleDocsHttpUrl, isHttpsUrl } from './url';
 
 describe('isSafeHttpUrl', () => {
   it('accepts http and https URLs', () => {
@@ -37,5 +37,15 @@ describe('isGoogleDocsHttpUrl', () => {
     expect(isGoogleDocsHttpUrl('javascript:alert(1)//docs.google.com')).toBe(false);
     expect(isGoogleDocsHttpUrl(null)).toBe(false);
     expect(isGoogleDocsHttpUrl(undefined)).toBe(false);
+  });
+});
+
+describe('isHttpsUrl', () => {
+  it('accepts only https', () => {
+    expect(isHttpsUrl('https://cdn.example.org/a.png')).toBe(true);
+    expect(isHttpsUrl('http://cdn.example.org/a.png')).toBe(false);
+    expect(isHttpsUrl('javascript:alert(1)')).toBe(false);
+    expect(isHttpsUrl('')).toBe(false);
+    expect(isHttpsUrl(null)).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { eq, asc, sql, and, inArray } from 'drizzle-orm';
+import { eq, asc, sql, and, inArray, isNotNull } from 'drizzle-orm';
 import {
   parties,
   factions,
@@ -37,6 +37,15 @@ export interface GetPartiesOptions {
 /**
  * List parties with member counts, faction name, and leader name attached.
  */
+/**
+ * Who counts as a party member on public rosters: living characters. OAuth
+ * placeholder rows (no character yet) and the dead keep their `partyId` but
+ * are not members anyone can canvass, so they stay out of counts and lists.
+ */
+function partyMemberCondition() {
+  return and(eq(players.isActive, true), eq(players.isAlive, true), isNotNull(players.characterName));
+}
+
 export async function getParties(
   db: Database,
   options: GetPartiesOptions = {},
@@ -53,14 +62,14 @@ export async function getParties(
     ? await baseQuery.orderBy(asc(parties.name))
     : await baseQuery.where(eq(parties.isActive, true)).orderBy(asc(parties.name));
 
-  // Member counts grouped by partyId (active players only).
+  // Member counts grouped by partyId (living characters only).
   const counts = await db
     .select({
       partyId: players.partyId,
       count: sql<number>`count(*)::int`,
     })
     .from(players)
-    .where(eq(players.isActive, true))
+    .where(partyMemberCondition())
     .groupBy(players.partyId);
 
   const countMap = new Map<string | null, number>();
@@ -101,7 +110,7 @@ export async function getPartyById(
   db: Database,
   id: string,
 ): Promise<(PartyWithStats & {
-  members: { id: string; characterName: string | null; discordUsername: string }[];
+  members: { id: string; characterName: string | null; discordUsername: string; characterPortraitUrl: string | null }[];
 }) | null> {
   const [row] = await db
     .select({
@@ -120,9 +129,10 @@ export async function getPartyById(
       id: players.id,
       characterName: players.characterName,
       discordUsername: players.discordUsername,
+      characterPortraitUrl: players.characterPortraitUrl,
     })
     .from(players)
-    .where(and(eq(players.partyId, id), eq(players.isActive, true)))
+    .where(and(eq(players.partyId, id), partyMemberCondition()))
     .orderBy(asc(players.characterName));
 
   let leaderName: string | null = null;

@@ -5,10 +5,17 @@ import { useOffices } from '../api/hooks/useOffices';
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => <a href="/players/player-1">{children}</a>,
+  useSearch: () => ({}),
+  useNavigate: () => vi.fn(),
 }));
 
 vi.mock('../api/hooks/useOffices', () => ({
   useOffices: vi.fn(),
+  useOffice: vi.fn(() => ({})),
+}));
+
+vi.mock('../api/hooks/useAuth', () => ({
+  useAuth: () => ({ isStaff: false }),
 }));
 
 describe('Offices', () => {

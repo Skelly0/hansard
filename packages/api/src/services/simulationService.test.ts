@@ -326,6 +326,7 @@ describe('advanceTime timed ailment recovery', () => {
         acquiredAtAge: 40,
         durationYears: 5,
         healsAtDate: '2031-01-01',
+        notes: 'staff-only rationale',
       }],
     });
     const { db, eventLog, timeLog } = makeSimulationDb(clock, [player]);
@@ -353,6 +354,8 @@ describe('advanceTime timed ailment recovery', () => {
       simDate: '2031-01-01',
       isAutomatic: true,
     }));
+    const recovered = eventLog.find((e: any) => e.eventType === 'ailment_recovered') as any;
+    expect(recovered.oldValue).not.toHaveProperty('notes');
     expect(timeLog[0].summary).toMatchObject({
       recoveries: ['player-1'],
     });
@@ -679,7 +682,7 @@ describe('getHistory ordering', () => {
           if (table !== timeAdvanceLog) {
             throw new Error('Unexpected table in getHistory test');
           }
-          return {
+          const ordered = {
             orderBy: (orderArg: unknown) => {
               orderBySpy(orderArg);
               return {
@@ -688,11 +691,17 @@ describe('getHistory ordering', () => {
                   const sortedDesc = [...storedRows].sort(
                     (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
                   );
-                  return Promise.resolve(sortedDesc.slice(0, n));
+                  // getHistory joins the advancing player for display.
+                  return Promise.resolve(sortedDesc.slice(0, n).map((log) => ({
+                    log: { ...log, advancedById: 'staff-1' },
+                    advancedByCharacterName: 'Eleanor Ashcombe',
+                    advancedByDiscordUsername: 'eleanor',
+                  })));
                 },
               };
             },
           };
+          return { ...ordered, leftJoin: () => ordered };
         }),
       })),
     };
@@ -709,5 +718,8 @@ describe('getHistory ordering', () => {
       'advance-mid',
       'advance-old',
     ]);
+    expect(result[0]).toMatchObject({
+      advancedBy: { id: 'staff-1', characterName: 'Eleanor Ashcombe', discordUsername: 'eleanor' },
+    });
   });
 });

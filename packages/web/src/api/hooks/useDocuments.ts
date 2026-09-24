@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 
 // ---- Types ----
@@ -15,7 +15,7 @@ export interface DocumentCollection {
 export interface Document {
   id: string;
   collectionId: string;
-  collection?: DocumentCollection;
+  collection?: Pick<DocumentCollection, 'id' | 'name' | 'type'> | null;
   title: string;
   slug: string;
   content?: string;
@@ -26,7 +26,7 @@ export interface Document {
   hierarchyLevel: number;
   currentVersion: number;
   authorId?: string;
-  author?: { id: string; characterName: string };
+  author?: { id: string; characterName: string | null; discordUsername?: string } | null;
   accessLevel: string;
   tags: string[];
   createdAt: string;
@@ -40,8 +40,10 @@ export interface DocumentVersion {
   content: string;
   changeDescription?: string;
   editedById: string;
-  editedBy?: { id: string; characterName: string };
+  editedBy?: { id: string; characterName: string | null; discordUsername?: string } | null;
   amendmentBillId?: string;
+  /** Slug of the amending bill (web bill routes are keyed by slug). */
+  amendmentBillSlug?: string | null;
   createdAt: string;
 }
 
@@ -67,6 +69,9 @@ export function useDocuments(filters?: DocumentFilters) {
   const qs = params.toString();
   return useQuery({
     queryKey: ['documents', filters],
+    // Keep the current rows on screen while a new filter/page loads, so
+    // filter inputs are never unmounted mid-typing.
+    placeholderData: keepPreviousData,
     queryFn: () => api.get<{ data: Document[]; total: number }>(`/documents${qs ? `?${qs}` : ''}`),
   });
 }
@@ -105,6 +110,7 @@ export function useSearchDocuments(query?: string) {
 export function useCreateDocument() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Document created' },
     mutationFn: (body: { collectionId: string; title: string; content?: string; googleDocUrl?: string; tags?: string[] }) =>
       api.post<Document>('/documents', body),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['documents'] }); },
@@ -114,6 +120,7 @@ export function useCreateDocument() {
 export function useUpdateDocument() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: 'Document saved' },
     mutationFn: ({ slug, ...body }: { slug: string; content?: string; changeDescription?: string; tags?: string[] }) =>
       api.patch<Document>(`/documents/${slug}`, body),
     onSuccess: (_d, vars) => {
@@ -154,6 +161,7 @@ export function useDocumentDiff(slug?: string, from?: number, to?: number) {
 export function useRollbackDocument() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { successMessage: (_d: unknown, vars: { toVersion?: number }) => (vars?.toVersion ? `Rolled back to version ${vars.toVersion}` : 'Document rolled back'), errorMessage: 'Rollback failed' },
     mutationFn: ({ slug, toVersion }: { slug: string; toVersion: number }) =>
       api.post(`/documents/${slug}/rollback`, { toVersion }),
     onSuccess: (_d, vars) => {

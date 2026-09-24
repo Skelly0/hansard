@@ -1,4 +1,5 @@
 import { eq, and, desc, isNull, isNotNull, ilike, or, inArray, count, ne, type SQL } from 'drizzle-orm';
+import { lookupPlayerSummaries, type PlayerSummary } from './playerSummaries.js';
 import {
   players,
   playerEventLog,
@@ -47,7 +48,8 @@ export interface CreateCharacterInput {
 
 export interface UpdateCharacterInput {
   characterBio?: string;
-  characterPortraitUrl?: string;
+  /** Empty string or null clears the portrait. */
+  characterPortraitUrl?: string | null;
   characterName?: string;
 }
 
@@ -388,32 +390,45 @@ export async function updateCharacter(
     updates.characterBio = data.characterBio;
   }
   if (data.characterPortraitUrl !== undefined) {
-    updates.characterPortraitUrl = data.characterPortraitUrl;
+    const portrait = typeof data.characterPortraitUrl === 'string' ? data.characterPortraitUrl.trim() : '';
+    updates.characterPortraitUrl = portrait || null;
+    // A new portrait URL supersedes any Discord direct-upload reference;
+    // otherwise `/character view` keeps refreshing the old attachment.
+    const profile = existing.profileData as Record<string, unknown> | null;
+    if (profile && 'characterPortraitAttachment' in profile) {
+      const { characterPortraitAttachment: _dropped, ...rest } = profile;
+      updates.profileData = Object.keys(rest).length > 0 ? rest : null;
+    }
   }
-  if (data.characterName !== undefined && data.characterName !== existing.characterName) {
-    updates.characterName = data.characterName;
-
-    // Log name change — these get flagged for staff review
-    await db.insert(playerEventLog).values({
-      playerId: id,
-      eventType: PlayerEventType.NAME_CHANGE,
-      description: `Name changed from "${existing.characterName}" to "${data.characterName}"`,
-      oldValue: { characterName: existing.characterName },
-      newValue: { characterName: data.characterName },
-    });
-  }
+  const renamed = data.characterName !== undefined && data.characterName !== existing.characterName;
+  if (renamed) updates.characterName = data.characterName;
 
   if (Object.keys(updates).length === 0) {
     return existing;
   }
 
-  const [updated] = await db
-    .update(players)
-    .set(updates)
-    .where(eq(players.id, id))
-    .returning();
+  // The update and its name-change log commit together: a rename that loses
+  // the unique-name race (23505) must not leave a "Name changed" event behind.
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(players)
+      .set(updates)
+      .where(eq(players.id, id))
+      .returning();
 
-  return toPlayerProfile(updated);
+    if (renamed) {
+      // Name changes get flagged for staff review.
+      await tx.insert(playerEventLog).values({
+        playerId: id,
+        eventType: PlayerEventType.NAME_CHANGE,
+        description: `Name changed from "${existing.characterName}" to "${data.characterName}"`,
+        oldValue: { characterName: existing.characterName },
+        newValue: { characterName: data.characterName },
+      });
+    }
+
+    return toPlayerProfile(updated);
+  });
 }
 
 /**
@@ -600,7 +615,7 @@ export async function getPlayerHealth(
 
   return {
     healthStatus: player.healthStatus,
-    ailments: player.ailments,
+    ailments: !viewer || viewer.isStaff ? player.ailments : withoutStaffAilmentNotes(player.ailments),
     events: sanitizePlayerEvents(healthEvents.map(toPlayerEvent), viewer),
   };
 }
@@ -722,6 +737,14 @@ function toPlayerEvent(row: typeof playerEventLog.$inferSelect): PlayerEvent {
   };
 }
 
+/**
+ * Ailment `notes` are staff free text (planning, rationale); the affected
+ * player may see their own ailments but never the notes.
+ */
+export function withoutStaffAilmentNotes(ailments: Ailment[]): Ailment[] {
+  return ailments.map(({ notes: _notes, ...rest }) => rest);
+}
+
 export function sanitizePlayerProfile(
   profile: PlayerProfile,
   viewer?: PlayerPrivacyViewer,
@@ -732,10 +755,88 @@ export function sanitizePlayerProfile(
   return {
     ...profile,
     healthStatus: canViewOwnHealth || !profile.isAlive ? profile.healthStatus : null,
-    ailments: canViewOwnHealth ? profile.ailments : [],
+    ailments: canViewOwnHealth ? withoutStaffAilmentNotes(profile.ailments) : [],
     staffRole: null,
     profileData: null,
   };
+}
+
+export interface AffiliationSummary {
+  id: string;
+  name: string;
+  shortName: string | null;
+  colour: string | null;
+}
+
+/**
+ * Attach public `party` / `faction` display summaries to player profiles.
+ * The web roster, dossier, graveyard, and filters render these nested objects
+ * (and build their filter dropdowns from them); the raw profile only carries
+ * `partyId` / `factionId`.
+ */
+export async function attachPlayerAffiliations<T extends { partyId: string | null; factionId: string | null }>(
+  db: Database,
+  profiles: T[],
+): Promise<(T & { party: AffiliationSummary | null; faction: AffiliationSummary | null })[]> {
+  const partyIds = [...new Set(profiles.map((p) => p.partyId).filter((x): x is string => !!x))];
+  const factionIds = [...new Set(profiles.map((p) => p.factionId).filter((x): x is string => !!x))];
+  const [partyRows, factionRows] = await Promise.all([
+    partyIds.length
+      ? db
+          .select({ id: parties.id, name: parties.name, shortName: parties.shortName, colour: parties.colour })
+          .from(parties)
+          .where(inArray(parties.id, partyIds))
+      : Promise.resolve([] as AffiliationSummary[]),
+    factionIds.length
+      ? db
+          .select({ id: factions.id, name: factions.name, shortName: factions.shortName, colour: factions.colour })
+          .from(factions)
+          .where(inArray(factions.id, factionIds))
+      : Promise.resolve([] as AffiliationSummary[]),
+  ]);
+  const partyMap = new Map(partyRows.map((row) => [row.id, row]));
+  const factionMap = new Map(factionRows.map((row) => [row.id, row]));
+  return profiles.map((profile) => ({
+    ...profile,
+    party: profile.partyId ? partyMap.get(profile.partyId) ?? null : null,
+    faction: profile.factionId ? factionMap.get(profile.factionId) ?? null : null,
+  }));
+}
+
+/**
+ * Attach a `triggeredBy` name summary to events that already carry a
+ * `triggeredById` (the id itself is already part of the public event shape).
+ */
+export async function attachEventActors<T extends { triggeredById: string | null }>(
+  db: Database,
+  events: T[],
+): Promise<(T & { triggeredBy: PlayerSummary | null })[]> {
+  const actorMap = await lookupPlayerSummaries(db, events.map((e) => e.triggeredById));
+  return events.map((event) => ({
+    ...event,
+    triggeredBy: event.triggeredById ? actorMap.get(event.triggeredById) ?? null : null,
+  }));
+}
+
+const AILMENT_EVENT_TYPES = new Set<string>([
+  PlayerEventType.AILMENT_ACQUIRED,
+  PlayerEventType.AILMENT_RECOVERED,
+]);
+
+function withoutNotesField<T>(value: T): T {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !('notes' in value)) return value;
+  const { notes: _notes, ...rest } = value as Record<string, unknown>;
+  return rest as T;
+}
+
+/**
+ * Ailment events carry the ailment as their payload. New writes leave staff
+ * notes out (`ailmentEventPayload`), but rows written before that still
+ * hold them, so strip them again on the way out to the player.
+ */
+function withoutAilmentEventNotes(event: PlayerEvent): PlayerEvent {
+  if (!AILMENT_EVENT_TYPES.has(event.eventType)) return event;
+  return { ...event, oldValue: withoutNotesField(event.oldValue), newValue: withoutNotesField(event.newValue) };
 }
 
 export function sanitizePlayerEvents(
@@ -747,7 +848,7 @@ export function sanitizePlayerEvents(
     (event) => event.eventType !== PlayerEventType.DEATH_PENDING,
   );
   if (withoutStaffOnlyEvents.every((event) => event.playerId === viewer.userId)) {
-    return withoutStaffOnlyEvents;
+    return withoutStaffOnlyEvents.map(withoutAilmentEventNotes);
   }
 
   const publicTypes = new Set<string>(PUBLIC_PLAYER_EVENT_TYPES);

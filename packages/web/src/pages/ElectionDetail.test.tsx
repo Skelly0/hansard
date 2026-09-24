@@ -29,6 +29,8 @@ vi.mock('../api/hooks/useVoting', () => ({
   useNpcConfirm: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useWithdrawCandidate: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useRegisterCandidate: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCastBallot: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useElectionEligibility: () => ({ data: { eligible: false, reason: 'Already voted' }, isLoading: false }),
   hasTalliedResults: (res: any): boolean =>
     !!res && 'finalTallies' in res && res.finalTallies !== undefined,
   isSealedOpenResults: (res: any): boolean => !!res && res.sealed === true,
@@ -96,8 +98,8 @@ describe('ElectionDetail', () => {
     // The user should see a clear "sealed until close" callout.
     expect(screen.getByText(/sealed until close/i)).toBeInTheDocument();
 
-    // And no "Margin:" / finalTallies-derived bars should be rendered.
-    expect(screen.queryByText(/Margin:/i)).not.toBeInTheDocument();
+    // And no majority / finalTallies-derived bars should be rendered.
+    expect(screen.queryByText('Majority')).not.toBeInTheDocument();
   });
 
   it('does not crash for unsealed-pending shape ({ sealed: false, results: null })', () => {
@@ -129,7 +131,7 @@ describe('ElectionDetail', () => {
 
     expect(() => render(<ElectionDetail />)).not.toThrow();
     // No tally bars yet.
-    expect(screen.queryByText(/Margin:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Majority')).not.toBeInTheDocument();
   });
 
   it('renders final tallies for a fully-tallied election', () => {
@@ -167,6 +169,135 @@ describe('ElectionDetail', () => {
     } as any);
 
     expect(() => render(<ElectionDetail />)).not.toThrow();
-    expect(screen.getByText(/Margin:/i)).toBeInTheDocument();
+    expect(screen.getByText('Majority')).toBeInTheDocument();
+    // 7 yea to 3 nay: a majority of 4, and the chair declares for the ayes.
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.getByText('The Ayes have it.')).toBeInTheDocument();
+  });
+
+  describe('candidacy', () => {
+    const baseElection = {
+      id: 'election-1',
+      title: 'Speaker Election',
+      type: 'custom',
+      method: 'fptp',
+      config: {},
+      roundNumber: 1,
+      votingOpensAt: '2026-05-01T00:00:00.000Z',
+      votingClosesAt: '2026-05-08T00:00:00.000Z',
+      createdById: 'someone-else',
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    const me = { id: 'me', username: 'me', isStaff: false, permissions: [] };
+    const myCandidacy = {
+      id: 'c1', electionId: 'election-1', playerId: 'me', isWithdrawn: false, registeredAt: '2026-05-01T00:00:00.000Z',
+      player: { id: 'me', characterName: 'Ada Vance', discordUsername: 'me' },
+    };
+
+    const renderWith = (election: Record<string, unknown>) => {
+      vi.mocked(useAuth).mockReturnValue({
+        user: me, isStaff: false, permissions: [], hasPermission: () => false, logout: vi.fn(), isLoading: false,
+      } as any);
+      vi.mocked(useElection).mockReturnValue({ data: { ...baseElection, ...election }, isLoading: false, isError: false } as any);
+      vi.mocked(useElectionResults).mockReturnValue({ data: undefined } as any);
+      render(<ElectionDetail />);
+    };
+
+    it('offers to stand while nominations are open', () => {
+      renderWith({ status: 'nominations_open', candidates: [] });
+      expect(screen.getByRole('button', { name: 'Stand as a candidate' })).toBeTruthy();
+      expect(screen.getByText('No one has stood yet.')).toBeTruthy();
+    });
+
+    it('lets a candidate withdraw themselves instead of standing again', () => {
+      renderWith({ status: 'nominations_open', candidates: [myCandidacy] });
+      expect(screen.queryByRole('button', { name: 'Stand as a candidate' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Withdraw my candidacy' })).toBeTruthy();
+    });
+
+    it('hides withdrawal once the count has begun', () => {
+      renderWith({ status: 'tallied', candidates: [myCandidacy] });
+      expect(screen.queryByRole('button', { name: 'Withdraw my candidacy' })).toBeNull();
+    });
+
+    it('does not offer candidacy on a yea/nay motion', () => {
+      renderWith({ status: 'nominations_open', method: 'yea_nay_abstain', candidates: [] });
+      expect(screen.queryByRole('button', { name: 'Stand as a candidate' })).toBeNull();
+    });
+  });
+
+  describe('staff desk', () => {
+    const renderAs = (election: Record<string, unknown>) => {
+      vi.mocked(useAuth).mockReturnValue({
+        user: { id: 'staff', username: 'staff', isStaff: true, permissions: [] },
+        isStaff: true, permissions: [], hasPermission: () => true, logout: vi.fn(), isLoading: false,
+      } as any);
+      vi.mocked(useElection).mockReturnValue({
+        data: {
+          id: 'election-1', title: 'Desk', type: 'referendum', method: 'yea_nay_abstain', config: {},
+          roundNumber: 1, votingOpensAt: '2026-05-01T00:00:00.000Z', votingClosesAt: '2026-05-08T00:00:00.000Z',
+          createdById: 'x', candidates: [], createdAt: '2026-05-01T00:00:00.000Z', updatedAt: '2026-05-01T00:00:00.000Z',
+          ...election,
+        },
+        isLoading: false, isError: false,
+      } as any);
+      vi.mocked(useElectionResults).mockReturnValue({ data: undefined } as any);
+      render(<ElectionDetail />);
+    };
+    const actionNames = () =>
+      ['Open voting', 'Close voting', 'Tally votes', 'Create runoff', 'Enter NPC confirmation', 'Certify results']
+        .filter((name) => screen.queryByRole('button', { name }));
+
+    it('offers only closing while a vote is open (tally needs a closed vote)', () => {
+      renderAs({ status: 'voting_open' });
+      expect(actionNames()).toEqual(['Close voting']);
+    });
+
+    it('offers the tally once voting has closed', () => {
+      renderAs({ status: 'voting_closed' });
+      expect(actionNames()).toEqual(['Tally votes']);
+    });
+
+    it('offers certification, not NPC entry, for a tallied referendum', () => {
+      renderAs({ status: 'tallied' });
+      expect(actionNames()).toEqual(['Certify results']);
+    });
+
+    it('waits for the NPC house before certifying a position election that needs it', () => {
+      renderAs({ status: 'npc_pending', type: 'position_election', method: 'fptp', config: { requiresNpcConfirmation: true } });
+      expect(actionNames()).toEqual(['Enter NPC confirmation']);
+    });
+
+    it('does not offer certification after the NPC house rejects the result', () => {
+      renderAs({
+        status: 'tallied', type: 'position_election', method: 'fptp', forOfficeId: 'office-1',
+        config: { requiresNpcConfirmation: true }, npcConfirmation: { status: 'rejected' },
+        results: { winners: ['p1'] },
+      });
+      expect(actionNames()).toEqual([]);
+      expect(screen.getByText(/NPC house rejected this result/)).toBeTruthy();
+    });
+
+    it('does not offer certification for a position election with no winner', () => {
+      renderAs({ status: 'tallied', type: 'position_election', method: 'fptp', forOfficeId: 'office-1', results: { winners: [] } });
+      expect(actionNames()).toEqual([]);
+      expect(screen.getByText(/no winner/)).toBeTruthy();
+    });
+
+    it('certifies a confirmed position election with a winner', () => {
+      renderAs({
+        status: 'tallied', type: 'position_election', method: 'fptp', forOfficeId: 'office-1',
+        config: { requiresNpcConfirmation: true }, npcConfirmation: { status: 'confirmed' },
+        results: { winners: ['p1'] },
+      });
+      expect(actionNames()).toEqual(['Certify results']);
+    });
+
+    it('says there is nothing left to do once certified', () => {
+      renderAs({ status: 'certified' });
+      expect(actionNames()).toEqual([]);
+      expect(screen.getByText('Nothing left to do')).toBeTruthy();
+    });
   });
 });

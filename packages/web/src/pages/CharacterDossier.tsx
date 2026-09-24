@@ -1,5 +1,9 @@
 import { useState } from 'react';
 import { useParams, Link } from '@tanstack/react-router';
+import { EditCharacterModal } from '../components/players/EditCharacterModal';
+import { MetricStrip } from '../components/shared/MetricCard';
+import { Tabs, tabPanelProps } from '../components/shared/Tabs';
+import { useUrlState } from '../hooks/useUrlState';
 import {
   usePlayer,
   usePlayerEvents,
@@ -12,6 +16,9 @@ import { DataTable, type Column } from '../components/shared/DataTable';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { useAuth } from '../api/hooks/useAuth';
+import { Breadcrumbs, SectionHeading } from '../components/shared/PageHeader';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { firstSentence, formatSimDate, sentenceCase } from '../lib/format';
 import type { PlayerDossier, PlayerEvent } from '../api/hooks/usePlayers';
 
 // ---------------------------------------------------------------------------
@@ -36,7 +43,7 @@ function healthDotClass(status?: string | null): string {
     major: 'bg-[var(--health-major)]',
     critical: 'bg-[var(--health-critical)]',
   };
-  return status ? map[status] || map.healthy : 'bg-border-default';
+  return status ? map[status] || map.healthy : 'bg-border-strong';
 }
 
 function formatDate(iso?: string): string {
@@ -56,19 +63,18 @@ export function CharacterDossier() {
   const { id } = useParams({ strict: false }) as { id: string };
   const { data: player, isLoading, isError } = usePlayer(id);
   const { user, isStaff } = useAuth();
-  const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [bioExpanded, setBioExpanded] = useState(false);
+  const [url, setUrl] = useUrlState({ tab: 'overview' });
+  const activeTab = (TABS.some((t) => t.key === url.tab) ? url.tab : 'overview') as Tab;
+  const setActiveTab = (tab: Tab) => setUrl({ tab });
+  const [editing, setEditing] = useState(false);
+  useDocumentTitle(player ? player.characterName || player.discordUsername : null);
 
   if (isLoading) return <PageSkeleton />;
   if (isError || !player) {
     return (
-      <div className="p-8">
-        <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-          <Link to="/players" className="hover:text-accent-primary transition-colors">Players</Link>
-          <span>/</span>
-          <span className="font-mono">{id}</span>
-        </div>
-        <div className="card border-l-status-rejected">
+      <div className="page">
+        <Breadcrumbs items={[{ label: 'Players', to: '/players' }, { label: 'Not found' }]} />
+        <div className="notice notice-danger">
           <h1 className="text-heading-1 text-text-primary mb-2">Character not found</h1>
           <p className="text-body text-text-secondary">
             We couldn&rsquo;t load this dossier. The character may have been removed, or the link may be wrong.
@@ -80,61 +86,67 @@ export function CharacterDossier() {
 
   const displayName = player.characterName || player.discordUsername;
   const isDeceased = !player.isAlive;
-  const canViewFavours = isStaff || user?.id === player.id;
+  const isSelf = user?.id === player.id;
+  const canViewFavours = isStaff || isSelf;
+  // Placeholder login rows have no character to edit yet.
+  const canEdit = (isStaff || isSelf) && !!player.characterName;
   const visibleTabs = canViewFavours ? TABS : TABS.filter((tab) => tab.key !== 'favours');
   const currentTab = activeTab === 'favours' && !canViewFavours ? 'overview' : activeTab;
 
-  const bioExcerptLength = 280;
-  const hasBioOverflow = (player.characterBio?.length ?? 0) > bioExcerptLength;
+  // One-line epigraph under the name; the full biography lives in Overview.
   const bioText = player.characterBio || '';
-  const bioExcerpt = hasBioOverflow && !bioExpanded
-    ? bioText.slice(0, bioExcerptLength).replace(/\s+\S*$/, '') + '\u2026'
-    : bioText;
+  const epigraph = firstSentence(bioText, 180);
 
   return (
-    <div className="p-8">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-body-sm text-text-tertiary mb-4">
-        <Link to="/players" className="hover:text-accent-primary transition-colors">
-          Players
-        </Link>
-        <span>/</span>
-        <span className="text-text-secondary">{displayName}</span>
-      </div>
+    <div className="page">
+      <Breadcrumbs items={[{ label: isDeceased ? 'Graveyard' : 'Players', to: isDeceased ? '/graveyard' : '/players' }, { label: displayName }]} />
 
       {/* Deceased banner */}
       {isDeceased && (
-        <div className="border-t-[3px] border-accent-graveyard bg-accent-graveyard/[0.06] rounded-card px-5 py-3 mb-6">
-          <p className="text-body text-text-secondary italic font-body">
-            Deceased
-            {player.causeOfDeath && <> &mdash; {player.causeOfDeath}</>}
-            {player.currentAge != null && <>, age {player.currentAge}</>}
+        <div className="notice notice-muted mb-6 flex items-center gap-3">
+          <span className="text-label-ui text-text-tertiary">In memoriam</span>
+          <p className="text-dek text-text-secondary">
+            {player.causeOfDeath ? player.causeOfDeath : 'Deceased'}
+            {player.currentAge != null && <>, aged {player.currentAge}</>}
           </p>
         </div>
       )}
 
       {/* ── Header ── */}
-      <div className="flex items-start gap-6 mb-8">
-        {/* Portrait */}
-        <PlayerAvatar player={player} size="md" />
+      <div className="flex items-start gap-5 sm:gap-7 mb-6">
+        {/* Portrait, mounted like a photograph in a file */}
+        <div className="rounded-full p-1 bg-card border border-border-subtle shadow-card flex-shrink-0">
+          <PlayerAvatar player={player} size="xl" muted={isDeceased} />
+        </div>
 
         {/* Name + meta */}
         <div className="flex-1 min-w-0">
           {/* Name row */}
           <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-display truncate">{displayName}</h1>
-            <div
-              className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                isDeceased ? 'bg-status-deceased' : healthDotClass(player.healthStatus)
-              }`}
-              title={isDeceased ? 'Deceased' : player.healthStatus ?? 'Private'}
-            />
+            <h1 className="text-display break-words min-w-0">{displayName}</h1>
+            {(isDeceased || player.healthStatus) && (
+              <span
+                className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                  isDeceased ? 'bg-status-deceased' : healthDotClass(player.healthStatus)
+                }`}
+                role="img"
+                aria-label={isDeceased ? 'Deceased' : `Health: ${player.healthStatus}`}
+                title={isDeceased ? 'Deceased' : sentenceCase(player.healthStatus)}
+              />
+            )}
           </div>
 
           {/* Tags row */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
             {player.party && (
-              <Tag color="players">{player.party.shortName || player.party.name}</Tag>
+              <Link
+                to="/parties"
+                search={{ party: player.party.id } as never}
+                className="rounded-tag hover:opacity-80"
+                title={`${player.party.name}: view party`}
+              >
+                <Tag color="players">{player.party.shortName || player.party.name}</Tag>
+              </Link>
             )}
             {player.faction && (
               <Tag color="primary">{player.faction.shortName || player.faction.name}</Tag>
@@ -153,13 +165,13 @@ export function CharacterDossier() {
             {player.birthDate && (
               <span>
                 <span className="text-label-ui text-text-tertiary mr-1">Born</span>
-                <span className="font-mono text-xs">{formatDate(player.birthDate)}</span>
+                <span className="font-mono text-xs">{formatSimDate(player.birthDate)}</span>
               </span>
             )}
             {player.deathDate && (
               <span>
                 <span className="text-label-ui text-text-tertiary mr-1">Died</span>
-                <span className="font-mono text-xs">{formatDate(player.deathDate)}</span>
+                <span className="font-mono text-xs">{formatSimDate(player.deathDate)}</span>
               </span>
             )}
             <span>
@@ -168,49 +180,44 @@ export function CharacterDossier() {
             </span>
           </div>
 
-          {/* Bio excerpt */}
-          {bioText && (
-            <div>
-              <p className="text-body text-text-primary">{bioExcerpt}</p>
-              {hasBioOverflow && (
-                <button
-                  onClick={() => setBioExpanded(!bioExpanded)}
-                  className="text-body-sm text-accent-primary hover:underline font-medium mt-1"
-                >
-                  {bioExpanded ? 'Show less' : 'Read more'}
-                </button>
-              )}
-            </div>
+          {canEdit && (
+            <button type="button" onClick={() => setEditing(true)} className="btn-secondary text-body-sm mb-3">
+              {isSelf ? 'Edit your character' : 'Edit character'}
+            </button>
+          )}
+
+          {/* Epigraph */}
+          {epigraph && currentTab !== 'overview' && (
+            <p className="text-dek text-text-secondary">{epigraph}</p>
           )}
         </div>
       </div>
 
+      <div className="rule-masthead mb-1" aria-hidden="true" />
+
       {/* ── Tabs ── */}
-      <div className="border-b border-border-subtle mb-6">
-        <nav className="flex gap-0 -mb-px">
-          {visibleTabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`text-label-ui px-4 py-2.5 border-b-2 transition-colors ${
-                currentTab === tab.key
-                  ? 'border-accent-primary text-text-primary'
-                  : 'border-transparent text-text-tertiary hover:text-text-secondary hover:border-border-subtle'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </div>
+      <Tabs
+        idPrefix="dossier"
+        label="Dossier sections"
+        items={visibleTabs}
+        value={currentTab}
+        onChange={setActiveTab}
+        className="mb-7 -mx-4 px-4 sm:mx-0 sm:px-0"
+      />
 
       {/* ── Tab content ── */}
-      {currentTab === 'overview' && <OverviewTab player={player} />}
-      {currentTab === 'offices' && <OfficesTab playerId={player.id} inlineOffices={player.offices} />}
-      {currentTab === 'legislation' && <LegislationTab playerId={player.id} inlineBills={player.bills} />}
-      {currentTab === 'votes' && <VotesTab playerId={player.id} inlineVotes={player.votes} />}
-      {currentTab === 'favours' && canViewFavours && <FavoursTab player={player} />}
-      {currentTab === 'history' && <HistoryTab playerId={player.id} inlineEvents={player.events} />}
+      <div {...tabPanelProps('dossier', currentTab)}>
+        {currentTab === 'overview' && <OverviewTab player={player} onEdit={isSelf && canEdit ? () => setEditing(true) : undefined} />}
+        {currentTab === 'offices' && <OfficesTab playerId={player.id} inlineOffices={player.offices} />}
+        {currentTab === 'legislation' && <LegislationTab playerId={player.id} inlineBills={player.bills} />}
+        {currentTab === 'votes' && <VotesTab playerId={player.id} inlineVotes={player.votes} />}
+        {currentTab === 'favours' && canViewFavours && <FavoursTab player={player} />}
+        {currentTab === 'history' && <HistoryTab playerId={player.id} inlineEvents={player.events} />}
+      </div>
+
+      {editing && (
+        <EditCharacterModal character={player} canRename={isStaff} onClose={() => setEditing(false)} />
+      )}
     </div>
   );
 }
@@ -219,14 +226,23 @@ export function CharacterDossier() {
 // Tab: Overview
 // ---------------------------------------------------------------------------
 
-function OverviewTab({ player }: { player: PlayerDossier }) {
+function OverviewTab({ player, onEdit }: { player: PlayerDossier; onEdit?: () => void }) {
   return (
     <div className="space-y-6">
+      {!player.characterBio && onEdit && (
+        <div className="card border-dashed bg-page flex flex-wrap items-center justify-between gap-3">
+          <p className="text-body-sm italic text-text-secondary">
+            Your dossier has no biography yet. Other players see this page.
+          </p>
+          <button type="button" onClick={onEdit} className="btn-secondary text-body-sm">Write one</button>
+        </div>
+      )}
+
       {/* Full bio */}
       {player.characterBio && (
         <div>
-          <h2 className="text-heading-2 text-text-secondary mb-3">Biography</h2>
-          <div className="card border-l-accent-players">
+          <SectionHeading>Biography</SectionHeading>
+          <div className="card">
             <p className="text-body text-text-primary whitespace-pre-wrap leading-relaxed">
               {player.characterBio}
             </p>
@@ -236,35 +252,29 @@ function OverviewTab({ player }: { player: PlayerDossier }) {
 
       {/* Basic stats grid */}
       <div>
-        <h2 className="text-heading-2 text-text-secondary mb-3">At a Glance</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard
-            label="Party"
-            value={player.party?.name || 'Independent'}
-          />
-          <StatCard
-            label="Faction"
-            value={player.faction?.name || 'None'}
-          />
-          <StatCard
-            label="Health"
-            value={player.isAlive ? player.healthStatus ?? 'Private' : 'Deceased'}
-          />
-          <StatCard
-            label="Bills authored"
-            value={String(player.bills?.length ?? 0)}
-            mono
-          />
-        </div>
+        <SectionHeading>At a Glance</SectionHeading>
+        <MetricStrip
+          size="sm"
+          className="grid-cols-2 md:grid-cols-4"
+          metrics={[
+            { label: 'Party', value: player.party?.name || 'Independent' },
+            { label: 'Faction', value: player.faction?.name || 'None' },
+            {
+              label: 'Health',
+              value: player.isAlive ? (player.healthStatus ? sentenceCase(player.healthStatus) : 'Private') : 'Deceased',
+            },
+            { label: 'Bills authored', value: String(player.bills?.length ?? 0) },
+          ]}
+        />
       </div>
 
       {/* Ailments */}
       {player.ailments && player.ailments.length > 0 && (
         <div>
-          <h2 className="text-heading-2 text-text-secondary mb-3">Ailments</h2>
+          <SectionHeading>Ailments</SectionHeading>
           <div className="space-y-2">
             {player.ailments.map((a, i) => (
-              <div key={i} className="card border-l-accent-graveyard flex items-start gap-3">
+              <div key={i} className="card flex items-start gap-3">
                 <div
                   className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${
                     a.severity === 'critical'
@@ -300,16 +310,6 @@ function OverviewTab({ player }: { player: PlayerDossier }) {
   );
 }
 
-function StatCard({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="card border-l-accent-players">
-      <p className="text-label-ui text-text-tertiary mb-1">{label}</p>
-      <p className={`text-body text-text-primary font-medium ${mono ? 'font-mono text-sm' : ''}`}>
-        {value}
-      </p>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Tab: Offices
@@ -327,7 +327,7 @@ function OfficesTab({
 
   if (offices.length === 0) {
     return (
-      <div className="card border-l-accent-offices">
+      <div className="card">
         <p className="text-body text-text-tertiary italic">No offices held.</p>
       </div>
     );
@@ -335,13 +335,13 @@ function OfficesTab({
 
   return (
     <div className="space-y-3">
-      <h2 className="text-heading-2 text-text-secondary mb-1">Offices Held</h2>
+      <SectionHeading>Offices Held</SectionHeading>
       {offices.map((office, i) => {
         const isCurrent = !office.endDate;
         return (
           <div
             key={`${office.officeId}-${i}`}
-            className={`card border-l-accent-offices flex items-start gap-4 ${
+            className={`card flex items-start gap-4 ${
               isCurrent ? '' : 'opacity-80'
             }`}
           >
@@ -422,7 +422,7 @@ function LegislationTab({
         <Link
           to="/bills/$slug"
           params={{ slug: row.slug }}
-          className="text-text-primary hover:text-accent-primary transition-colors font-display font-medium"
+          className="text-text-primary hover:text-accent-primary transition-colors font-display font-semibold text-[1.0625rem] leading-snug"
         >
           {row.title}
         </Link>
@@ -449,8 +449,8 @@ function LegislationTab({
 
   return (
     <div>
-      <h2 className="text-heading-2 text-text-secondary mb-3">Legislation</h2>
-      <div className="card border-l-accent-bills">
+      <SectionHeading>Legislation</SectionHeading>
+      <div className="card card-flush">
         <DataTable
           columns={columns}
           data={bills}
@@ -481,7 +481,7 @@ function VotesTab({
       key: 'electionTitle',
       header: 'Election / Bill',
       render: (row) => (
-        <span className="text-text-primary font-display font-medium">
+        <span className="text-text-primary font-display font-semibold text-[1.0625rem] leading-snug">
           {row.electionTitle}
         </span>
       ),
@@ -515,8 +515,8 @@ function VotesTab({
 
   return (
     <div>
-      <h2 className="text-heading-2 text-text-secondary mb-3">Voting Record</h2>
-      <div className="card border-l-accent-voting">
+      <SectionHeading>Voting Record</SectionHeading>
+      <div className="card card-flush">
         <DataTable
           columns={columns}
           data={votes}
@@ -538,8 +538,8 @@ function FavoursTab({ player }: { player: PlayerDossier }) {
   if (favours.length === 0) {
     return (
       <div>
-        <h2 className="text-heading-2 text-text-secondary mb-3">Favours</h2>
-        <div className="card border-l-accent-favours">
+        <SectionHeading>Favours</SectionHeading>
+        <div className="card">
           <p className="text-body text-text-tertiary italic">No favour balances recorded.</p>
         </div>
       </div>
@@ -550,10 +550,10 @@ function FavoursTab({ player }: { player: PlayerDossier }) {
 
   return (
     <div>
-      <h2 className="text-heading-2 text-text-secondary mb-3">Favour Balances</h2>
+      <SectionHeading>Favour Balances</SectionHeading>
 
       {/* Horizontal bar chart */}
-      <div className="card border-l-accent-favours space-y-4">
+      <div className="card space-y-4">
         {favours.map((fav) => {
           const pct = Math.abs(fav.balance) / maxBalance * 100;
           const isNegative = fav.balance < 0;
@@ -601,8 +601,8 @@ function HistoryTab({
   if (events.length === 0) {
     return (
       <div>
-        <h2 className="text-heading-2 text-text-secondary mb-3">Event History</h2>
-        <div className="card border-l-accent-graveyard">
+        <SectionHeading>Event History</SectionHeading>
+        <div className="card">
           <p className="text-body text-text-tertiary italic">No events recorded.</p>
         </div>
       </div>
@@ -611,7 +611,7 @@ function HistoryTab({
 
   return (
     <div>
-      <h2 className="text-heading-2 text-text-secondary mb-3">Event History</h2>
+      <SectionHeading>Event History</SectionHeading>
       <div className="space-y-1">
         {events.map((event) => (
           <div

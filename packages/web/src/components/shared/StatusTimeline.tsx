@@ -14,11 +14,31 @@ interface StatusTimelineProps {
   className?: string;
 }
 
+function Marker({ state }: { state: 'past' | 'current' | 'future' }) {
+  if (state === 'past') {
+    return (
+      <span className="relative z-10 flex items-center justify-center w-4 h-4 rounded-full bg-text-secondary text-page">
+        <svg width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="m2.5 6.2 2.3 2.3 4.7-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </span>
+    );
+  }
+  if (state === 'current') {
+    return (
+      <span className="relative z-10 flex items-center justify-center w-4 h-4">
+        <span className="absolute inset-[-5px] rounded-full bg-accent-primary/20 animate-pulse-subtle" aria-hidden="true" />
+        <span className="w-4 h-4 rounded-full bg-accent-primary ring-2 ring-card" />
+      </span>
+    );
+  }
+  return <span className="relative z-10 w-4 h-4 rounded-full border-[1.5px] border-border-strong bg-card" />;
+}
+
 /**
- * Status timeline with connected dots.
- * - Past stages: filled dot, tertiary text
- * - Current stage: filled terracotta dot with pulse animation, primary text
- * - Future stages: hollow dot, subtle border colour
+ * Stages of a record's passage (a bill, a vote), on a single track.
+ * Past stages are ticked in ink, the current one glows terracotta, future
+ * ones are hollow on a dashed line.
  */
 export function StatusTimeline({
   stages,
@@ -26,118 +46,76 @@ export function StatusTimeline({
   horizontal = false,
   className = '',
 }: StatusTimelineProps) {
+  const stateOf = (i: number) => (i < currentIndex ? 'past' : i === currentIndex ? 'current' : 'future');
+
   if (horizontal) {
     return (
-      <div className={`flex items-start gap-0 overflow-x-auto ${className}`}>
+      // Focusable so keyboard users can scroll it when it overflows on phones.
+      <ol tabIndex={0} className={`flex items-start overflow-x-auto pb-1 rounded-card ${className}`} aria-label="Progress">
         {stages.map((stage, i) => {
-          const isPast = i < currentIndex;
-          const isCurrent = i === currentIndex;
-          const isFuture = i > currentIndex;
-
+          const state = stateOf(i);
           return (
-            <div key={stage.key} className="flex items-center">
-              {/* Stage */}
-              <div className="flex flex-col items-center min-w-[80px]">
-                {/* Dot */}
-                <div className="relative flex items-center justify-center">
-                  <div
-                    className={`w-3 h-3 rounded-full border-2 ${
-                      isCurrent
-                        ? 'bg-accent-primary border-accent-primary animate-pulse-subtle'
-                        : isPast
-                        ? 'bg-text-tertiary border-text-tertiary'
-                        : 'bg-transparent border-border-subtle'
-                    }`}
-                  />
-                </div>
-                {/* Label */}
+            <li
+              key={stage.key}
+              className="relative flex-1 min-w-[96px] flex flex-col items-center px-1"
+              aria-current={state === 'current' ? 'step' : undefined}
+            >
+              {/* Track to the next stage, from this marker's centre to the next. */}
+              {i < stages.length - 1 && (
                 <span
-                  className={`text-label-ui mt-2 text-center ${
-                    isCurrent
-                      ? 'text-text-primary'
-                      : isPast
-                      ? 'text-text-tertiary'
-                      : 'text-border-subtle'
-                  }`}
-                >
-                  {stage.label}
-                </span>
-                {stage.detail && (
-                  <span className={`font-mono text-xs mt-0.5 text-center ${
-                    isFuture ? 'text-border-subtle' : 'text-text-tertiary'
-                  }`}>
-                    {stage.detail}
-                  </span>
-                )}
-              </div>
-              {/* Connector line */}
-              {i < stages.length - 1 && (
-                <div
-                  className={`h-[2px] w-8 mt-1.5 flex-shrink-0 ${
-                    i < currentIndex ? 'bg-text-tertiary' : 'bg-border-subtle'
+                  aria-hidden="true"
+                  className={`absolute top-[7px] left-1/2 w-full ${
+                    i < currentIndex ? 'border-t-2 border-text-secondary' : 'border-t-2 border-dashed border-border'
                   }`}
                 />
               )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  // Vertical layout
-  return (
-    <div className={`flex flex-col ${className}`}>
-      {stages.map((stage, i) => {
-        const isPast = i < currentIndex;
-        const isCurrent = i === currentIndex;
-        const isFuture = i > currentIndex;
-
-        return (
-          <div key={stage.key} className="flex items-start">
-            {/* Dot + connector column */}
-            <div className="flex flex-col items-center mr-3">
-              <div
-                className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${
-                  isCurrent
-                    ? 'bg-accent-primary border-accent-primary animate-pulse-subtle'
-                    : isPast
-                    ? 'bg-text-tertiary border-text-tertiary'
-                    : 'bg-transparent border-border-subtle'
-                }`}
-              />
-              {i < stages.length - 1 && (
-                <div
-                  className={`w-[2px] flex-1 min-h-[24px] ${
-                    i < currentIndex ? 'bg-text-tertiary' : 'bg-border-subtle'
-                  }`}
-                />
-              )}
-            </div>
-            {/* Label */}
-            <div className="pb-4">
+              <Marker state={state} />
               <span
-                className={`text-body-sm font-medium ${
-                  isCurrent
-                    ? 'text-text-primary'
-                    : isPast
-                    ? 'text-text-tertiary'
-                    : 'text-border-subtle'
+                className={`text-label-ui text-[0.75rem] mt-2.5 text-center leading-tight ${
+                  state === 'current' ? 'text-text-primary' : state === 'past' ? 'text-text-secondary' : 'text-text-tertiary'
                 }`}
               >
                 {stage.label}
               </span>
               {stage.detail && (
-                <span className={`block font-mono text-xs ${
-                  isFuture ? 'text-border-subtle' : 'text-text-tertiary'
-                }`}>
-                  {stage.detail}
-                </span>
+                <span className="font-mono text-[0.6875rem] mt-1 text-center text-text-tertiary">{stage.detail}</span>
               )}
+            </li>
+          );
+        })}
+      </ol>
+    );
+  }
+
+  // Vertical layout
+  return (
+    <ol className={`flex flex-col ${className}`} aria-label="Progress">
+      {stages.map((stage, i) => {
+        const state = stateOf(i);
+        return (
+          <li key={stage.key} className="relative flex items-start gap-3 pb-5 last:pb-0" aria-current={state === 'current' ? 'step' : undefined}>
+            {i < stages.length - 1 && (
+              <span
+                aria-hidden="true"
+                className={`absolute left-[7px] top-4 bottom-0 ${
+                  i < currentIndex ? 'border-l-2 border-text-secondary' : 'border-l-2 border-dashed border-border'
+                }`}
+              />
+            )}
+            <Marker state={state} />
+            <div className="-mt-0.5">
+              <span
+                className={`text-body-sm font-medium ${
+                  state === 'current' ? 'text-text-primary' : state === 'past' ? 'text-text-secondary' : 'text-text-tertiary'
+                }`}
+              >
+                {stage.label}
+              </span>
+              {stage.detail && <span className="block font-mono text-xs text-text-tertiary">{stage.detail}</span>}
             </div>
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ol>
   );
 }

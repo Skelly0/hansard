@@ -1,5 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
+import { Link } from '@tanstack/react-router';
 import {
+  useParty,
   useParties,
   useCreateParty,
   useUpdateParty,
@@ -12,16 +14,18 @@ import { useAuth } from '../api/hooks/useAuth';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
-
-function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-}
+import { Modal } from '../components/shared/Modal';
+import { PageHeader, EmptyState } from '../components/shared/PageHeader';
+import { PlayerAvatar } from '../components/shared/PlayerAvatar';
+import { Skeleton } from '../components/shared/SkeletonLoader';
+import { useUrlState } from '../hooks/useUrlState';
+import { formatDate, plural } from '../lib/format';
 
 function ColourSwatch({ hex }: { hex: string | null }) {
   if (!hex) return null;
   return (
     <span
+      role="img"
       aria-label={`Party colour ${hex}`}
       className="inline-block w-3.5 h-3.5 rounded-full border border-border-subtle align-middle"
       style={{ backgroundColor: hex }}
@@ -73,32 +77,30 @@ function PartyFormModal({
   errorText: string | null;
 }) {
   const [form, setForm] = useState<PartyFormState>(initial);
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const update = <K extends keyof PartyFormState>(k: K, v: PartyFormState[K]) =>
     setForm((prev) => ({ ...prev, [k]: v }));
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <Modal
+      open
+      onClose={onClose}
+      title={isEdit ? 'Edit Party' : 'Found a Party'}
+      railClass="bg-accent-offices"
+      maxWidth="max-w-lg"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button
+            onClick={() => onSubmit(form)}
+            disabled={isPending || !form.name.trim()}
+            className="btn-primary"
+          >
+            {isPending ? 'Saving…' : isEdit ? 'Save changes' : 'Found party'}
+          </button>
+        </>
+      }
     >
-      <div ref={dialogRef} className="bg-card rounded-card shadow-modal-warm w-full max-w-lg overflow-hidden">
-        <div className="h-[3px] bg-accent-offices" />
-        <div className="p-6">
-          <div className="flex items-baseline justify-between mb-5">
-            <h2 className="text-heading-1 text-text-primary">
-              {isEdit ? 'Edit Party' : 'Found a Party'}
-            </h2>
-            <button onClick={onClose} className="text-text-tertiary hover:text-text-primary text-xl leading-none">×</button>
-          </div>
-
           <div className="space-y-4">
             <Field label="Name" required>
               <input
@@ -107,7 +109,7 @@ function PartyFormModal({
                 onChange={(e) => update('name', e.target.value)}
                 maxLength={128}
                 autoFocus
-                className="input-base"
+                className="field w-full"
               />
             </Field>
 
@@ -119,18 +121,27 @@ function PartyFormModal({
                   onChange={(e) => update('shortName', e.target.value)}
                   maxLength={16}
                   placeholder="e.g. LDP"
-                  className="input-base"
+                  className="field w-full"
                 />
               </Field>
               <Field label="Colour (hex)">
-                <input
-                  type="text"
-                  value={form.colour}
-                  onChange={(e) => update('colour', e.target.value)}
-                  maxLength={7}
-                  placeholder="#b94a48"
-                  className="input-base font-mono"
-                />
+                <span className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={form.colour}
+                    onChange={(e) => update('colour', e.target.value)}
+                    maxLength={7}
+                    placeholder="#b94a48"
+                    className="field w-full font-mono"
+                  />
+                  <input
+                    type="color"
+                    aria-label="Pick party colour"
+                    value={/^#[0-9a-f]{6}$/i.test(form.colour) ? form.colour : '#b94a48'}
+                    onChange={(e) => update('colour', e.target.value)}
+                    className="h-9 w-10 flex-shrink-0 rounded-card border border-border bg-card cursor-pointer p-0.5"
+                  />
+                </span>
               </Field>
             </div>
 
@@ -140,7 +151,7 @@ function PartyFormModal({
                 onChange={(e) => update('ideology', e.target.value)}
                 rows={2}
                 maxLength={256}
-                className="input-base resize-y"
+                className="field w-full resize-y"
               />
             </Field>
 
@@ -151,7 +162,7 @@ function PartyFormModal({
                   value={form.factionId}
                   onChange={(e) => update('factionId', e.target.value)}
                   placeholder="UUID"
-                  className="input-base font-mono text-xs"
+                  className="field w-full font-mono text-xs"
                 />
               </Field>
               <Field label="Discord Role ID">
@@ -160,63 +171,54 @@ function PartyFormModal({
                   value={form.discordRoleId}
                   onChange={(e) => update('discordRoleId', e.target.value)}
                   placeholder="snowflake"
-                  className="input-base font-mono text-xs"
+                  className="field w-full font-mono text-xs"
                 />
               </Field>
             </div>
 
             <Field label="Access">
-              <label className="flex items-center gap-2 text-body-sm">
+              <span className="flex items-center gap-2 text-body-sm cursor-pointer">
                 <input
                   type="checkbox"
                   checked={form.isInviteOnly}
                   onChange={(e) => update('isInviteOnly', e.target.checked)}
+                  className="accent-accent-offices"
                 />
                 <span>Invite-only</span>
-              </label>
+              </span>
             </Field>
 
             {isEdit && (
               <Field label="Status">
-                <label className="flex items-center gap-2 text-body-sm">
+                <span className="flex items-center gap-2 text-body-sm cursor-pointer">
                   <input
                     type="checkbox"
                     checked={form.active}
                     onChange={(e) => update('active', e.target.checked)}
+                    className="accent-accent-offices"
                   />
                   <span>Active</span>
-                </label>
+                </span>
               </Field>
             )}
           </div>
 
           {errorText && (
-            <p className="text-body-sm text-status-rejected mt-3">{errorText}</p>
+            <p role="alert" className="text-body-sm text-status-rejected mt-3">{errorText}</p>
           )}
-
-          <div className="flex justify-end gap-2 mt-6">
-            <button onClick={onClose} className="btn-secondary">Cancel</button>
-            <button
-              onClick={() => onSubmit(form)}
-              disabled={isPending || !form.name.trim()}
-              className="px-4 py-1.5 rounded-card text-text-inverse font-medium bg-accent-offices hover:bg-accent-offices/90 disabled:opacity-50"
-            >
-              {isPending ? 'Saving…' : isEdit ? 'Save Changes' : 'Found Party'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-mono text-text-tertiary text-xs uppercase tracking-wider mb-1">
-        {label} {required && <span className="text-status-rejected">*</span>}
+      <label className="block">
+        <span className="field-label">
+          {label} {required && <span className="text-status-rejected" aria-hidden="true">*</span>}
+        </span>
+        {children}
       </label>
-      {children}
     </div>
   );
 }
@@ -234,53 +236,145 @@ function DissolveModal({
   isPending: boolean;
   errorText: string | null;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Dissolve ${party.name}?`}
+      railClass="bg-accent-moderation"
+      footer={
+        <>
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button onClick={onConfirm} disabled={isPending} className="btn-danger">
+            {isPending ? 'Dissolving…' : 'Dissolve'}
+          </button>
+        </>
+      }
+    >
+      <p className="text-body-sm text-text-secondary mb-2">
+        This is a soft delete. The party row stays for history, but{' '}
+        <strong className="text-text-primary">{party.memberCount} active member{party.memberCount === 1 ? '' : 's'}</strong>{' '}
+        will be unassigned and an event log entry written for each.
+      </p>
+      <p className="text-body-sm text-text-tertiary italic">
+        You can revive the party later by editing it back to active.
+      </p>
+      {errorText && (
+        <p role="alert" className="text-body-sm text-status-rejected mt-3">{errorText}</p>
+      )}
+    </Modal>
+  );
+}
+
+/** Party roster and particulars; opened via `?party=<id>` so it can be linked. */
+function PartyDetailModal({ partyId, onClose }: { partyId: string; onClose: () => void }) {
+  const { data: party, isLoading, isError } = useParty(partyId);
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <Modal
+      open
+      onClose={onClose}
+      title={
+        party ? (
+          <span className="inline-flex items-center gap-2">
+            <ColourSwatch hex={party.colour} />
+            {party.name}
+          </span>
+        ) : 'Party'
+      }
+      eyebrow={party?.shortName ?? undefined}
+      railClass="bg-accent-offices"
+      maxWidth="max-w-lg"
+      footer={<button onClick={onClose} className="btn-secondary">Close</button>}
     >
-      <div className="bg-card rounded-card shadow-modal-warm w-full max-w-md overflow-hidden">
-        <div className="h-[3px] bg-accent-moderation" />
-        <div className="p-6">
-          <h2 className="text-heading-1 text-text-primary mb-3">Dissolve {party.name}?</h2>
-          <p className="text-body-sm text-text-secondary mb-2">
-            This is a soft delete. The party row stays for history, but{' '}
-            <strong className="text-text-primary">{party.memberCount} active member{party.memberCount === 1 ? '' : 's'}</strong>{' '}
-            will be unassigned and an event log entry written for each.
-          </p>
-          <p className="text-body-sm text-text-tertiary italic mb-4">
-            You can revive the party later by editing it back to active.
-          </p>
+      {isLoading ? (
+        <div className="space-y-2">
+          <Skeleton height="h-5" />
+          <Skeleton height="h-24" />
+        </div>
+      ) : isError || !party ? (
+        <p className="text-body-sm text-text-secondary">This party could not be loaded.</p>
+      ) : (
+        <div className="space-y-5">
+          <div className="flex flex-wrap gap-2">
+            <Tag color={party.isActive ? 'active' : 'closed'}>{party.isActive ? 'Active' : 'Dissolved'}</Tag>
+            {party.isInviteOnly && <Tag color="pending">Invite-only</Tag>}
+          </div>
 
-          {errorText && (
-            <p className="text-body-sm text-status-rejected mb-3">{errorText}</p>
+          {party.ideology && (
+            <p className="text-body italic text-text-secondary whitespace-pre-line">{party.ideology}</p>
           )}
 
-          <div className="flex justify-end gap-2">
-            <button onClick={onClose} className="btn-secondary">Cancel</button>
-            <button
-              onClick={onConfirm}
-              disabled={isPending}
-              className="px-4 py-1.5 rounded-card text-text-inverse font-medium bg-accent-moderation hover:bg-accent-moderation/90 disabled:opacity-50"
-            >
-              {isPending ? 'Dissolving…' : 'Dissolve'}
-            </button>
-          </div>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-body-sm">
+            <dt className="text-text-tertiary">Leader</dt>
+            <dd className="text-text-primary">
+              {party.leaderId && party.leaderName ? (
+                <Link to="/players/$id" params={{ id: party.leaderId }} className="hover:text-accent-primary">
+                  {party.leaderName}
+                </Link>
+              ) : (
+                <span className="italic text-text-tertiary">None named</span>
+              )}
+            </dd>
+            {party.factionName && (
+              <>
+                <dt className="text-text-tertiary">Faction</dt>
+                <dd className="text-text-primary">{party.factionName}</dd>
+              </>
+            )}
+            <dt className="text-text-tertiary">Founded</dt>
+            <dd className="font-mono text-xs text-text-secondary self-center">{formatDate(party.foundedAt)}</dd>
+            {!party.isActive && party.dissolvedAt && (
+              <>
+                <dt className="text-text-tertiary">Dissolved</dt>
+                <dd className="font-mono text-xs text-text-secondary self-center">{formatDate(party.dissolvedAt)}</dd>
+              </>
+            )}
+          </dl>
+
+          <section aria-labelledby="party-members-heading">
+            <h3 id="party-members-heading" className="text-label-ui text-text-tertiary mb-2">
+              {plural(party.members.length, 'member')}
+            </h3>
+            {party.members.length === 0 ? (
+              <p className="text-body-sm italic text-text-tertiary">The benches are empty.</p>
+            ) : (
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                {party.members.map((m) => (
+                  <li key={m.id}>
+                    <Link
+                      to="/players/$id"
+                      params={{ id: m.id }}
+                      className="flex items-center gap-2 rounded-card px-2 py-1.5 hover:bg-hover text-body-sm text-text-primary"
+                    >
+                      <PlayerAvatar player={m} size="sm" />
+                      <span className="truncate">{m.characterName ?? m.discordUsername}</span>
+                      {m.id === party.leaderId && <span className="ml-auto text-xs text-text-tertiary">leader</span>}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {party.isActive && (
+            <p className="text-xs text-text-tertiary border-t border-border-subtle pt-3">
+              {party.isInviteOnly
+                ? 'Membership is by invitation; staff assign new members.'
+                : <>Join from Discord with <code className="font-mono">/party join</code>, which also grants the party role.</>}
+            </p>
+          )}
         </div>
-      </div>
-    </div>
+      )}
+    </Modal>
   );
 }
 
 export function Parties() {
   const { isStaff } = useAuth();
-  const [showInactive, setShowInactive] = useState(false);
+  const [url, setUrl] = useUrlState({ party: '', dissolved: '' });
+  const showInactive = url.dissolved === '1';
+  const setShowInactive = (on: boolean) => setUrl({ dissolved: on ? '1' : '' });
   const { data: parties, isLoading, isError, error: loadError } = useParties(showInactive);
 
   const [creating, setCreating] = useState(false);
@@ -295,7 +389,7 @@ export function Parties() {
   if (isLoading) return <PageSkeleton />;
   if (isError) {
     return (
-      <div className="p-8">
+      <div className="page">
         <QueryErrorState title="Could not load parties" error={loadError} />
       </div>
     );
@@ -355,54 +449,62 @@ export function Parties() {
   const list = parties ?? [];
 
   return (
-    <div className="p-8">
-      <div className="flex items-baseline justify-between mb-6">
-        <div>
-          <h1 className="text-display">Parties</h1>
-          <p className="text-body-sm text-text-tertiary mt-1">
-            Political coalitions, banners, and benches.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-body-sm text-text-secondary">
-            <input
-              type="checkbox"
-              checked={showInactive}
-              onChange={(e) => setShowInactive(e.target.checked)}
-            />
-            <span>Show dissolved</span>
-          </label>
-          {isStaff && (
-            <button
-              onClick={() => { setError(null); setCreating(true); }}
-              className="px-4 py-1.5 rounded-card text-text-inverse font-medium bg-accent-offices hover:bg-accent-offices/90"
-            >
-              + Found Party
-            </button>
-          )}
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Parties"
+        subtitle="Political coalitions, banners, and benches."
+        actions={
+          <>
+            <label className="flex items-center gap-2 text-body-sm text-text-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showInactive}
+                onChange={(e) => setShowInactive(e.target.checked)}
+                className="accent-accent-primary"
+              />
+              <span>Show dissolved</span>
+            </label>
+            {isStaff && (
+              <button
+                onClick={() => { setError(null); setCreating(true); }}
+                className="btn-primary"
+              >
+                Found a party
+              </button>
+            )}
+          </>
+        }
+      />
 
       {list.length === 0 ? (
-        <div className="card border-l-accent-offices">
-          <p className="text-body text-text-secondary italic">
-            No parties have been founded yet. The benches sit empty.
-          </p>
+        <div className="card">
+          <EmptyState title="No parties have been founded yet. The benches sit empty." />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
           {list.map((p) => (
             <div
               key={p.id}
-              className={`card border-l-accent-offices ${p.isActive ? '' : 'opacity-60'}`}
-              style={p.colour ? { borderLeftColor: p.colour } : undefined}
+              className={`card relative overflow-hidden ${p.isActive ? '' : 'bg-page border-dashed shadow-none'}`}
             >
+              {/* The party's colours, worn as a ribbon along the top. */}
+              <span
+                aria-hidden="true"
+                className="absolute inset-x-0 top-0 h-[3px] bg-border"
+                style={p.colour ? { backgroundColor: p.colour } : undefined}
+              />
               <div className="flex items-start justify-between mb-3">
                 <div className="min-w-0">
-                  <h3 className="font-display font-semibold text-text-primary flex items-center gap-2">
-                    <ColourSwatch hex={p.colour} />
-                    <span className="truncate">{p.name}</span>
-                  </h3>
+                  <h2 className="font-display font-semibold text-[1.25rem] leading-tight text-text-primary">
+                    <button
+                      type="button"
+                      onClick={() => setUrl({ party: p.id })}
+                      className="flex items-center gap-2 max-w-full text-left hover:text-accent-primary transition-colors"
+                    >
+                      <ColourSwatch hex={p.colour} />
+                      <span className="truncate">{p.name}</span>
+                    </button>
+                  </h2>
                   {p.shortName && (
                     <span className="text-mono text-xs text-text-tertiary">{p.shortName}</span>
                   )}
@@ -427,7 +529,16 @@ export function Parties() {
               <dl className="space-y-1 text-body-sm mb-3">
                 <div className="flex justify-between">
                   <dt className="text-text-tertiary">Members</dt>
-                  <dd className="font-mono text-text-primary">{p.memberCount}</dd>
+                  <dd>
+                    <button
+                      type="button"
+                      onClick={() => setUrl({ party: p.id })}
+                      className="font-mono text-text-primary hover:text-accent-primary underline decoration-dotted underline-offset-2"
+                      aria-label={`View the ${plural(p.memberCount, 'member')} of ${p.name}`}
+                    >
+                      {p.memberCount}
+                    </button>
+                  </dd>
                 </div>
                 {p.factionName && (
                   <div className="flex justify-between">
@@ -476,6 +587,7 @@ export function Parties() {
         </div>
       )}
 
+      {url.party && <PartyDetailModal partyId={url.party} onClose={() => setUrl({ party: '' })} />}
       {creating && (
         <PartyFormModal
           initial={emptyForm()}

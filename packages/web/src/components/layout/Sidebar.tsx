@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { useAuth } from '../../api/hooks/useAuth';
 import { useSimulationClock } from '../../api/hooks/useSimulation';
 import { useAwaitingBallots } from '../../api/hooks/useVoting';
 import { Icon } from '../shared/Icon';
+import { useDialogBehaviour } from '../shared/Modal';
 import { formatSimDate } from '../../lib/format';
 import { UserMenu } from './UserMenu';
 import { SHORTCUT_LABEL } from './CommandPalette';
@@ -31,11 +32,10 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
   // The drawer always shows full labels; the desktop rail may be collapsed.
   const railCollapsed = collapsed && !mobileOpen;
 
-  // Move keyboard focus into the drawer when it opens on small screens.
-  const closeRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (mobileOpen) closeRef.current?.focus({ preventScroll: true });
-  }, [mobileOpen]);
+  // The open drawer is a dialog: focus moves in (to the close button), Tab
+  // stays inside, Escape closes it, and focus returns to the menu button.
+  const navRef = useRef<HTMLElement>(null);
+  useDialogBehaviour(mobileOpen, onMobileClose, navRef);
 
   return (
     <>
@@ -48,13 +48,22 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
         aria-hidden="true"
       />
 
+      {/* Closed, the drawer is also invisible below lg, not just off-screen,
+          so its links leave the tab order and the accessibility tree.
+          Visibility transitions only on the way out (hiding after the
+          slide); on the way in it must flip at once, or the focus move
+          into the drawer lands on a still-hidden element and is dropped. */}
       <nav
+        ref={navRef}
         data-testid="app-sidebar"
         aria-label="Primary"
+        tabIndex={-1}
         className={`
-          fixed left-0 top-0 z-50 h-full bg-sidebar border-r border-border-subtle flex flex-col print:hidden
-          w-72 transition-[transform,width] duration-200 ease-out
-          ${mobileOpen ? 'translate-x-0 shadow-modal-warm' : '-translate-x-full'}
+          fixed left-0 top-0 z-50 h-full bg-sidebar border-r border-border-subtle flex flex-col print:hidden focus:outline-none
+          w-72 duration-200 ease-out
+          ${mobileOpen
+            ? 'translate-x-0 shadow-modal-warm transition-[transform,width]'
+            : '-translate-x-full max-lg:invisible transition-[transform,width,visibility]'}
           lg:translate-x-0 lg:shadow-none
           ${collapsed ? 'lg:w-16' : 'lg:w-60'}
         `}
@@ -92,7 +101,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose, onOpen
             <Icon name={collapsed ? 'chevron-right' : 'chevron-left'} size={18} />
           </button>
           <button
-            ref={closeRef}
+            data-autofocus
             onClick={onMobileClose}
             className="lg:hidden text-text-tertiary hover:text-text-primary hover:bg-hover rounded-card transition-colors p-1.5 -mr-1.5"
             aria-label="Close navigation"

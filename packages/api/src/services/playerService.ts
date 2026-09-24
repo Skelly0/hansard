@@ -818,6 +818,27 @@ export async function attachEventActors<T extends { triggeredById: string | null
   }));
 }
 
+const AILMENT_EVENT_TYPES = new Set<string>([
+  PlayerEventType.AILMENT_ACQUIRED,
+  PlayerEventType.AILMENT_RECOVERED,
+]);
+
+function withoutNotesField<T>(value: T): T {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !('notes' in value)) return value;
+  const { notes: _notes, ...rest } = value as Record<string, unknown>;
+  return rest as T;
+}
+
+/**
+ * Ailment events carry the ailment as their payload. New writes leave staff
+ * notes out (`ailmentEventPayload`), but rows written before that still
+ * hold them, so strip them again on the way out to the player.
+ */
+function withoutAilmentEventNotes(event: PlayerEvent): PlayerEvent {
+  if (!AILMENT_EVENT_TYPES.has(event.eventType)) return event;
+  return { ...event, oldValue: withoutNotesField(event.oldValue), newValue: withoutNotesField(event.newValue) };
+}
+
 export function sanitizePlayerEvents(
   events: PlayerEvent[],
   viewer?: PlayerPrivacyViewer,
@@ -827,7 +848,7 @@ export function sanitizePlayerEvents(
     (event) => event.eventType !== PlayerEventType.DEATH_PENDING,
   );
   if (withoutStaffOnlyEvents.every((event) => event.playerId === viewer.userId)) {
-    return withoutStaffOnlyEvents;
+    return withoutStaffOnlyEvents.map(withoutAilmentEventNotes);
   }
 
   const publicTypes = new Set<string>(PUBLIC_PLAYER_EVENT_TYPES);

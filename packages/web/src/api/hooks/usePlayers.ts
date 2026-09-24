@@ -188,22 +188,22 @@ export function useChangeParty() {
 }
 
 /**
- * Convenience for player typeahead. Disabled when search is empty/short
- * to avoid spamming the API on every keystroke.
- */
-/**
  * Typeahead lookup. Idle (no request, no results) until at least two
  * characters are typed — an empty search used to fetch the whole roster.
+ * Previous results bridge the gap between two real searches only: React
+ * Query applies placeholder data to disabled queries too, so keeping it on
+ * after the box is cleared would leave the old list on screen.
  */
 export function useSearchPlayers(search: string, limit = 8) {
   const term = search.trim();
+  const enabled = term.length >= 2;
   return useQuery({
     queryKey: ['players', 'search', term, limit],
     queryFn: () => api.get<{ data: Player[]; total: number }>(
       `/players?search=${encodeURIComponent(term)}&limit=${limit}`,
     ),
-    enabled: term.length >= 2,
-    placeholderData: keepPreviousData,
+    enabled,
+    placeholderData: enabled ? keepPreviousData : undefined,
     staleTime: 30_000,
   });
 }

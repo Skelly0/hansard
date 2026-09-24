@@ -6,9 +6,18 @@ const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
- * Dialog behaviour shared by every modal: Escape closes, Tab is trapped inside
- * the panel, the page behind stops scrolling, the first field (or the panel)
- * takes focus on open, and focus returns to the trigger on close.
+ * Open dialogs, innermost last. Every dialog listens on `document`, where
+ * `stopPropagation` cannot stop a sibling listener, so only the top of the
+ * stack answers Escape and traps Tab: one Escape closes one dialog.
+ */
+const dialogStack: symbol[] = [];
+
+/**
+ * Dialog behaviour shared by every modal, the command palette and the
+ * mobile nav drawer: Escape closes, Tab is trapped inside the panel, the
+ * page behind stops scrolling, the first field (or the panel) takes focus on
+ * open, and focus returns to the trigger on close. Stacked dialogs close one
+ * at a time from the top.
  */
 export function useDialogBehaviour(
   open: boolean,
@@ -35,7 +44,11 @@ export function useDialogBehaviour(
     const { overflow } = document.body.style;
     document.body.style.overflow = 'hidden';
 
+    const token = Symbol('dialog');
+    dialogStack.push(token);
+
     const onKey = (e: KeyboardEvent) => {
+      if (dialogStack[dialogStack.length - 1] !== token) return;
       if (e.key === 'Escape') {
         e.stopPropagation();
         onCloseRef.current();
@@ -63,6 +76,7 @@ export function useDialogBehaviour(
 
     return () => {
       document.removeEventListener('keydown', onKey);
+      dialogStack.splice(dialogStack.indexOf(token), 1);
       document.body.style.overflow = overflow;
       previouslyFocused?.focus?.({ preventScroll: true });
     };

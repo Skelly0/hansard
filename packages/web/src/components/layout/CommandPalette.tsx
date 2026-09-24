@@ -77,7 +77,10 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
   const { user, isStaff } = useAuth();
   const { setTheme } = useTheme();
   const [query, setQuery] = useState('');
-  const [active, setActive] = useState(0);
+  // The highlighted row is tracked by record key, not position: results for
+  // a new term replace the previous term's placeholder rows, and an index
+  // would silently move the highlight onto a different record.
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const term = useDebouncedValue(query.trim(), 150);
   const searching = term.length >= 2;
 
@@ -136,10 +139,11 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, searching, players.data, bills.data, votes.data, documents.data, isStaff, user]);
 
-  // Back to the top whenever the list changes: pages and actions filter on
-  // the raw query at once, so a stale index could point past the end.
-  useEffect(() => setActive(0), [query, term]);
-  const current = items.length ? Math.min(active, items.length - 1) : -1;
+  // Back to the top whenever the query changes; if the highlighted record
+  // drops out of the results, the top row takes over.
+  useEffect(() => setActiveKey(null), [query, term]);
+  const activeIndex = activeKey ? items.findIndex((item) => item.key === activeKey) : -1;
+  const current = items.length ? Math.max(activeIndex, 0) : -1;
   useEffect(() => {
     if (current >= 0) document.getElementById(`palette-opt-${current}`)?.scrollIntoView({ block: 'nearest' });
   }, [current]);
@@ -147,10 +151,10 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActive((i) => (items.length ? (i + 1) % items.length : 0));
+      if (items.length) setActiveKey(items[(current + 1) % items.length].key);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActive((i) => (items.length ? (i - 1 + items.length) % items.length : 0));
+      if (items.length) setActiveKey(items[(current - 1 + items.length) % items.length].key);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (current >= 0) items[current].run();
@@ -207,7 +211,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
                   id={`palette-opt-${i}`}
                   role="option"
                   aria-selected={i === current}
-                  onMouseMove={() => setActive(i)}
+                  onMouseMove={() => setActiveKey(item.key)}
                   onClick={item.run}
                   className={`mx-2 px-3 py-2 rounded-card flex items-center gap-3 cursor-pointer ${
                     i === current ? 'bg-hover' : ''

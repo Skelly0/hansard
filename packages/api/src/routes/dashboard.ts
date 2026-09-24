@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { eq, and, desc, count, inArray, or, lt } from 'drizzle-orm';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { lookupPlayerSummaries } from '../services/playerSummaries.js';
 import { PlayerEventType } from '@hansard/shared';
 import {
   tickets,
@@ -255,74 +256,75 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
         href?: string | null;
       }[] = [];
 
-      // --- Recent ticket messages (last 20) ---
-      const recentMessages = isStaffViewer
-        ? await db
+      // The four feeds are independent, so fetch them together: each serial
+      // round trip is visible latency against a cold Neon compute.
+      const eventColumns = {
+        eventType: playerEventLog.eventType,
+        description: playerEventLog.description,
+        createdAt: playerEventLog.createdAt,
+        playerId: playerEventLog.playerId,
+        triggeredById: playerEventLog.triggeredById,
+      };
+      const [recentMessages, recentBillChanges, rawRecentEvents, recentModActions] = await Promise.all([
+        // --- Recent ticket messages (staff only) ---
+        isStaffViewer
+          ? db
+            .select({
+              content: ticketMessages.content,
+              createdAt: ticketMessages.createdAt,
+              authorId: ticketMessages.authorId,
+              ticketId: ticketMessages.ticketId,
+            })
+            .from(ticketMessages)
+            .orderBy(desc(ticketMessages.createdAt))
+            .limit(20)
+          : [],
+        // --- Recent bill status changes ---
+        db
           .select({
-            content: ticketMessages.content,
-            createdAt: ticketMessages.createdAt,
-            authorId: ticketMessages.authorId,
-            ticketId: ticketMessages.ticketId,
+            toStatus: billStatusLog.toStatus,
+            fromStatus: billStatusLog.fromStatus,
+            createdAt: billStatusLog.createdAt,
+            changedById: billStatusLog.changedById,
+            billId: billStatusLog.billId,
           })
-          .from(ticketMessages)
-          .orderBy(desc(ticketMessages.createdAt))
-          .limit(20)
-        : [];
-
-      // Collect unique player IDs for name resolution
-      const playerIds = new Set<string>();
-      for (const msg of recentMessages) {
-        playerIds.add(msg.authorId);
-      }
-
-      // --- Recent bill status changes ---
-      const recentBillChanges = await db
-        .select({
-          toStatus: billStatusLog.toStatus,
-          fromStatus: billStatusLog.fromStatus,
-          createdAt: billStatusLog.createdAt,
-          changedById: billStatusLog.changedById,
-          billId: billStatusLog.billId,
-        })
-        .from(billStatusLog)
-        .orderBy(desc(billStatusLog.createdAt))
-        .limit(20);
-
-      for (const change of recentBillChanges) {
-        playerIds.add(change.changedById);
-      }
-
-      // --- Recent player events ---
-      // Non-staff viewers must never see AILMENT_* or HEALTH_CHANGED rows because
-      // those descriptions embed condition + severity (matching what
-      // /api/players/:id/health gates behind canViewPrivatePlayerData). The DB
-      // filter handles this for normal queries, but we also re-filter the
-      // returned rows so that any test fake or future loosening of the WHERE
-      // clause still cannot leak those rows to non-staff dashboard consumers.
-      const rawRecentEvents = isStaffViewer
-        ? await db
-          .select({
-            eventType: playerEventLog.eventType,
-            description: playerEventLog.description,
-            createdAt: playerEventLog.createdAt,
-            playerId: playerEventLog.playerId,
-            triggeredById: playerEventLog.triggeredById,
-          })
-          .from(playerEventLog)
-          .orderBy(desc(playerEventLog.createdAt))
-          .limit(20)
-        : await db
-          .select({
-            eventType: playerEventLog.eventType,
-            description: playerEventLog.description,
-            createdAt: playerEventLog.createdAt,
-            playerId: playerEventLog.playerId,
-            triggeredById: playerEventLog.triggeredById,
-          })
-          .from(playerEventLog)
-          .where(inArray(playerEventLog.eventType, PUBLIC_DASHBOARD_EVENT_TYPES))
-          .orderBy(desc(playerEventLog.createdAt))
-          .limit(20);
+          .from(billStatusLog)
+          .orderBy(desc(billStatusLog.createdAt))
+          .limit(20),
+        // --- Recent player events ---
+        // Non-staff viewers must never see AILMENT_* or HEALTH_CHANGED rows
+        // because those descriptions embed condition + severity (matching what
+        // /api/players/:id/health gates behind canViewPrivatePlayerData). The
+        // DB filter handles this for normal queries, but we also re-filter the
+        // returned rows below so that any test fake or future loosening of the
+        // WHERE clause still cannot leak those rows to non-staff consumers.
+        isStaffViewer
+          ? db
+            .select(eventColumns)
+            .from(playerEventLog)
+            .orderBy(desc(playerEventLog.createdAt))
+            .limit(20)
+          : db
+            .select(eventColumns)
+            .from(playerEventLog)
+            .where(inArray(playerEventLog.eventType, PUBLIC_DASHBOARD_EVENT_TYPES))
+            .orderBy(desc(playerEventLog.createdAt))
+            .limit(20),
+        // --- Recent mod actions (staff only) ---
+        isStaffViewer
+          ? db
+            .select({
+              type: modActions.type,
+              reason: modActions.reason,
+              createdAt: modActions.createdAt,
+              moderatorId: modActions.moderatorId,
+              targetPlayerId: modActions.targetPlayerId,
+            })
+            .from(modActions)
+            .orderBy(desc(modActions.createdAt))
+            .limit(20)
+          : [],
+      ]);
 
       const recentEvents = isStaffViewer
         ? rawRecentEvents
@@ -330,66 +332,44 @@ export default async function dashboardRoutes(fastify: FastifyInstance) {
           (PUBLIC_DASHBOARD_EVENT_TYPES as string[]).includes(event.eventType),
         );
 
+      // Collect unique player IDs for name resolution
+      const playerIds = new Set<string>();
+      for (const msg of recentMessages) playerIds.add(msg.authorId);
+      for (const change of recentBillChanges) playerIds.add(change.changedById);
       for (const event of recentEvents) {
         playerIds.add(event.playerId);
         if (event.triggeredById) playerIds.add(event.triggeredById);
       }
-
-      // --- Recent mod actions ---
-      const recentModActions = isStaffViewer
-        ? await db
-          .select({
-            type: modActions.type,
-            reason: modActions.reason,
-            createdAt: modActions.createdAt,
-            moderatorId: modActions.moderatorId,
-            targetPlayerId: modActions.targetPlayerId,
-          })
-          .from(modActions)
-          .orderBy(desc(modActions.createdAt))
-          .limit(20)
-        : [];
-
       for (const action of recentModActions) {
         playerIds.add(action.moderatorId);
         playerIds.add(action.targetPlayerId);
       }
 
-      // --- Resolve bill titles/slugs and ticket numbers for readable, linkable items ---
+      // --- Resolve bill titles/slugs, ticket numbers and player names together ---
       const billIds = [...new Set(recentBillChanges.map((change) => change.billId))];
-      const billRows = billIds.length
-        ? await db
-          .select({ id: bills.id, title: bills.title, slug: bills.slug })
-          .from(bills)
-          .where(inArray(bills.id, billIds))
-        : [];
-      const billMap = new Map(billRows.map((row) => [row.id, row]));
-
       const ticketIds = [...new Set(recentMessages.map((msg) => msg.ticketId))];
-      const ticketRows = ticketIds.length
-        ? await db
-          .select({ id: tickets.id, number: tickets.number })
-          .from(tickets)
-          .where(inArray(tickets.id, ticketIds))
-        : [];
+      const [billRows, ticketRows, people] = await Promise.all([
+        billIds.length
+          ? db
+            .select({ id: bills.id, title: bills.title, slug: bills.slug })
+            .from(bills)
+            .where(inArray(bills.id, billIds))
+          : [],
+        ticketIds.length
+          ? db
+            .select({ id: tickets.id, number: tickets.number })
+            .from(tickets)
+            .where(inArray(tickets.id, ticketIds))
+          : [],
+        lookupPlayerSummaries(db, playerIds),
+      ]);
+      const billMap = new Map(billRows.map((row) => [row.id, row]));
       const ticketNumberMap = new Map(ticketRows.map((row) => [row.id, row.number]));
 
-      // --- Resolve player names ---
-      const playerIdArray = [...playerIds];
-      const nameMap = new Map<string, string>();
-
-      if (playerIdArray.length > 0) {
-        const playerRows = await db
-          .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
-          .from(players)
-          .where(inArray(players.id, playerIdArray));
-
-        for (const row of playerRows) {
-          nameMap.set(row.id, row.characterName ?? row.discordUsername);
-        }
-      }
-
-      const getName = (id: string) => nameMap.get(id) ?? 'Unknown';
+      const getName = (id: string) => {
+        const person = people.get(id);
+        return person ? person.characterName ?? person.discordUsername : 'Unknown';
+      };
 
       // --- Build activity items ---
 

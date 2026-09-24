@@ -18,7 +18,7 @@ import { PlayerAvatar } from '../components/shared/PlayerAvatar';
 import { useAuth } from '../api/hooks/useAuth';
 import { Breadcrumbs, SectionHeading } from '../components/shared/PageHeader';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { sentenceCase } from '../lib/format';
+import { firstSentence, formatSimDate, sentenceCase } from '../lib/format';
 import type { PlayerDossier, PlayerEvent } from '../api/hooks/usePlayers';
 
 // ---------------------------------------------------------------------------
@@ -95,8 +95,7 @@ export function CharacterDossier() {
 
   // One-line epigraph under the name; the full biography lives in Overview.
   const bioText = player.characterBio || '';
-  const firstSentence = bioText.split(/(?<=[.!?])\s/)[0] ?? '';
-  const epigraph = firstSentence.length > 180 ? `${firstSentence.slice(0, 177).replace(/\s+\S*$/, '')}\u2026` : firstSentence;
+  const epigraph = firstSentence(bioText, 180);
 
   return (
     <div className="page">
@@ -166,13 +165,13 @@ export function CharacterDossier() {
             {player.birthDate && (
               <span>
                 <span className="text-label-ui text-text-tertiary mr-1">Born</span>
-                <span className="font-mono text-xs">{formatDate(player.birthDate)}</span>
+                <span className="font-mono text-xs">{formatSimDate(player.birthDate)}</span>
               </span>
             )}
             {player.deathDate && (
               <span>
                 <span className="text-label-ui text-text-tertiary mr-1">Died</span>
-                <span className="font-mono text-xs">{formatDate(player.deathDate)}</span>
+                <span className="font-mono text-xs">{formatSimDate(player.deathDate)}</span>
               </span>
             )}
             <span>

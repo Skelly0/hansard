@@ -69,6 +69,56 @@ export function formatSimDate(value: string | null | undefined): string {
   return date.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 }
 
+/**
+ * Year, month and day of a simulation date, read straight from the string.
+ * Never `new Date` a simulation date: `2075-01-01` parses as UTC midnight,
+ * which is 31 December 2074 anywhere west of Greenwich, and freeform dates
+ * do not parse at all. Freeform dates have month resolution (day 0).
+ */
+function simDateParts(value: string | null | undefined): [number, number, number] | null {
+  if (!value) return null;
+  const text = value.trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (iso) return [Number(iso[1]), Number(iso[2]), Number(iso[3])];
+  const free = /^Year\s+(\d+)(?:,\s*Month\s+(\d+))?/i.exec(text);
+  if (free) return [Number(free[1]), Number(free[2] ?? 0), 0];
+  return null;
+}
+
+/** "2075", or "Year 4" for a freeform date; the raw text if unrecognised. */
+export function simYear(value: string | null | undefined): string {
+  if (!value) return '?';
+  const parts = simDateParts(value);
+  if (!parts) return value;
+  return /^\d{4}-/.test(value.trim()) ? String(parts[0]) : `Year ${parts[0]}`;
+}
+
+/** Whole years from one simulation date to another, or null if either is unreadable. */
+export function simYearsBetween(from: string | null | undefined, to: string | null | undefined): number | null {
+  const a = simDateParts(from);
+  const b = simDateParts(to);
+  if (!a || !b) return null;
+  const beforeAnniversary = b[1] < a[1] || (b[1] === a[1] && b[2] < a[2]);
+  return b[0] - a[0] - (beforeAnniversary ? 1 : 0);
+}
+
+/** Sort comparator for simulation dates, oldest first; unreadable dates sort first. */
+export function compareSimDates(a: string | null | undefined, b: string | null | undefined): number {
+  const pa = simDateParts(a) ?? [-Infinity, 0, 0];
+  const pb = simDateParts(b) ?? [-Infinity, 0, 0];
+  return pa[0] - pb[0] || pa[1] - pb[1] || pa[2] - pb[2];
+}
+
+/**
+ * The first sentence of some prose, cut at a word boundary to `max`
+ * characters. No regex lookbehind: Safari before 16.4 cannot compile it, and
+ * the default Vite target still includes Safari 14.
+ */
+export function firstSentence(text: string, max = Infinity): string {
+  const sentence = /^[\s\S]*?[.!?](?=\s)/.exec(text)?.[0] ?? text;
+  return sentence.length > max ? `${sentence.slice(0, max - 3).replace(/\s+\S*$/, '')}\u2026` : sentence;
+}
+
 /** `player_passed` → "player passed". */
 export function humanizeToken(value: string | null | undefined): string {
   if (!value) return '';

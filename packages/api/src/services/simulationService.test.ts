@@ -326,6 +326,7 @@ describe('advanceTime timed ailment recovery', () => {
         acquiredAtAge: 40,
         durationYears: 5,
         healsAtDate: '2031-01-01',
+        notes: 'staff-only rationale',
       }],
     });
     const { db, eventLog, timeLog } = makeSimulationDb(clock, [player]);
@@ -353,6 +354,8 @@ describe('advanceTime timed ailment recovery', () => {
       simDate: '2031-01-01',
       isAutomatic: true,
     }));
+    const recovered = eventLog.find((e: any) => e.eventType === 'ailment_recovered') as any;
+    expect(recovered.oldValue).not.toHaveProperty('notes');
     expect(timeLog[0].summary).toMatchObject({
       recoveries: ['player-1'],
     });

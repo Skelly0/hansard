@@ -570,14 +570,27 @@ function StaffControls({ election }: { election: Election }) {
 
   // Mirror VoteService's guards exactly, so every offered action can succeed:
   // tally needs a closed vote; NPC confirmation is only for position and
-  // appointment votes that require it; certification waits for the NPC
-  // house to decide when one is required.
+  // appointment votes that require it; certification needs the NPC house to
+  // have confirmed (when required) and an appointing position election to
+  // have a winner.
   const requiresNpc = !!election.config?.requiresNpcConfirmation;
-  const npcDecided = !!election.npcConfirmation && election.npcConfirmation.status !== 'pending';
+  const npcStatus = election.npcConfirmation?.status;
+  const npcRejected = requiresNpc && npcStatus === 'rejected';
+  const npcCleared = !requiresNpc || npcStatus === 'confirmed';
+  const lacksWinner =
+    type === 'position_election' && !!election.forOfficeId && !(election.results?.winners?.length);
+  const certifiable = status === 'tallied' || status === 'npc_pending';
   const canOpen = ['draft', 'nominations_closed', 'nominations_open'].includes(status);
   const canClose = status === 'voting_open';
   const canTally = status === 'voting_closed';
-  const canCertify = status === 'tallied' || (status === 'npc_pending' && (!requiresNpc || npcDecided));
+  const canCertify = certifiable && npcCleared && !lacksWinner;
+  const blocker = !certifiable
+    ? null
+    : npcRejected
+      ? 'The NPC house rejected this result, so it cannot be certified.'
+      : npcCleared && lacksWinner
+        ? 'The tally found no winner, so there is no one to appoint. Cancel it with /vote cancel in Discord.'
+        : null;
   const canRunoff = status === 'runoff_needed';
   const canNpc =
     status === 'npc_pending' && requiresNpc && ['position_election', 'appointment_confirmation'].includes(type);
@@ -600,7 +613,9 @@ function StaffControls({ election }: { election: Election }) {
           {actions.length ? 'Staff desk' : 'Nothing left to do'}
         </h2>
         {!actions.length && (
-          <span className="text-body-sm italic text-text-tertiary">This vote is {humanizeToken(status)}.</span>
+          <span className="text-body-sm italic text-text-tertiary">
+            {blocker ?? <>This vote is {humanizeToken(status)}.</>}
+          </span>
         )}
       </div>
       {actions.length > 0 && (

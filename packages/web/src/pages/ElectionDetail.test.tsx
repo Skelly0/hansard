@@ -269,6 +269,31 @@ describe('ElectionDetail', () => {
       expect(actionNames()).toEqual(['Enter NPC confirmation']);
     });
 
+    it('does not offer certification after the NPC house rejects the result', () => {
+      renderAs({
+        status: 'tallied', type: 'position_election', method: 'fptp', forOfficeId: 'office-1',
+        config: { requiresNpcConfirmation: true }, npcConfirmation: { status: 'rejected' },
+        results: { winners: ['p1'] },
+      });
+      expect(actionNames()).toEqual([]);
+      expect(screen.getByText(/NPC house rejected this result/)).toBeTruthy();
+    });
+
+    it('does not offer certification for a position election with no winner', () => {
+      renderAs({ status: 'tallied', type: 'position_election', method: 'fptp', forOfficeId: 'office-1', results: { winners: [] } });
+      expect(actionNames()).toEqual([]);
+      expect(screen.getByText(/no winner/)).toBeTruthy();
+    });
+
+    it('certifies a confirmed position election with a winner', () => {
+      renderAs({
+        status: 'tallied', type: 'position_election', method: 'fptp', forOfficeId: 'office-1',
+        config: { requiresNpcConfirmation: true }, npcConfirmation: { status: 'confirmed' },
+        results: { winners: ['p1'] },
+      });
+      expect(actionNames()).toEqual(['Certify results']);
+    });
+
     it('says there is nothing left to do once certified', () => {
       renderAs({ status: 'certified' });
       expect(actionNames()).toEqual([]);

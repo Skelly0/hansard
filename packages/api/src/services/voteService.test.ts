@@ -942,3 +942,45 @@ describe('VoteService.listAwaitingBallot', () => {
     expect(db.select).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('VoteService.listElections candidate payload', () => {
+  it('lists each election with its roster but without candidate statements', async () => {
+    const { elections: electionsTable, candidates: candidatesTable, players: playersTable } = await import('@hansard/db');
+    const shapes = new Map<object, unknown[]>();
+    const responses = new Map<object, unknown[][]>([
+      [electionsTable, [
+        [{ id: 'e1', title: 'Leader', relatedBillId: null, forOfficeId: null, createdById: 'p1' }],
+        [{ count: 1 }],
+      ]],
+      [playersTable, [[{ id: 'p1', characterName: 'Ada', discordUsername: 'ada' }]]],
+      [candidatesTable, [[{
+        candidate: { id: 'c1', electionId: 'e1', playerId: 'p2', partyId: null, isWithdrawn: false },
+        playerCharacterName: 'Bram', playerDiscordUsername: 'bram',
+        partyName: null, partyShortName: null, partyColour: null,
+      }]]],
+    ]);
+    const db = {
+      select: (shape?: unknown) => ({
+        from: (table: object) => {
+          shapes.set(table, [...(shapes.get(table) ?? []), shape]);
+          const rows = responses.get(table)?.shift() ?? [];
+          const chain: any = {
+            where: () => chain, orderBy: () => chain, limit: () => chain, offset: () => chain, leftJoin: () => chain,
+            then: (ok: any, err: any) => Promise.resolve(rows).then(ok, err),
+          };
+          return chain;
+        },
+      }),
+    };
+
+    const { data } = await new VoteService(db as any).listElections({}, { userId: 'p1', isStaff: true });
+
+    const [candidateShape] = shapes.get(candidatesTable) as { candidate: Record<string, unknown> }[];
+    expect(candidateShape.candidate).not.toHaveProperty('statement');
+    expect(candidateShape.candidate).toHaveProperty('playerId');
+    expect(data[0].candidates).toEqual([
+      expect.objectContaining({ id: 'c1', player: { id: 'p2', characterName: 'Bram', discordUsername: 'bram' } }),
+    ]);
+    expect(data[0].createdBy).toEqual({ id: 'p1', characterName: 'Ada', discordUsername: 'ada' });
+  });
+});

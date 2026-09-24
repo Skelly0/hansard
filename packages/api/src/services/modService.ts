@@ -253,49 +253,41 @@ export async function getStats(db: Database): Promise<{
   byType: Record<string, number>;
   recentActions: ModAction[];
 }> {
-  // Total actions
-  const [totalResult] = await db
-    .select({ value: count() })
-    .from(modActions);
-  const totalActions = totalResult?.value ?? 0;
-
-  // Active actions
-  const [activeResult] = await db
-    .select({ value: count() })
-    .from(modActions)
-    .where(eq(modActions.isActive, true));
-  const activeActions = activeResult?.value ?? 0;
-
-  // All actions for counting by type
-  const allActions = await db
-    .select({ type: modActions.type })
-    .from(modActions);
+  // Independent counts, fetched together. Per-type counts come from one
+  // GROUP BY (the total is their sum) rather than loading every action row.
+  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [typeCounts, [activeResult], [pendingResult], [warningsResult], recent] = await Promise.all([
+    db
+      .select({ type: modActions.type, value: count() })
+      .from(modActions)
+      .groupBy(modActions.type),
+    db
+      .select({ value: count() })
+      .from(modActions)
+      .where(eq(modActions.isActive, true)),
+    db
+      .select({ value: count() })
+      .from(modActions)
+      .where(eq(modActions.appealStatus, 'pending')),
+    db
+      .select({ value: count() })
+      .from(modActions)
+      .where(and(
+        or(eq(modActions.type, 'verbal_warning'), eq(modActions.type, 'formal_warning')),
+        gte(modActions.createdAt, oneWeekAgo),
+      )),
+    // Recent 10 actions
+    db
+      .select()
+      .from(modActions)
+      .orderBy(desc(modActions.createdAt))
+      .limit(10),
+  ]);
 
   const byType: Record<string, number> = {};
-  for (const a of allActions) {
-    byType[a.type] = (byType[a.type] ?? 0) + 1;
-  }
-
-  const [pendingResult] = await db
-    .select({ value: count() })
-    .from(modActions)
-    .where(eq(modActions.appealStatus, 'pending'));
-
-  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [warningsResult] = await db
-    .select({ value: count() })
-    .from(modActions)
-    .where(and(
-      or(eq(modActions.type, 'verbal_warning'), eq(modActions.type, 'formal_warning')),
-      gte(modActions.createdAt, oneWeekAgo),
-    ));
-
-  // Recent 10 actions
-  const recent = await db
-    .select()
-    .from(modActions)
-    .orderBy(desc(modActions.createdAt))
-    .limit(10);
+  for (const row of typeCounts) byType[row.type] = row.value;
+  const totalActions = typeCounts.reduce((sum, row) => sum + row.value, 0);
+  const activeActions = activeResult?.value ?? 0;
 
   return {
     totalActions,

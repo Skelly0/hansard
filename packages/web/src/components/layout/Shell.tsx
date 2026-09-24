@@ -47,19 +47,15 @@ export function Shell({ children }: ShellProps) {
     window.scrollTo?.(0, 0);
   }, [pathname]);
 
-  // Close the drawer with Escape, and when the viewport grows past the
-  // breakpoint where the sidebar becomes a permanent rail.
+  // Close the drawer when the viewport grows past the breakpoint where the
+  // sidebar becomes a permanent rail. (Escape is handled by the drawer's
+  // dialog behaviour, so it only fires when the drawer is the top dialog.)
   useEffect(() => {
     if (!drawerOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawerOpen(false); };
     const mq = window.matchMedia?.('(min-width: 1024px)');
     const onChange = (e: MediaQueryListEvent) => { if (e.matches) setDrawerOpen(false); };
-    document.addEventListener('keydown', onKey);
     mq?.addEventListener?.('change', onChange);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      mq?.removeEventListener?.('change', onChange);
-    };
+    return () => mq?.removeEventListener?.('change', onChange);
   }, [drawerOpen]);
 
   return (

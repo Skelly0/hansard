@@ -22,6 +22,16 @@ import {
   type TimeAdvanceSummary,
 } from '@hansard/shared';
 import { expireCharacterFavourBalances } from './favourService.js';
+import { lookupPlayerSummaries } from './playerSummaries.js';
+
+/**
+ * An ailment as written into `player_event_log`. Staff `notes` stay on the
+ * ailment itself (redacted for players on read) and never enter event
+ * history, which the affected player can read.
+ */
+function ailmentEventPayload<T extends { notes?: string }>({ notes: _notes, ...rest }: T): Omit<T, 'notes'> {
+  return rest;
+}
 
 // ============================================================
 // Default Aging Config — used when simulation_clock.aging_config is null.
@@ -673,7 +683,7 @@ export async function advanceTime(
           playerId: player.id,
           eventType: PlayerEventType.AILMENT_RECOVERED,
           description: `Recovered from ${ailment.severity} ailment: ${ailment.condition} (timed recovery)`,
-          oldValue: ailment,
+          oldValue: ailmentEventPayload(ailment),
           simTick: tick,
           simDate: date,
           isAutomatic: true,
@@ -691,7 +701,7 @@ export async function advanceTime(
           playerId: player.id,
           eventType: 'ailment_acquired',
           description: `Acquired ${ailment.severity} ailment: ${ailment.condition}`,
-          newValue: ailment,
+          newValue: ailmentEventPayload(ailment),
           simTick: tick,
           simDate: date,
           isAutomatic: true,
@@ -933,9 +943,7 @@ export async function manualAilment(
     playerId,
     eventType: 'ailment_acquired',
     description: `Staff assigned ${severity} ailment: ${condition}${newAilment.healsAtDate ? `; expected recovery ${newAilment.healsAtDate}` : ''}`,
-    // Staff notes stay on the ailment (redacted for players on read), not
-    // in the event history.
-    newValue: { ...newAilment, notes: undefined },
+    newValue: ailmentEventPayload(newAilment),
     simTick: currentTick,
     simDate: currentDate,
     triggeredById: triggeredById ?? null,
@@ -992,7 +1000,7 @@ export async function heal(
     playerId,
     eventType: 'ailment_recovered',
     description: `Recovered from ${removed.severity} ailment: ${condition}`,
-    oldValue: removed,
+    oldValue: ailmentEventPayload(removed),
     simTick: currentTick,
     simDate: currentDate,
     triggeredById: triggeredById ?? null,
@@ -1186,14 +1194,9 @@ export async function getHistory(db: Database, limit = 20, viewer?: SimulationPr
       if (Array.isArray(list)) for (const id of list) if (typeof id === 'string') ids.add(id);
     }
   }
-  if (ids.size === 0) return entries.map((entry) => ({ ...entry, playerNames: {} as Record<string, string> }));
-  const nameRows = await db
-    .select({ id: players.id, characterName: players.characterName, discordUsername: players.discordUsername })
-    .from(players)
-    .where(inArray(players.id, [...ids]));
-  const playerNames = Object.fromEntries(
-    nameRows.map((row) => [row.id, row.characterName ?? row.discordUsername]),
-  ) as Record<string, string>;
+  const people = await lookupPlayerSummaries(db, ids);
+  const playerNames: Record<string, string> = {};
+  for (const [id, person] of people) playerNames[id] = person.characterName ?? person.discordUsername;
   return entries.map((entry) => ({ ...entry, playerNames }));
 }
 

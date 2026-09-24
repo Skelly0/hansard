@@ -144,7 +144,9 @@ function PanelSkeleton() {
 function AwaitingBallotCallout() {
   const { data } = useAwaitingBallots();
   const awaiting = data?.data ?? [];
-  if (awaiting.length === 0) return null;
+  // The count is the server's total (as on the sidebar badge), not the rows sent.
+  const count = Math.max(data?.total ?? 0, awaiting.length);
+  if (count === 0) return null;
   return (
     <section
       aria-labelledby="awaiting-heading"
@@ -156,7 +158,7 @@ function AwaitingBallotCallout() {
       <div className="min-w-0 flex-1">
         <p className="text-label-ui text-accent-primary">The division bell</p>
         <h2 id="awaiting-heading" className="text-heading-1 text-text-primary mt-0.5 mb-2.5">
-          {awaiting.length === 1 ? 'A vote is waiting for your ballot' : `${awaiting.length} votes are waiting for your ballot`}
+          {count === 1 ? 'A vote is waiting for your ballot' : `${count} votes are waiting for your ballot`}
         </h2>
         <ul className="space-y-1.5">
           {awaiting.slice(0, 4).map((vote) => (
@@ -171,6 +173,13 @@ function AwaitingBallotCallout() {
             </li>
           ))}
         </ul>
+        {count > 4 && (
+          <p className="text-body-sm mt-2">
+            <Link to="/voting" className="link">
+              {count - 4} more on the Voting page →
+            </Link>
+          </p>
+        )}
       </div>
     </section>
   );

@@ -413,7 +413,7 @@ export class VoteService {
     relatedBillId: string | null;
     forOfficeId: string | null;
     createdById: string;
-  }>(rows: T[]) {
+  }>(rows: T[], { statements = true }: { statements?: boolean } = {}) {
     if (rows.length === 0) return [];
     const electionIds = rows.map((r) => r.id);
     const officeIds = [...new Set(rows.map((r) => r.forOfficeId).filter((x): x is string => !!x))];
@@ -427,7 +427,19 @@ export class VoteService {
       lookupPlayerSummaries(this.db, creatorIds),
       this.db
         .select({
-          candidate: candidates,
+          // Lists need the roster (to name a winner) but not the manifestos,
+          // which are only read on the election's own page.
+          candidate: statements
+            ? candidates
+            : {
+              id: candidates.id,
+              electionId: candidates.electionId,
+              playerId: candidates.playerId,
+              partyId: candidates.partyId,
+              nominatedById: candidates.nominatedById,
+              isWithdrawn: candidates.isWithdrawn,
+              registeredAt: candidates.registeredAt,
+            },
           playerCharacterName: players.characterName,
           playerDiscordUsername: players.discordUsername,
           partyName: parties.name,
@@ -469,7 +481,9 @@ export class VoteService {
         createdBy: creator
           ? { id: creator.id, characterName: creator.characterName, discordUsername: creator.discordUsername }
           : null,
-        candidates: (candidatesByElection.get(row.id) ?? []) as Array<typeof candidates.$inferSelect & {
+        candidates: (candidatesByElection.get(row.id) ?? []) as Array<Omit<typeof candidates.$inferSelect, 'statement'> & {
+          /** Absent on list responses; only the election detail carries statements. */
+          statement?: string | null;
           player: { id: string; characterName: string | null; discordUsername: string };
           party: { id: string; name: string; shortName: string | null; colour: string | null } | null;
         }>,
@@ -615,7 +629,7 @@ export class VoteService {
         : this.db.select({ count: sql<number>`count(*)::int` }).from(elections),
     ]);
 
-    const enriched = await this.enrichElectionsForDisplay(rows);
+    const enriched = await this.enrichElectionsForDisplay(rows, { statements: false });
     return { data: enriched, total: totalRow[0]?.count ?? enriched.length };
   }
 
@@ -712,9 +726,11 @@ export class VoteService {
    * past close, and passing the exact `getEligibilityForElection` checks
    * (which include "Already voted"). Soonest-closing first. Reaction-mode
    * votes are included — reaction ballots are rows too, so a reaction clears
-   * the item just like a button or web ballot.
+   * the item just like a button or web ballot. The default limit is high
+   * because the web tags every awaited vote on the Voting list by id; the
+   * rows are tiny and the open set has already been loaded to filter it.
    */
-  async listAwaitingBallot(viewer: ElectionViewer, limit = 25) {
+  async listAwaitingBallot(viewer: ElectionViewer, limit = 100) {
     const now = new Date();
     const conditions = [eq(elections.status, 'voting_open'), gt(elections.votingClosesAt, now)];
     const visibility = this.visibleElectionCondition(viewer);

@@ -3,29 +3,26 @@ import { Link } from '@tanstack/react-router';
 import { usePlayers, type Player } from '../api/hooks/usePlayers';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { isHttpsUrl } from '../lib/url';
-import { formatSimDate } from '../lib/format';
+import { compareSimDates, formatSimDate, simYear, simYearsBetween } from '../lib/format';
 import { Tag } from '../components/shared/Tag';
 import { PageSkeleton } from '../components/shared/SkeletonLoader';
 import { QueryErrorState } from '../components/shared/QueryErrorState';
 
 // ---- Helpers ----
 
-function extractYear(dateStr?: string): string {
-  if (!dateStr) return '?';
-  const d = new Date(dateStr);
-  return isNaN(d.getTime()) ? dateStr : String(d.getFullYear());
-}
-
 function ageAtDeath(player: Player): string {
   if (player.currentAge) return `${player.currentAge}`;
-  if (player.birthDate && player.deathDate) {
-    const birth = new Date(player.birthDate);
-    const death = new Date(player.deathDate);
-    const age = death.getFullYear() - birth.getFullYear();
-    return `${age}`;
-  }
+  const years = simYearsBetween(player.birthDate, player.deathDate);
+  if (years !== null) return `${years}`;
   if (player.startingAge) return `${player.startingAge}`;
   return '?';
+}
+
+/** Year of a real timestamp (office terms), not a simulation date. */
+function timestampYear(value?: string): string {
+  if (!value) return '?';
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? value : String(d.getFullYear());
 }
 
 /** Generate initials from a character name */
@@ -73,8 +70,8 @@ function ObituaryPortrait({ player }: { player: Player }) {
 // ---- Obituary Card ----
 
 function ObituaryCard({ player }: { player: Player }) {
-  const birthYear = extractYear(player.birthDate);
-  const deathYear = extractYear(player.deathDate);
+  const birthYear = simYear(player.birthDate);
+  const deathYear = simYear(player.deathDate);
   const age = ageAtDeath(player);
 
   // Build party history from current party (full history would come from events/dossier)
@@ -148,8 +145,8 @@ function ObituaryCard({ player }: { player: Player }) {
                       {office.name}
                       {office.startDate && (
                         <span className="text-mono text-text-tertiary ml-2">
-                          {extractYear(office.startDate)}
-                          {office.endDate ? `\u2013${extractYear(office.endDate)}` : ''}
+                          {timestampYear(office.startDate)}
+                          {office.endDate ? `\u2013${timestampYear(office.endDate)}` : ''}
                         </span>
                       )}
                     </li>
@@ -218,11 +215,7 @@ export function Graveyard() {
   }
 
   // Sort by death date, most recent first
-  const deceased = [...(data?.data ?? [])].sort((a, b) => {
-    const da = a.deathDate ? new Date(a.deathDate).getTime() : 0;
-    const db = b.deathDate ? new Date(b.deathDate).getTime() : 0;
-    return db - da;
-  });
+  const deceased = [...(data?.data ?? [])].sort((a, b) => compareSimDates(b.deathDate, a.deathDate));
 
   return (
     <div className="page max-w-3xl mx-auto">

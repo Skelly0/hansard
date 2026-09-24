@@ -47,8 +47,13 @@ export function EditCharacterModal({
   const [error, setError] = useState<string | null>(null);
 
   const portraitTrimmed = portrait.trim();
-  const portraitInvalid = portraitTrimmed !== ''
+  const portraitChanged = portraitTrimmed !== (character.characterPortraitUrl ?? '');
+  const portraitUnusable = portraitTrimmed !== ''
     && (!isHttpsUrl(portraitTrimmed) || portraitTrimmed.length > CHARACTER_PORTRAIT_URL_MAX);
+  // Only a new value is validated: a portrait stored before the https rule (or
+  // set from Discord) is never re-sent, so it must not block a bio edit.
+  const portraitInvalid = portraitChanged && portraitUnusable;
+  const legacyPortrait = !portraitChanged && portraitUnusable;
   const bioTooLong = bio.length > CHARACTER_BIO_MAX;
 
   const submit = async (e?: React.FormEvent) => {
@@ -60,7 +65,7 @@ export function EditCharacterModal({
     const patch: UpdatePlayerInput = { id: character.id };
     if (canRename && name.trim() && name.trim() !== (character.characterName ?? '')) patch.characterName = name.trim();
     if (bio !== (character.characterBio ?? '')) patch.characterBio = bio;
-    if (portraitTrimmed !== (character.characterPortraitUrl ?? '')) patch.characterPortraitUrl = portraitTrimmed || null;
+    if (portraitChanged) patch.characterPortraitUrl = portraitTrimmed || null;
     if (Object.keys(patch).length === 1) {
       onClose();
       return;
@@ -118,7 +123,7 @@ export function EditCharacterModal({
               id: character.id,
               characterName: previewName,
               discordUsername: character.discordUsername,
-              characterPortraitUrl: portraitInvalid ? null : portraitTrimmed || null,
+              characterPortraitUrl: portraitUnusable ? null : portraitTrimmed || null,
             }}
             size="lg"
           />
@@ -137,7 +142,9 @@ export function EditCharacterModal({
             <span id="portrait-help" className={`block mt-1 text-xs ${portraitInvalid ? 'text-status-rejected' : 'text-text-tertiary'}`}>
               {portraitInvalid
                 ? `Use an https link of at most ${CHARACTER_PORTRAIT_URL_MAX} characters.`
-                : isDiscordAttachmentUrl(portraitTrimmed)
+                : legacyPortrait
+                  ? 'This portrait is not an https link, so the site cannot show it. Replace or clear it.'
+                  : isDiscordAttachmentUrl(portraitTrimmed)
                   ? 'Discord attachment links expire after a while; a durable image host lasts longer.'
                   : 'Leave empty to remove the portrait.'}
             </span>
